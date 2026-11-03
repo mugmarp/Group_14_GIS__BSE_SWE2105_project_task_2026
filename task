@@ -1,0 +1,7 @@
+# GROUP PROJECT WORK (PICK ONE)
+## Design a web or mobile app that can track the location of people or objects in real-time. A
+group can select any of following capabilities for your implementation:
+- Track the location of a laptop computer based on its IP address. Research how IP
+locations are determined and discuss the potential accuracy/limitations.
+- Track the movement of a person carrying a mobile phone through GPS or cell tower
+triangulation. Discuss the pros and cons of each approach.

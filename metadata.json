@@ -1,0 +1,8 @@
+{
+  "name": "GIS Tracker",
+  "description": "Real-time GPS and cellular location tracking app with live trail recording, cell tower triangulation diagnostics, geofencing safe zones, and GPX/KML export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
