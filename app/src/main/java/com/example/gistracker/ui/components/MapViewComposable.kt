@@ -2,6 +2,7 @@ package com.example.gistracker.ui.components
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,12 +50,10 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.gistracker.model.CellTowerInfo
+import com.example.gistracker.model.GeofenceCategory
 import com.example.gistracker.model.GeofenceZone
 import com.example.gistracker.model.LocationPoint
-import com.example.gistracker.ui.theme.CardSurface
-import com.example.gistracker.ui.theme.DarkNavy
-import com.example.gistracker.ui.theme.ElectricCyan
-import com.example.gistracker.ui.theme.SafetyAmber
+import com.example.gistracker.ui.theme.LocalCustomColors
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -64,17 +63,28 @@ fun MapViewComposable(
     trailPoints: List<LocationPoint>,
     geofences: List<GeofenceZone>,
     cellTowers: List<CellTowerInfo>,
-    modifier: Modifier = Modifier,
-    onMapClicked: ((Double, Double) -> Unit)? = null
+    modifier: Modifier = Modifier
 ) {
-    // Center coordinate of map (defaults to current location or Kampala)
+    // Theme colors
+    val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
+
+    val canvasBg = colorScheme.background
+    val gridLineColor = colorScheme.outline.copy(alpha = 0.35f)
+    val gridTextColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+    val trailColor = colorScheme.secondary
+    val userPinColor = colorScheme.primary
+    val safeColor = colorScheme.tertiary
+    val hazardColor = colorScheme.error
+    val warningColor = customColors.warning
+
+    // Center coordinate of map
     var centerLat by remember { mutableStateOf(currentLocation?.latitude ?: 0.3345) }
     var centerLon by remember { mutableStateOf(currentLocation?.longitude ?: 32.5712) }
-    var zoomScale by remember { mutableFloatStateOf(45000f) } // Pixels per degree
+    var zoomScale by remember { mutableFloatStateOf(45000f) }
     var showCellTowers by remember { mutableStateOf(true) }
     var showGeofences by remember { mutableStateOf(true) }
 
-    // Follow user if center matches previous
     LaunchedEffect(currentLocation) {
         if (currentLocation != null) {
             centerLat = currentLocation.latitude
@@ -87,7 +97,7 @@ fun MapViewComposable(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(DarkNavy)
+            .background(canvasBg)
             .testTag("map_canvas_container")
     ) {
         Canvas(
@@ -95,9 +105,7 @@ fun MapViewComposable(
                 .fillMaxSize()
                 .pointerInput(Unit) {
                     detectTransformGestures { _, pan, zoom, _ ->
-                        // Zoom adjustment
                         zoomScale = (zoomScale * zoom).coerceIn(8000f, 350000f)
-                        // Pan adjustment in degrees
                         val dLat = (pan.y / zoomScale).toDouble()
                         val dLon = (-pan.x / (zoomScale * cos(Math.toRadians(centerLat)))).toDouble()
                         centerLat += dLat
@@ -110,7 +118,6 @@ fun MapViewComposable(
             val centerX = width / 2f
             val centerY = height / 2f
 
-            // Helper to project (lat, lon) to canvas (x, y)
             fun project(lat: Double, lon: Double): Offset {
                 val cosLat = cos(Math.toRadians(centerLat)).toFloat().coerceAtLeast(0.1f)
                 val x = centerX + ((lon - centerLon).toFloat() * zoomScale * cosLat)
@@ -119,24 +126,24 @@ fun MapViewComposable(
             }
 
             // Draw coordinate grid lines
-            drawCoordinateGrid(centerLat, centerLon, zoomScale, textMeasurer)
+            drawCoordinateGrid(centerLat, centerLon, zoomScale, gridLineColor, gridTextColor, textMeasurer)
 
             // Draw Geofences
             if (showGeofences) {
                 for (zone in geofences) {
                     val zoneOffset = project(zone.latitude, zone.longitude)
-                    // Convert radius in meters to canvas pixels: 1 degree latitude ≈ 111,000 meters
                     val radiusPixels = (zone.radiusMeters / 111000f) * zoomScale
 
-                    val zoneColor = try {
-                        Color(android.graphics.Color.parseColor(zone.colorHex))
-                    } catch (e: Exception) {
-                        SafetyAmber
+                    val zoneColor = when (zone.category) {
+                        GeofenceCategory.SAFE_ZONE, GeofenceCategory.HOME -> safeColor
+                        GeofenceCategory.BODA_HOTSPOT -> hazardColor
+                        GeofenceCategory.SCHOOL, GeofenceCategory.WORK -> trailColor
+                        GeofenceCategory.CUSTOM -> warningColor
                     }
 
                     // Translucent fill
                     drawCircle(
-                        color = zoneColor.copy(alpha = if (zone.isInside) 0.35f else 0.15f),
+                        color = zoneColor.copy(alpha = if (zone.isInside) 0.30f else 0.12f),
                         radius = radiusPixels,
                         center = zoneOffset
                     )
@@ -147,7 +154,7 @@ fun MapViewComposable(
                         radius = radiusPixels,
                         center = zoneOffset,
                         style = Stroke(
-                            width = 3f,
+                            width = 2.5f,
                             pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f)
                         )
                     )
@@ -174,23 +181,23 @@ fun MapViewComposable(
                     if (towerLat != null && towerLon != null) {
                         val towerOffset = project(towerLat, towerLon)
 
-                        // Draw coverage arc
+                        // Coverage arc
                         val rangePixels = ((tower.estimatedDistanceKm ?: 1.0) * 1000f / 111000f).toFloat() * zoomScale
                         drawCircle(
-                            color = Color(0xFF7C4DFF).copy(alpha = 0.08f),
+                            color = trailColor.copy(alpha = 0.08f),
                             radius = rangePixels,
                             center = towerOffset
                         )
 
                         // Antenna icon marker
                         drawCircle(
-                            color = if (tower.isRegistered) Color(0xFFFFCC00) else Color(0xFF7C4DFF),
-                            radius = 12f,
+                            color = if (tower.isRegistered) warningColor else trailColor,
+                            radius = 11f,
                             center = towerOffset
                         )
                         drawCircle(
-                            color = Color.White,
-                            radius = 5f,
+                            color = canvasBg,
+                            radius = 4.5f,
                             center = towerOffset
                         )
 
@@ -200,7 +207,7 @@ fun MapViewComposable(
                             text = "📡 $towerText",
                             topLeft = Offset(towerOffset.x + 15f, towerOffset.y - 10f),
                             style = TextStyle(
-                                color = if (tower.isRegistered) Color(0xFFFFCC00) else Color(0xFFB39DDB),
+                                color = if (tower.isRegistered) warningColor else trailColor,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -224,9 +231,9 @@ fun MapViewComposable(
                 // Outer trail glow
                 drawPath(
                     path = path,
-                    color = ElectricCyan.copy(alpha = 0.35f),
+                    color = trailColor.copy(alpha = 0.28f),
                     style = Stroke(
-                        width = 12f,
+                        width = 10f,
                         cap = StrokeCap.Round,
                         join = StrokeJoin.Round
                     )
@@ -235,9 +242,9 @@ fun MapViewComposable(
                 // Main trail line
                 drawPath(
                     path = path,
-                    color = ElectricCyan,
+                    color = trailColor,
                     style = Stroke(
-                        width = 5f,
+                        width = 4.5f,
                         cap = StrokeCap.Round,
                         join = StrokeJoin.Round
                     )
@@ -247,8 +254,8 @@ fun MapViewComposable(
                 for (p in trailPoints) {
                     val pt = project(p.latitude, p.longitude)
                     drawCircle(
-                        color = Color.White,
-                        radius = 3.5f,
+                        color = colorScheme.onSurface,
+                        radius = 3f,
                         center = pt
                     )
                 }
@@ -261,12 +268,12 @@ fun MapViewComposable(
 
                 // Accuracy circle
                 drawCircle(
-                    color = ElectricCyan.copy(alpha = 0.20f),
+                    color = userPinColor.copy(alpha = 0.18f),
                     radius = accuracyPixels.coerceAtLeast(18f),
                     center = currentOffset
                 )
                 drawCircle(
-                    color = ElectricCyan.copy(alpha = 0.6f),
+                    color = userPinColor.copy(alpha = 0.65f),
                     radius = accuracyPixels.coerceAtLeast(18f),
                     center = currentOffset,
                     style = Stroke(width = 2f)
@@ -274,28 +281,28 @@ fun MapViewComposable(
 
                 // Direction / Bearing beam
                 val bearingRad = Math.toRadians((currentLocation.bearing - 90.0))
-                val arrowLen = 30f
+                val arrowLen = 28f
                 val arrowX = currentOffset.x + (arrowLen * cos(bearingRad)).toFloat()
                 val arrowY = currentOffset.y + (arrowLen * sin(bearingRad)).toFloat()
 
                 drawLine(
-                    color = ElectricCyan,
+                    color = userPinColor,
                     start = currentOffset,
                     end = Offset(arrowX, arrowY),
-                    strokeWidth = 6f,
+                    strokeWidth = 5.5f,
                     cap = StrokeCap.Round
                 )
 
-                // Outer glow
+                // Center outer ring
                 drawCircle(
-                    color = Color.White,
+                    color = colorScheme.surface,
                     radius = 11f,
                     center = currentOffset
                 )
 
                 // Center solid pulse
                 drawCircle(
-                    color = ElectricCyan,
+                    color = userPinColor,
                     radius = 8f,
                     center = currentOffset
                 )
@@ -311,21 +318,22 @@ fun MapViewComposable(
         ) {
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = CardSurface.copy(alpha = 0.92f),
-                shadowElevation = 4.dp
+                color = colorScheme.surface.copy(alpha = 0.94f),
+                shadowElevation = 4.dp,
+                border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
             ) {
                 Column {
                     IconButton(
                         onClick = { zoomScale = (zoomScale * 1.35f).coerceAtMost(350000f) },
                         modifier = Modifier.testTag("zoom_in_btn")
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = "Zoom In", tint = Color.White)
+                        Icon(Icons.Default.Add, contentDescription = "Zoom In", tint = colorScheme.onSurface)
                     }
                     IconButton(
                         onClick = { zoomScale = (zoomScale / 1.35f).coerceAtLeast(8000f) },
                         modifier = Modifier.testTag("zoom_out_btn")
                     ) {
-                        Icon(Icons.Default.Remove, contentDescription = "Zoom Out", tint = Color.White)
+                        Icon(Icons.Default.Remove, contentDescription = "Zoom Out", tint = colorScheme.onSurface)
                     }
                 }
             }
@@ -334,8 +342,9 @@ fun MapViewComposable(
 
             Surface(
                 shape = CircleShape,
-                color = if (showCellTowers) Color(0xFF7C4DFF) else CardSurface,
-                shadowElevation = 4.dp
+                color = if (showCellTowers) trailColor else colorScheme.surface,
+                shadowElevation = 4.dp,
+                border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
             ) {
                 IconButton(
                     onClick = { showCellTowers = !showCellTowers },
@@ -344,7 +353,7 @@ fun MapViewComposable(
                     Icon(
                         Icons.Default.CellTower,
                         contentDescription = "Toggle Cell Towers",
-                        tint = if (showCellTowers) Color.White else Color.Gray
+                        tint = if (showCellTowers) colorScheme.onSecondary else colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -353,8 +362,9 @@ fun MapViewComposable(
 
             Surface(
                 shape = CircleShape,
-                color = if (showGeofences) SafetyAmber else CardSurface,
-                shadowElevation = 4.dp
+                color = if (showGeofences) safeColor else colorScheme.surface,
+                shadowElevation = 4.dp,
+                border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
             ) {
                 IconButton(
                     onClick = { showGeofences = !showGeofences },
@@ -363,7 +373,7 @@ fun MapViewComposable(
                     Icon(
                         Icons.Default.Layers,
                         contentDescription = "Toggle Geofences",
-                        tint = if (showGeofences) DarkNavy else Color.Gray
+                        tint = if (showGeofences) colorScheme.onTertiary else colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -380,8 +390,8 @@ fun MapViewComposable(
                 modifier = Modifier
                     .size(48.dp)
                     .testTag("recenter_map_btn"),
-                containerColor = ElectricCyan,
-                contentColor = DarkNavy
+                containerColor = colorScheme.primary,
+                contentColor = colorScheme.onPrimary
             ) {
                 Icon(Icons.Default.MyLocation, contentDescription = "Center on Location")
             }
@@ -393,8 +403,9 @@ fun MapViewComposable(
                 .align(Alignment.BottomStart)
                 .padding(16.dp),
             shape = RoundedCornerShape(8.dp),
-            color = DarkNavy.copy(alpha = 0.85f),
-            shadowElevation = 2.dp
+            color = colorScheme.surface.copy(alpha = 0.92f),
+            shadowElevation = 3.dp,
+            border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
         ) {
             val scaleMeters = ((100f / zoomScale) * 111000f).toInt()
             val scaleText = if (scaleMeters >= 1000) "${scaleMeters / 1000} km" else "$scaleMeters m"
@@ -403,13 +414,13 @@ fun MapViewComposable(
                     text = "GPS: ${String.format("%.5f", centerLat)}°N, ${String.format("%.5f", centerLon)}°E",
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
-                    color = ElectricCyan,
+                    color = colorScheme.primary,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
                     text = "Scale: 100px ≈ $scaleText | Points: ${trailPoints.size}",
                     fontSize = 10.sp,
-                    color = Color.LightGray
+                    color = colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -420,6 +431,8 @@ private fun DrawScope.drawCoordinateGrid(
     centerLat: Double,
     centerLon: Double,
     zoomScale: Float,
+    gridLineColor: Color,
+    gridTextColor: Color,
     textMeasurer: androidx.compose.ui.text.TextMeasurer
 ) {
     val width = size.width
@@ -428,7 +441,6 @@ private fun DrawScope.drawCoordinateGrid(
     val centerY = height / 2f
     val cosLat = cos(Math.toRadians(centerLat)).toFloat().coerceAtLeast(0.1f)
 
-    // Determine grid step in degrees based on zoom
     val step = when {
         zoomScale > 150000f -> 0.002
         zoomScale > 60000f -> 0.005
@@ -447,7 +459,7 @@ private fun DrawScope.drawCoordinateGrid(
         val y = centerY - ((curLat - centerLat).toFloat() * zoomScale)
         if (y in 0f..height) {
             drawLine(
-                color = Color(0xFF1E293B).copy(alpha = 0.7f),
+                color = gridLineColor,
                 start = Offset(0f, y),
                 end = Offset(width, y),
                 strokeWidth = 1f
@@ -456,7 +468,7 @@ private fun DrawScope.drawCoordinateGrid(
                 textMeasurer = textMeasurer,
                 text = "${String.format("%.3f", curLat)}°",
                 topLeft = Offset(8f, (y - 14f).coerceIn(4f, (height - 20f).coerceAtLeast(4f))),
-                style = TextStyle(color = Color(0xFF475569), fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                style = TextStyle(color = gridTextColor, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
             )
         }
         curLat += step
@@ -467,7 +479,7 @@ private fun DrawScope.drawCoordinateGrid(
         val x = centerX + ((curLon - centerLon).toFloat() * zoomScale * cosLat)
         if (x in 0f..width) {
             drawLine(
-                color = Color(0xFF1E293B).copy(alpha = 0.7f),
+                color = gridLineColor,
                 start = Offset(x, 0f),
                 end = Offset(x, height),
                 strokeWidth = 1f
@@ -476,7 +488,7 @@ private fun DrawScope.drawCoordinateGrid(
                 textMeasurer = textMeasurer,
                 text = "${String.format("%.3f", curLon)}°",
                 topLeft = Offset((x + 4f).coerceIn(4f, (width - 50f).coerceAtLeast(4f)), (height - 20f).coerceAtLeast(4f)),
-                style = TextStyle(color = Color(0xFF475569), fontSize = 9.sp, fontFamily = FontFamily.Monospace)
+                style = TextStyle(color = gridTextColor, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
             )
         }
         curLon += step
@@ -494,7 +506,6 @@ private fun DrawScope.drawSafeText(
     val w = size.width
     val h = size.height
 
-    // Ensure within valid canvas drawing constraints so maxHeight/maxWidth are >= 0
     if (x in 0f..(w - 10f) && y in 0f..(h - 10f)) {
         try {
             drawText(

@@ -21,13 +21,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.NotificationsActive
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -55,12 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.gistracker.model.GeofenceCategory
 import com.example.gistracker.model.GeofenceZone
-import com.example.gistracker.ui.theme.CardSurface
-import com.example.gistracker.ui.theme.DangerRed
-import com.example.gistracker.ui.theme.DarkNavy
-import com.example.gistracker.ui.theme.ElectricCyan
-import com.example.gistracker.ui.theme.SafetyAmber
-import com.example.gistracker.ui.theme.SuccessGreen
+import com.example.gistracker.ui.theme.LocalCustomColors
 import com.example.gistracker.viewmodel.TrackerViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -71,6 +64,9 @@ fun GeofenceScreen(
     viewModel: TrackerViewModel,
     modifier: Modifier = Modifier
 ) {
+    val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
+
     val zones by viewModel.geofenceZones.collectAsState()
     val currentLocation by viewModel.currentLocation.collectAsState()
     val recentAlerts by viewModel.recentAlerts.collectAsState()
@@ -80,7 +76,7 @@ fun GeofenceScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(DarkNavy)
+            .background(colorScheme.background)
     ) {
         LazyColumn(
             modifier = Modifier
@@ -100,24 +96,27 @@ fun GeofenceScreen(
                             text = "Geofencing & Safe Zones",
                             fontSize = 22.sp,
                             fontWeight = FontWeight.Bold,
-                            color = Color.White
+                            color = colorScheme.onBackground
                         )
                         Text(
                             text = "Perimeter surveillance & boda hotspot warnings",
                             fontSize = 12.sp,
-                            color = Color.Gray
+                            color = colorScheme.onSurfaceVariant
                         )
                     }
 
                     Button(
                         onClick = { showAddDialog = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = SafetyAmber),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.primary,
+                            contentColor = colorScheme.onPrimary
+                        ),
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.testTag("add_geofence_btn")
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = null, tint = DarkNavy, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("Add Zone", color = DarkNavy, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text("Add Zone", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }
@@ -127,7 +126,8 @@ fun GeofenceScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = CardSurface)
+                    colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
                 ) {
                     Row(
                         modifier = Modifier
@@ -136,9 +136,9 @@ fun GeofenceScreen(
                         horizontalArrangement = Arrangement.SpaceAround
                     ) {
                         val insideCount = zones.count { it.isInside }
-                        StatBox("TOTAL ZONES", "${zones.size}", ElectricCyan)
-                        StatBox("CURRENTLY INSIDE", "$insideCount", if (insideCount > 0) SuccessGreen else Color.LightGray)
-                        StatBox("ALERTS LOGGED", "${recentAlerts.size}", SafetyAmber)
+                        StatBox("TOTAL ZONES", "${zones.size}", colorScheme.primary)
+                        StatBox("CURRENTLY INSIDE", "$insideCount", if (insideCount > 0) colorScheme.tertiary else colorScheme.onSurfaceVariant)
+                        StatBox("ALERTS LOGGED", "${recentAlerts.size}", colorScheme.secondary)
                     }
                 }
             }
@@ -150,15 +150,15 @@ fun GeofenceScreen(
                         text = "Recent Zone Transitions",
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = SafetyAmber
+                        color = colorScheme.secondary
                     )
                 }
 
                 items(recentAlerts.take(3)) { alert ->
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = CardSurface.copy(alpha = 0.8f),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF273552)),
+                        color = colorScheme.surface,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f)),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
@@ -170,7 +170,7 @@ fun GeofenceScreen(
                                 Icon(
                                     Icons.Default.NotificationsActive,
                                     contentDescription = null,
-                                    tint = if (alert.eventType == "ENTERED") SuccessGreen else DangerRed,
+                                    tint = if (alert.eventType == "ENTERED") colorScheme.tertiary else colorScheme.error,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -179,13 +179,13 @@ fun GeofenceScreen(
                                         text = "${alert.eventType}: ${alert.zoneName}",
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold,
-                                        color = Color.White
+                                        color = colorScheme.onSurface
                                     )
                                     val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(alert.timestamp))
                                     Text(
                                         text = "Time: $timeStr",
                                         fontSize = 10.sp,
-                                        color = Color.Gray
+                                        color = colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
@@ -200,14 +200,13 @@ fun GeofenceScreen(
                     text = "Monitored Geofence Perimeters (${zones.size})",
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
-                    color = ElectricCyan
+                    color = colorScheme.primary
                 )
             }
 
             items(zones) { zone ->
                 val distMeters = if (currentLocation != null) {
                     viewModel.currentLocation.value?.let { curr ->
-                        // Calculate distance
                         val earthRadius = 6371000.0
                         val dLat = Math.toRadians(zone.latitude - curr.latitude)
                         val dLon = Math.toRadians(zone.longitude - curr.longitude)
@@ -247,10 +246,14 @@ private fun GeofenceZoneCard(
     distanceMeters: Double,
     onDelete: () -> Unit
 ) {
-    val zoneColor = try {
-        Color(android.graphics.Color.parseColor(zone.colorHex))
-    } catch (e: Exception) {
-        SafetyAmber
+    val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
+
+    val zoneAccent = when (zone.category) {
+        GeofenceCategory.SAFE_ZONE, GeofenceCategory.HOME -> colorScheme.tertiary
+        GeofenceCategory.BODA_HOTSPOT -> colorScheme.error
+        GeofenceCategory.SCHOOL, GeofenceCategory.WORK -> colorScheme.secondary
+        GeofenceCategory.CUSTOM -> customColors.warning
     }
 
     Card(
@@ -258,8 +261,8 @@ private fun GeofenceZoneCard(
             .fillMaxWidth()
             .testTag("geofence_card_${zone.id}"),
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = CardSurface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, if (zone.isInside) SuccessGreen else Color(0xFF273552))
+        colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+        border = androidx.compose.foundation.BorderStroke(1.2.dp, if (zone.isInside) colorScheme.tertiary else colorScheme.outline.copy(alpha = 0.5f))
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(
@@ -272,26 +275,26 @@ private fun GeofenceZoneCard(
                         modifier = Modifier
                             .size(12.dp)
                             .clip(CircleShape)
-                            .background(zoneColor)
+                            .background(zoneAccent)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = zone.name,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White
+                        color = colorScheme.onSurface
                     )
                 }
 
                 Surface(
                     shape = RoundedCornerShape(6.dp),
-                    color = if (zone.isInside) SuccessGreen.copy(alpha = 0.2f) else Color.DarkGray.copy(alpha = 0.4f)
+                    color = if (zone.isInside) colorScheme.tertiary.copy(alpha = 0.2f) else colorScheme.surfaceVariant
                 ) {
                     Text(
                         text = if (zone.isInside) "INSIDE ZONE" else "OUTSIDE",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
-                        color = if (zone.isInside) SuccessGreen else Color.Gray,
+                        color = if (zone.isInside) colorScheme.tertiary else colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
                     )
                 }
@@ -307,12 +310,12 @@ private fun GeofenceZoneCard(
                     Text(
                         text = "Radius: ${zone.radiusMeters.toInt()} meters | Cat: ${zone.category.name}",
                         fontSize = 11.sp,
-                        color = Color.LightGray
+                        color = colorScheme.onSurfaceVariant
                     )
                     Text(
                         text = "Coord: ${String.format("%.4f", zone.latitude)}°N, ${String.format("%.4f", zone.longitude)}°E",
                         fontSize = 10.sp,
-                        color = Color.Gray,
+                        color = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         fontFamily = FontFamily.Monospace
                     )
                 }
@@ -322,13 +325,13 @@ private fun GeofenceZoneCard(
                         text = if (distanceMeters >= 1000) "${String.format("%.1f", distanceMeters / 1000)} km away" else "${distanceMeters.toInt()} m away",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        color = ElectricCyan
+                        color = colorScheme.primary
                     )
                     IconButton(
                         onClick = onDelete,
                         modifier = Modifier.size(24.dp)
                     ) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Gray, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = colorScheme.error, modifier = Modifier.size(16.dp))
                     }
                 }
             }
@@ -343,21 +346,22 @@ private fun AddGeofenceDialog(
     onDismiss: () -> Unit,
     onConfirm: (String, Double, Double, Float, GeofenceCategory, String) -> Unit
 ) {
+    val colorScheme = MaterialTheme.colorScheme
     var name by remember { mutableStateOf("New Safe Perimeter") }
     var radius by remember { mutableFloatStateOf(300f) }
     var selectedCategory by remember { mutableStateOf(GeofenceCategory.SAFE_ZONE) }
     val colorHex = when (selectedCategory) {
-        GeofenceCategory.SAFE_ZONE -> "#00E676"
-        GeofenceCategory.SCHOOL -> "#00E5FF"
-        GeofenceCategory.HOME -> "#FFB300"
-        GeofenceCategory.WORK -> "#7C4DFF"
-        GeofenceCategory.BODA_HOTSPOT -> "#FF5252"
-        GeofenceCategory.CUSTOM -> "#E040FB"
+        GeofenceCategory.SAFE_ZONE -> "#2E7D32"
+        GeofenceCategory.SCHOOL -> "#1B4F72"
+        GeofenceCategory.HOME -> "#4DB6AC"
+        GeofenceCategory.WORK -> "#64B5F6"
+        GeofenceCategory.BODA_HOTSPOT -> "#C62828"
+        GeofenceCategory.CUSTOM -> "#F9A825"
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Create Geofence Zone", color = Color.White, fontWeight = FontWeight.Bold) },
+        title = { Text("Create Geofence Zone", color = colorScheme.onSurface, fontWeight = FontWeight.Bold) },
         text = {
             Column {
                 OutlinedTextField(
@@ -372,7 +376,7 @@ private fun AddGeofenceDialog(
 
                 Text(
                     text = "Perimeter Radius: ${radius.toInt()} meters",
-                    color = ElectricCyan,
+                    color = colorScheme.primary,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )
@@ -382,14 +386,14 @@ private fun AddGeofenceDialog(
                     onValueChange = { radius = it },
                     valueRange = 50f..1500f,
                     colors = SliderDefaults.colors(
-                        thumbColor = ElectricCyan,
-                        activeTrackColor = ElectricCyan
+                        thumbColor = colorScheme.primary,
+                        activeTrackColor = colorScheme.primary
                     )
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Text("Category:", color = Color.Gray, fontSize = 11.sp)
+                Text("Category:", color = colorScheme.onSurfaceVariant, fontSize = 11.sp)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -398,7 +402,7 @@ private fun AddGeofenceDialog(
                         TextButton(
                             onClick = { selectedCategory = cat },
                             colors = ButtonDefaults.textButtonColors(
-                                contentColor = if (selectedCategory == cat) ElectricCyan else Color.Gray
+                                contentColor = if (selectedCategory == cat) colorScheme.primary else colorScheme.onSurfaceVariant
                             )
                         ) {
                             Text(cat.name.replace("_", " "), fontSize = 10.sp)
@@ -410,7 +414,7 @@ private fun AddGeofenceDialog(
                 Text(
                     text = "Center: Current GPS (${String.format("%.4f", currentLat)}, ${String.format("%.4f", currentLon)})",
                     fontSize = 11.sp,
-                    color = Color.LightGray,
+                    color = colorScheme.onSurfaceVariant,
                     fontFamily = FontFamily.Monospace
                 )
             }
@@ -420,25 +424,28 @@ private fun AddGeofenceDialog(
                 onClick = {
                     onConfirm(name, currentLat, currentLon, radius, selectedCategory, colorHex)
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = SafetyAmber),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colorScheme.primary,
+                    contentColor = colorScheme.onPrimary
+                ),
                 modifier = Modifier.testTag("confirm_add_geofence_btn")
             ) {
-                Text("Create Zone", color = DarkNavy, fontWeight = FontWeight.Bold)
+                Text("Create Zone", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = Color.LightGray)
+                Text("Cancel", color = colorScheme.onSurfaceVariant)
             }
         },
-        containerColor = CardSurface
+        containerColor = colorScheme.surface
     )
 }
 
 @Composable
 private fun StatBox(label: String, value: String, color: Color) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(text = label, fontSize = 9.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+        Text(text = label, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
         Text(
             text = value,
             fontSize = 18.sp,

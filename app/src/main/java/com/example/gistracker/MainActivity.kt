@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -45,9 +46,6 @@ import com.example.gistracker.ui.screens.GeofenceScreen
 import com.example.gistracker.ui.screens.HistoryScreen
 import com.example.gistracker.ui.screens.MapScreen
 import com.example.gistracker.ui.screens.ResearchAnalysisScreen
-import com.example.gistracker.ui.theme.CardSurface
-import com.example.gistracker.ui.theme.DarkNavy
-import com.example.gistracker.ui.theme.ElectricCyan
 import com.example.gistracker.ui.theme.GISTrackerTheme
 import com.example.gistracker.viewmodel.TrackerViewModel
 
@@ -68,7 +66,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         setContent {
-            GISTrackerTheme(darkTheme = true) {
+            GISTrackerTheme {
                 MainAppScreen(viewModel = viewModel)
             }
         }
@@ -78,6 +76,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MainAppScreen(viewModel: TrackerViewModel) {
     val context = LocalContext.current
+    val colorScheme = MaterialTheme.colorScheme
     var currentScreen by remember { mutableStateOf(Screen.MAP) }
 
     // Permission Request Flow
@@ -111,7 +110,7 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
         contentWindowInsets = WindowInsets.safeDrawing,
         bottomBar = {
             NavigationBar(
-                containerColor = DarkNavy,
+                containerColor = colorScheme.surface,
                 tonalElevation = 8.dp,
                 modifier = Modifier.testTag("bottom_nav_bar")
             ) {
@@ -122,11 +121,11 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                     label = { Text("Map", fontSize = 11.sp) },
                     modifier = Modifier.testTag(Screen.MAP.testTag),
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = DarkNavy,
-                        selectedTextColor = ElectricCyan,
-                        indicatorColor = ElectricCyan,
-                        unselectedIconColor = Color.Gray,
-                        unselectedTextColor = Color.Gray
+                        selectedIconColor = colorScheme.onPrimary,
+                        selectedTextColor = colorScheme.primary,
+                        indicatorColor = colorScheme.primary,
+                        unselectedIconColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        unselectedTextColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
                 )
 
@@ -137,11 +136,11 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                     label = { Text("Cellular", fontSize = 11.sp) },
                     modifier = Modifier.testTag(Screen.CELLULAR.testTag),
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = DarkNavy,
-                        selectedTextColor = ElectricCyan,
-                        indicatorColor = ElectricCyan,
-                        unselectedIconColor = Color.Gray,
-                        unselectedTextColor = Color.Gray
+                        selectedIconColor = colorScheme.onPrimary,
+                        selectedTextColor = colorScheme.primary,
+                        indicatorColor = colorScheme.primary,
+                        unselectedIconColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        unselectedTextColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
                 )
 
@@ -152,11 +151,11 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                     label = { Text("Safe Zones", fontSize = 11.sp) },
                     modifier = Modifier.testTag(Screen.GEOFENCE.testTag),
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = DarkNavy,
-                        selectedTextColor = ElectricCyan,
-                        indicatorColor = ElectricCyan,
-                        unselectedIconColor = Color.Gray,
-                        unselectedTextColor = Color.Gray
+                        selectedIconColor = colorScheme.onPrimary,
+                        selectedTextColor = colorScheme.primary,
+                        indicatorColor = colorScheme.primary,
+                        unselectedIconColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        unselectedTextColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
                 )
 
@@ -167,11 +166,11 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                     label = { Text("History", fontSize = 11.sp) },
                     modifier = Modifier.testTag(Screen.HISTORY.testTag),
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = DarkNavy,
-                        selectedTextColor = ElectricCyan,
-                        indicatorColor = ElectricCyan,
-                        unselectedIconColor = Color.Gray,
-                        unselectedTextColor = Color.Gray
+                        selectedIconColor = colorScheme.onPrimary,
+                        selectedTextColor = colorScheme.primary,
+                        indicatorColor = colorScheme.primary,
+                        unselectedIconColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        unselectedTextColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
                 )
 
@@ -182,11 +181,11 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                     label = { Text("Research", fontSize = 11.sp) },
                     modifier = Modifier.testTag(Screen.RESEARCH.testTag),
                     colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = DarkNavy,
-                        selectedTextColor = ElectricCyan,
-                        indicatorColor = ElectricCyan,
-                        unselectedIconColor = Color.Gray,
-                        unselectedTextColor = Color.Gray
+                        selectedIconColor = colorScheme.onPrimary,
+                        selectedTextColor = colorScheme.primary,
+                        indicatorColor = colorScheme.primary,
+                        unselectedIconColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        unselectedTextColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
                 )
             }

@@ -17,25 +17,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ElectricBolt
-import androidx.compose.material.icons.filled.FiberManualRecord
-import androidx.compose.material.icons.filled.GpsFixed
-import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -61,12 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.gistracker.model.TrackingMode
 import com.example.gistracker.ui.components.MapViewComposable
-import com.example.gistracker.ui.theme.CardSurface
-import com.example.gistracker.ui.theme.DangerRed
-import com.example.gistracker.ui.theme.DarkNavy
-import com.example.gistracker.ui.theme.ElectricCyan
-import com.example.gistracker.ui.theme.SafetyAmber
-import com.example.gistracker.ui.theme.SuccessGreen
+import com.example.gistracker.ui.theme.LocalCustomColors
 import com.example.gistracker.viewmodel.TrackerViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -76,6 +63,9 @@ fun MapScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
+
     val currentLocation by viewModel.currentLocation.collectAsState()
     val activeSession by viewModel.activeSession.collectAsState()
     val trailPoints by viewModel.activeTrailPoints.collectAsState()
@@ -103,14 +93,13 @@ fun MapScreen(
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp)
         ) {
-            // Live Status Header Card
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = DarkNavy.copy(alpha = 0.90f),
+                color = colorScheme.surface.copy(alpha = 0.94f),
                 shadowElevation = 8.dp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, Color(0xFF273552), RoundedCornerShape(16.dp))
+                    .border(1.dp, colorScheme.outline.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
                     .testTag("telemetry_hud_card")
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
@@ -124,14 +113,14 @@ fun MapScreen(
                                 modifier = Modifier
                                     .size(10.dp)
                                     .clip(CircleShape)
-                                    .background(if (activeSession != null) DangerRed else SuccessGreen)
+                                    .background(if (activeSession != null) colorScheme.error else colorScheme.tertiary)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = if (activeSession != null) "RECORDING: ${activeSession?.name}" else "READY (GPS STANDBY)",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (activeSession != null) DangerRed else SuccessGreen
+                                color = if (activeSession != null) colorScheme.error else colorScheme.tertiary
                             )
                         }
 
@@ -140,7 +129,7 @@ fun MapScreen(
                             Text(
                                 text = "Simulate",
                                 fontSize = 11.sp,
-                                color = if (isSimulating) SafetyAmber else Color.Gray,
+                                color = if (isSimulating) customColors.warning else colorScheme.onSurfaceVariant,
                                 fontWeight = FontWeight.SemiBold
                             )
                             Spacer(modifier = Modifier.width(4.dp))
@@ -149,8 +138,8 @@ fun MapScreen(
                                 onCheckedChange = { viewModel.toggleSimulation(it) },
                                 modifier = Modifier.testTag("simulate_switch"),
                                 colors = SwitchDefaults.colors(
-                                    checkedThumbColor = SafetyAmber,
-                                    checkedTrackColor = SafetyAmber.copy(alpha = 0.4f)
+                                    checkedThumbColor = customColors.warning,
+                                    checkedTrackColor = customColors.warning.copy(alpha = 0.4f)
                                 )
                             )
                         }
@@ -167,25 +156,25 @@ fun MapScreen(
                             label = "SPEED",
                             value = "${String.format("%.1f", currentLocation?.speedKmh ?: 0f)}",
                             unit = "km/h",
-                            accentColor = ElectricCyan
+                            accentColor = colorScheme.primary
                         )
                         TelemetryItem(
                             label = "DISTANCE",
                             value = activeSession?.formattedDistance ?: "0 m",
                             unit = "",
-                            accentColor = SafetyAmber
+                            accentColor = colorScheme.secondary
                         )
                         TelemetryItem(
                             label = "ALTITUDE",
                             value = "${String.format("%.0f", currentLocation?.altitude ?: 1190.0)}",
                             unit = "m",
-                            accentColor = Color(0xFFB388FF)
+                            accentColor = colorScheme.tertiary
                         )
                         TelemetryItem(
                             label = "ACCURACY",
                             value = "±${String.format("%.1f", currentLocation?.accuracy ?: 3.5f)}",
                             unit = "m",
-                            accentColor = SuccessGreen
+                            accentColor = if ((currentLocation?.accuracy ?: 3.5f) <= 10f) colorScheme.primary else customColors.warning
                         )
                     }
 
@@ -198,13 +187,14 @@ fun MapScreen(
                             Text(
                                 text = "⏱️ Duration: ${activeSession?.formattedDuration} | Mode: ${activeSession?.trackingMode?.name}",
                                 fontSize = 11.sp,
-                                color = Color.LightGray,
+                                color = colorScheme.onSurfaceVariant,
                                 fontFamily = FontFamily.Monospace
                             )
                             Text(
                                 text = "📍 ${trailPoints.size} waypoints",
                                 fontSize = 11.sp,
-                                color = ElectricCyan
+                                color = colorScheme.secondary,
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
                     }
@@ -214,20 +204,20 @@ fun MapScreen(
             AnimatedVisibility(visible = isSimulating) {
                 Surface(
                     shape = RoundedCornerShape(8.dp),
-                    color = SafetyAmber.copy(alpha = 0.95f),
+                    color = customColors.warning,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 4.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Warning, contentDescription = null, tint = DarkNavy, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Warning, contentDescription = null, tint = customColors.onWarning, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "Simulation Mode Active: Generating realistic Kampala road telemetry",
-                            color = DarkNavy,
+                            color = customColors.onWarning,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -244,9 +234,9 @@ fun MapScreen(
                 .padding(12.dp)
                 .testTag("bottom_action_card"),
             shape = RoundedCornerShape(20.dp),
-            color = DarkNavy.copy(alpha = 0.92f),
+            color = colorScheme.surface.copy(alpha = 0.95f),
             shadowElevation = 8.dp,
-            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF273552))
+            border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.6f))
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
                 // Tracking Mode Chips
@@ -272,10 +262,15 @@ fun MapScreen(
                                 )
                             },
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = ElectricCyan,
-                                selectedLabelColor = DarkNavy,
-                                containerColor = CardSurface,
-                                labelColor = Color.LightGray
+                                selectedContainerColor = colorScheme.primary,
+                                selectedLabelColor = colorScheme.onPrimary,
+                                containerColor = colorScheme.surfaceVariant,
+                                labelColor = colorScheme.onSurfaceVariant
+                            ),
+                            border = FilterChipDefaults.filterChipBorder(
+                                enabled = true,
+                                selected = selected,
+                                borderColor = if (selected) colorScheme.primary else colorScheme.outline.copy(alpha = 0.4f)
                             ),
                             modifier = Modifier.testTag("chip_${mode.name}")
                         )
@@ -297,12 +292,15 @@ fun MapScreen(
                                 .weight(1f)
                                 .height(48.dp)
                                 .testTag("start_tracking_btn"),
-                            colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colorScheme.primary,
+                                contentColor = colorScheme.onPrimary
+                            ),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = DarkNavy)
+                            Icon(Icons.Default.PlayArrow, contentDescription = null)
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Start Recording", color = DarkNavy, fontWeight = FontWeight.Bold)
+                            Text("Start Recording", fontWeight = FontWeight.Bold)
                         }
                     } else {
                         Button(
@@ -311,12 +309,15 @@ fun MapScreen(
                                 .weight(1f)
                                 .height(48.dp)
                                 .testTag("stop_tracking_btn"),
-                            colors = ButtonDefaults.buttonColors(containerColor = DangerRed),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colorScheme.error,
+                                contentColor = colorScheme.onError
+                            ),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Icon(Icons.Default.Stop, contentDescription = null, tint = Color.White)
+                            Icon(Icons.Default.Stop, contentDescription = null)
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Stop & Save Trail", color = Color.White, fontWeight = FontWeight.Bold)
+                            Text("Stop & Save Trail", fontWeight = FontWeight.Bold)
                         }
                     }
 
@@ -326,13 +327,16 @@ fun MapScreen(
                         modifier = Modifier
                             .height(48.dp)
                             .testTag("emergency_sos_btn"),
-                        colors = ButtonDefaults.buttonColors(containerColor = DangerRed.copy(alpha = 0.25f)),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.error.copy(alpha = 0.15f),
+                            contentColor = colorScheme.error
+                        ),
                         shape = RoundedCornerShape(12.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, DangerRed)
+                        border = androidx.compose.foundation.BorderStroke(1.2.dp, colorScheme.error)
                     ) {
-                        Icon(Icons.Default.Share, contentDescription = "Emergency Share", tint = DangerRed)
+                        Icon(Icons.Default.Share, contentDescription = "Emergency Share", tint = colorScheme.error)
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("SOS Share", color = DangerRed, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text("SOS Share", color = colorScheme.error, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                     }
                 }
             }
@@ -343,12 +347,12 @@ fun MapScreen(
     if (showStartDialog) {
         AlertDialog(
             onDismissRequest = { showStartDialog = false },
-            title = { Text("Start New Location Trail", color = Color.White, fontWeight = FontWeight.Bold) },
+            title = { Text("Start New Location Trail", color = colorScheme.onSurface, fontWeight = FontWeight.Bold) },
             text = {
                 Column {
                     Text(
                         "Give this tracking session a label (e.g. Boda trip, child school route, vehicle transit):",
-                        color = Color.LightGray,
+                        color = colorScheme.onSurfaceVariant,
                         fontSize = 13.sp
                     )
                     Spacer(modifier = Modifier.height(12.dp))
@@ -364,7 +368,7 @@ fun MapScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         "Tracking Mode: ${trackingMode.title}",
-                        color = ElectricCyan,
+                        color = colorScheme.primary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -376,18 +380,21 @@ fun MapScreen(
                         viewModel.startTracking(sessionNameInput.ifBlank { "Track ${System.currentTimeMillis() % 1000}" }, trackingMode)
                         showStartDialog = false
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = ElectricCyan),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colorScheme.primary,
+                        contentColor = colorScheme.onPrimary
+                    ),
                     modifier = Modifier.testTag("confirm_start_btn")
                 ) {
-                    Text("Start", color = DarkNavy, fontWeight = FontWeight.Bold)
+                    Text("Start", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showStartDialog = false }) {
-                    Text("Cancel", color = Color.LightGray)
+                    Text("Cancel", color = colorScheme.onSurfaceVariant)
                 }
             },
-            containerColor = CardSurface
+            containerColor = colorScheme.surface
         )
     }
 }
@@ -400,7 +407,7 @@ private fun TelemetryItem(
     accentColor: Color
 ) {
     Column(horizontalAlignment = Alignment.Start) {
-        Text(text = label, fontSize = 10.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
+        Text(text = label, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 text = value,
@@ -411,7 +418,12 @@ private fun TelemetryItem(
             )
             if (unit.isNotBlank()) {
                 Spacer(modifier = Modifier.width(2.dp))
-                Text(text = unit, fontSize = 10.sp, color = Color.Gray, modifier = Modifier.padding(bottom = 2.dp))
+                Text(
+                    text = unit,
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 2.dp)
+                )
             }
         }
     }
