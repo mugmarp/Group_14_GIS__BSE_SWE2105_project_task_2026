@@ -110,8 +110,20 @@ data class CellTowerInfo(
             mcc == 641 && (mnc == 10 || mnc == 14) -> "MTN Uganda (PLMN 64110)"
             mcc == 641 && (mnc == 22 || mnc == 1) -> "Airtel Uganda (PLMN 64122)"
             mcc == 641 && mnc == 11 -> "Uganda Telecom (UTL)"
+            mcc in 310..316 -> "Android Virtual Radio / US Test (PLMN $mcc-$mnc)"
             mcc != null && mnc != null -> "PLMN $mcc-$mnc"
             else -> "Unknown Cellular Network"
+        }
+
+    val countryDisplayName: String
+        get() = when (mcc) {
+            641 -> "Uganda"
+            in 310..316 -> "USA / Virtual"
+            640 -> "Tanzania"
+            639 -> "Kenya"
+            635 -> "Rwanda"
+            null -> "N/A"
+            else -> "MCC $mcc"
         }
 }
 

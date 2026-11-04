@@ -89,10 +89,10 @@ class CellularDiagnosticManager(private val context: Context) {
 
                 return CellTowerInfo(
                     type = "4G LTE",
-                    mcc = mcc ?: 641,
-                    mnc = mnc ?: 10,
-                    cid = cid ?: 482101L,
-                    lac = tac ?: 1205,
+                    mcc = mcc,
+                    mnc = mnc,
+                    cid = cid,
+                    lac = tac,
                     signalDbm = dbm,
                     signalLevel = signal.level,
                     isRegistered = info.isRegistered,
@@ -124,14 +124,14 @@ class CellularDiagnosticManager(private val context: Context) {
 
                 return CellTowerInfo(
                     type = "2G GSM",
-                    mcc = mcc ?: 641,
-                    mnc = mnc ?: 10,
+                    mcc = mcc,
+                    mnc = mnc,
                     cid = cid,
                     lac = lac,
                     signalDbm = signal.dbm,
                     signalLevel = signal.level,
                     isRegistered = info.isRegistered,
-                    operatorName = matchedTower?.siteName,
+                    operatorName = matchedTower?.siteName ?: identity.operatorAlphaLong?.toString(),
                     estimatedDistanceKm = calculateEstimatedDistance(signal.dbm, null),
                     latitude = matchedTower?.lat,
                     longitude = matchedTower?.lon
@@ -158,14 +158,14 @@ class CellularDiagnosticManager(private val context: Context) {
 
                 return CellTowerInfo(
                     type = "3G WCDMA",
-                    mcc = mcc ?: 641,
-                    mnc = mnc ?: 22,
+                    mcc = mcc,
+                    mnc = mnc,
                     cid = cid,
                     lac = lac,
                     signalDbm = signal.dbm,
                     signalLevel = signal.level,
                     isRegistered = info.isRegistered,
-                    operatorName = matchedTower?.siteName,
+                    operatorName = matchedTower?.siteName ?: identity.operatorAlphaLong?.toString(),
                     estimatedDistanceKm = calculateEstimatedDistance(signal.dbm, null),
                     latitude = matchedTower?.lat,
                     longitude = matchedTower?.lon
@@ -177,20 +177,21 @@ class CellularDiagnosticManager(private val context: Context) {
                 val mcc = identity?.mccString?.toIntOrNull()
                 val mnc = identity?.mncString?.toIntOrNull()
                 val nci = identity?.nci?.takeIf { it != Long.MAX_VALUE }
+                val matchedTower = lookupTower(mcc, mnc, nci)
 
                 return CellTowerInfo(
                     type = "5G NR",
-                    mcc = mcc ?: 641,
-                    mnc = mnc ?: 10,
+                    mcc = mcc,
+                    mnc = mnc,
                     cid = nci,
                     lac = identity?.tac?.takeIf { it != Int.MAX_VALUE },
                     signalDbm = signal?.dbm ?: -78,
                     signalLevel = signal?.level ?: 4,
                     isRegistered = info.isRegistered,
-                    operatorName = "MTN Uganda 5G NSA (Kololo Core)",
+                    operatorName = matchedTower?.siteName ?: identity?.operatorAlphaLong?.toString(),
                     estimatedDistanceKm = 0.35,
-                    latitude = 0.3345,
-                    longitude = 32.5712
+                    latitude = matchedTower?.lat,
+                    longitude = matchedTower?.lon
                 )
             }
             else -> return null

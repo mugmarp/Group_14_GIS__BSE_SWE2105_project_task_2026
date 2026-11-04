@@ -64,6 +64,13 @@ class LocationRepository(private val context: Context) {
         }
     }
 
+    private val _isSimulationActive = MutableStateFlow(false)
+    val isSimulationActive: StateFlow<Boolean> = _isSimulationActive.asStateFlow()
+
+    fun setSimulationActive(active: Boolean) {
+        _isSimulationActive.value = active
+    }
+
     suspend fun setTrackingMode(mode: TrackingMode) {
         _trackingMode.value = mode
     }
@@ -101,28 +108,79 @@ class LocationRepository(private val context: Context) {
     suspend fun stopCurrentSession(): TrackingSession? = withContext(Dispatchers.IO) {
         val current = _activeSession.value ?: return@withContext null
         val endTime = System.currentTimeMillis()
+        val db = dbHelper.writableDatabase
+
+        // Audit points in SQLite database to ensure the saved record matches actual persisted points
+        var dbCount = 0
+        var dbDistance = 0.0
+        val cursor = db.query(
+            LocationDbHelper.TABLE_POINTS,
+            arrayOf("latitude", "longitude"),
+            "session_id = ?",
+            arrayOf(current.id),
+            null, null, "timestamp ASC"
+        )
+        cursor.use { c ->
+            var lastLat: Double? = null
+            var lastLon: Double? = null
+            while (c.moveToNext()) {
+                dbCount++
+                val lat = c.getDouble(0)
+                val lon = c.getDouble(1)
+                if (lastLat != null && lastLon != null) {
+                    val stepDist = calculateDistanceMeters(lastLat, lastLon, lat, lon)
+                    if (stepDist in 1.5..5000.0) {
+                        dbDistance += stepDist
+                    }
+                }
+                lastLat = lat
+                lastLon = lon
+            }
+        }
+
+        val finalDistance = if (current.totalDistanceMeters > 0.0) current.totalDistanceMeters else dbDistance
+        val finalCount = if (current.pointCount > 0) current.pointCount else dbCount
+        val elapsedSec = ((endTime - current.startTime) / 1000.0).coerceAtLeast(1.0)
+        val finalAvgSpeed = (finalDistance / elapsedSec) * 3.6
+
         val updated = current.copy(
             endTime = endTime,
+            totalDistanceMeters = finalDistance,
+            pointCount = finalCount,
+            avgSpeedKmh = finalAvgSpeed,
             isRecording = false
         )
 
-        val db = dbHelper.writableDatabase
         val cv = ContentValues().apply {
             put("end_time", endTime)
             put("is_recording", 0)
-            put("distance", updated.totalDistanceMeters)
-            put("avg_speed", updated.avgSpeedKmh)
+            put("distance", finalDistance)
+            put("avg_speed", finalAvgSpeed)
             put("max_speed", updated.maxSpeedKmh)
-            put("point_count", updated.pointCount)
+            put("point_count", finalCount)
         }
         db.update(LocationDbHelper.TABLE_SESSIONS, cv, "id = ?", arrayOf(current.id))
 
         _activeSession.value = null
+        _activeTrailPoints.value = emptyList()
         loadSessions()
         updated
     }
 
     suspend fun recordLocation(point: LocationPoint) = withContext(Dispatchers.IO) {
+        // Discard null island and NaN glitch coordinates
+        if ((point.latitude == 0.0 && point.longitude == 0.0) || point.latitude.isNaN() || point.longitude.isNaN()) {
+            return@withContext
+        }
+
+        // Strict isolation: Do not mix simulation coordinates with live hardware GPS fixes
+        if (_isSimulationActive.value && point.provider != "simulation") {
+            return@withContext
+        }
+        if (!_isSimulationActive.value && point.provider == "simulation") {
+            return@withContext
+        }
+
         _currentLocation.value = point
 
         val session = _activeSession.value
@@ -141,14 +199,25 @@ class LocationRepository(private val context: Context) {
             }
             db.insert(LocationDbHelper.TABLE_POINTS, null, cv)
 
-            val currentPoints = _activeTrailPoints.value + point
-            _activeTrailPoints.value = currentPoints
+            val prevPoint = _activeTrailPoints.value.lastOrNull()
+            _activeTrailPoints.value = _activeTrailPoints.value + point
 
-            // Calculate incremental distance and statistics
-            val prevPoint = if (currentPoints.size > 1) currentPoints[currentPoints.size - 2] else null
-            val additionalDistance = if (prevPoint != null) {
-                calculateDistanceMeters(prevPoint.latitude, prevPoint.longitude, point.latitude, point.longitude)
-            } else 0.0
+            // Calculate incremental distance with multipath & teleportation jump rejection
+            val additionalDistance: Double = if (prevPoint != null) {
+                val dist = calculateDistanceMeters(prevPoint.latitude, prevPoint.longitude, point.latitude, point.longitude)
+                val timeDiffSec = ((point.timestamp - prevPoint.timestamp) / 1000.0).coerceAtLeast(0.1)
+                val impliedSpeedMps = dist / timeDiffSec
+                // Discard sudden GPS teleportation/multipath jump (> 5km or implied speed > 200 km/h)
+                if (dist > 5000.0 || impliedSpeedMps > 55.0) {
+                    0.0
+                } else if (dist < 1.5) {
+                    0.0 // Discard stationary jitter (< 1.5m)
+                } else {
+                    dist
+                }
+            } else {
+                0.0
+            }
 
             val newDistance = session.totalDistanceMeters + additionalDistance
             val newPointCount = session.pointCount + 1

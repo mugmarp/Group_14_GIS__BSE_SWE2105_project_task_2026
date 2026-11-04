@@ -302,8 +302,8 @@ private fun ServingCellCard(cell: CellTowerInfo) {
 
             // Cellular Telemetry Grid
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                CellMetricBox(label = "MCC (Country)", value = "${cell.mcc ?: 641} (UG)")
-                CellMetricBox(label = "MNC (Network)", value = "${cell.mnc ?: 10}")
+                CellMetricBox(label = "MCC (Country)", value = "${cell.mcc ?: "N/A"} (${cell.countryDisplayName})")
+                CellMetricBox(label = "MNC (Network)", value = "${cell.mnc ?: "N/A"}")
                 CellMetricBox(label = "CID (Cell ID)", value = "${cell.cid ?: "N/A"}")
                 CellMetricBox(label = "LAC/TAC", value = "${cell.lac ?: "N/A"}")
             }

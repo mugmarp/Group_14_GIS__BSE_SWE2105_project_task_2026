@@ -147,11 +147,13 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     fun toggleSimulation(enable: Boolean) {
         _isSimulatingMovement.value = enable
+        repository.setSimulationActive(enable)
         if (enable) {
             simulationJob?.cancel()
             simulationJob = viewModelScope.launch {
                 if (activeSession.value == null) {
                     startTracking("Simulation Demo Route", trackingMode.value)
+                    delay(300L) // Allow repository to initialize active session
                 }
 
                 var step = 0
@@ -165,6 +167,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     val simulatedSpeed = 8.5f + (Math.random() * 4.0).toFloat() // ~30-45 km/h boda speed
                     bearing = (bearing + (Math.random() * 10 - 5).toFloat()).coerceIn(0f, 360f)
 
+                    val currentSessionId = activeSession.value?.id ?: "sim"
                     val p = LocationPoint(
                         latitude = waypoint.first + jitterLat,
                         longitude = waypoint.second + jitterLon,
@@ -172,15 +175,11 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                         speed = simulatedSpeed,
                         altitude = 1190.0 + (Math.random() * 15.0),
                         bearing = bearing,
-                        provider = "gps",
-                        sessionId = activeSession.value?.id ?: "sim"
+                        provider = "simulation",
+                        sessionId = currentSessionId
                     )
 
                     repository.recordLocation(p)
-
-                    // Also refresh cell towers with realistic RSSI changes
-                    val updatedCells = cellManager.readCurrentCellTowers()
-                    repository.updateCellTowers(updatedCells)
 
                     step++
                     delay(2000L)
@@ -189,6 +188,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         } else {
             simulationJob?.cancel()
             simulationJob = null
+            // If the active session was the demo route, stop it cleanly
+            if (activeSession.value?.name?.contains("Simulation", ignoreCase = true) == true) {
+                stopTracking()
+            }
         }
     }
 

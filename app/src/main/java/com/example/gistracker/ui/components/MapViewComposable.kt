@@ -145,16 +145,43 @@ fun MapViewComposable(
             update = { map ->
                 map.overlays.clear()
 
-                // 1. Draw Real GPS Trail
+                // 1. Draw Real GPS Trail (segmented to avoid multipath jumps across continents)
                 if (trailPoints.size >= 2) {
-                    val polyline = Polyline(map).apply {
-                        outlinePaint.color = trailColor.toArgb()
-                        outlinePaint.strokeWidth = 10f
-                        outlinePaint.strokeCap = Paint.Cap.ROUND
-                        outlinePaint.strokeJoin = Paint.Join.ROUND
-                        setPoints(trailPoints.map { GeoPoint(it.latitude, it.longitude) })
+                    val currentSegment = mutableListOf<GeoPoint>()
+                    for (i in trailPoints.indices) {
+                        val pt = trailPoints[i]
+                        val geoPt = GeoPoint(pt.latitude, pt.longitude)
+                        if (currentSegment.isEmpty()) {
+                            currentSegment.add(geoPt)
+                        } else {
+                            val lastGeo = currentSegment.last()
+                            val distM = lastGeo.distanceToAsDouble(geoPt)
+                            if (distM > 5000.0) {
+                                if (currentSegment.size >= 2) {
+                                    val polyline = Polyline(map).apply {
+                                        outlinePaint.color = trailColor.toArgb()
+                                        outlinePaint.strokeWidth = 10f
+                                        outlinePaint.strokeCap = Paint.Cap.ROUND
+                                        outlinePaint.strokeJoin = Paint.Join.ROUND
+                                        setPoints(currentSegment.toList())
+                                    }
+                                    map.overlays.add(polyline)
+                                }
+                                currentSegment.clear()
+                            }
+                            currentSegment.add(geoPt)
+                        }
                     }
-                    map.overlays.add(polyline)
+                    if (currentSegment.size >= 2) {
+                        val polyline = Polyline(map).apply {
+                            outlinePaint.color = trailColor.toArgb()
+                            outlinePaint.strokeWidth = 10f
+                            outlinePaint.strokeCap = Paint.Cap.ROUND
+                            outlinePaint.strokeJoin = Paint.Join.ROUND
+                            setPoints(currentSegment)
+                        }
+                        map.overlays.add(polyline)
+                    }
                 }
 
                 // 2. Draw Geofence Safe Zones
