@@ -40,9 +40,66 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val trackingMode: StateFlow<TrackingMode> = repository.trackingMode
 
     private val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(application)
+    private var standbyCallback: com.google.android.gms.location.LocationCallback? = null
 
     init {
+        startStandbyLocationUpdates()
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    fun startStandbyLocationUpdates() {
         requestLastKnownLocation()
+        if (standbyCallback != null) return
+
+        val request = com.google.android.gms.location.LocationRequest.Builder(
+            com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY,
+            2500L
+        )
+            .setMinUpdateDistanceMeters(1.0f)
+            .setMinUpdateIntervalMillis(1500L)
+            .build()
+
+        standbyCallback = object : com.google.android.gms.location.LocationCallback() {
+            override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
+                val loc = result.lastLocation ?: return
+                // Only post from standby callback if no active foreground recording service is managing updates
+                if (activeSession.value == null) {
+                    val p = LocationPoint(
+                        latitude = loc.latitude,
+                        longitude = loc.longitude,
+                        accuracy = loc.accuracy,
+                        speed = if (loc.hasSpeed()) loc.speed else 0f,
+                        altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
+                        bearing = if (loc.hasBearing()) loc.bearing else 0f,
+                        provider = loc.provider ?: "fused",
+                        timestamp = loc.time,
+                        sessionId = "standby"
+                    )
+                    viewModelScope.launch {
+                        repository.recordLocation(p)
+                    }
+                }
+            }
+        }
+
+        try {
+            fusedLocationClient.requestLocationUpdates(
+                request,
+                standbyCallback!!,
+                android.os.Looper.getMainLooper()
+            )
+        } catch (e: SecurityException) {
+            // Handled via UI permission request flow
+        } catch (e: Exception) {
+            // Hardware/service unavailable
+        }
+    }
+
+    fun stopStandbyLocationUpdates() {
+        standbyCallback?.let {
+            fusedLocationClient.removeLocationUpdates(it)
+            standbyCallback = null
+        }
     }
 
     @android.annotation.SuppressLint("MissingPermission")
@@ -75,6 +132,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     fun startTracking(sessionName: String, mode: TrackingMode) {
         viewModelScope.launch {
+            stopStandbyLocationUpdates()
             repository.setTrackingMode(mode)
             repository.startNewSession(sessionName, mode)
             LocationForegroundService.startService(getApplication(), mode)
@@ -85,7 +143,13 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             repository.stopCurrentSession()
             LocationForegroundService.stopService(getApplication())
+            startStandbyLocationUpdates()
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        stopStandbyLocationUpdates()
     }
 
     fun setTrackingMode(mode: TrackingMode) {

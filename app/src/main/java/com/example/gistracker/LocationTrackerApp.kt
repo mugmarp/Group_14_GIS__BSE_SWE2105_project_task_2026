@@ -17,7 +17,8 @@ class LocationTrackerApp : Application() {
         super.onCreate()
 
         // Initialize OpenStreetMap (osmdroid) configuration
-        Configuration.getInstance().userAgentValue = packageName
+        org.osmdroid.config.Configuration.getInstance().load(this, android.preference.PreferenceManager.getDefaultSharedPreferences(this))
+        org.osmdroid.config.Configuration.getInstance().userAgentValue = packageName
 
         repository = LocationRepository(this)
         cellManager = CellularDiagnosticManager(this)
