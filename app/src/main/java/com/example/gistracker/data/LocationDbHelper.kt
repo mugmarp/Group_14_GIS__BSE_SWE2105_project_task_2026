@@ -89,67 +89,6 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
             )
             """.trimIndent()
         )
-
-        // Seed with default initial Ugandan Safe Zones (Kampala & Mbarara context from research)
-        seedDefaultGeofences(db)
-    }
-
-    private fun seedDefaultGeofences(db: SQLiteDatabase) {
-        val defaultZones = listOf(
-            GeofenceZone(
-                id = "zone_must",
-                name = "MUST University Campus (Mbarara)",
-                latitude = -0.6167,
-                longitude = 30.6583,
-                radiusMeters = 400f,
-                category = GeofenceCategory.SCHOOL,
-                colorHex = "#00E5FF"
-            ),
-            GeofenceZone(
-                id = "zone_mulago",
-                name = "Mulago Hospital Emergency Corridor",
-                latitude = 0.3392,
-                longitude = 32.5768,
-                radiusMeters = 500f,
-                category = GeofenceCategory.SAFE_ZONE,
-                colorHex = "#00E676"
-            ),
-            GeofenceZone(
-                id = "zone_boda_hotspot",
-                name = "Boda Boda High-Risk Junction (Wandegeya)",
-                latitude = 0.3340,
-                longitude = 32.5694,
-                radiusMeters = 300f,
-                category = GeofenceCategory.BODA_HOTSPOT,
-                colorHex = "#FF5252"
-            ),
-            GeofenceZone(
-                id = "zone_kampala_cbd",
-                name = "Kampala Central Safe Transport Hub",
-                latitude = 0.3136,
-                longitude = 32.5811,
-                radiusMeters = 600f,
-                category = GeofenceCategory.WORK,
-                colorHex = "#FFB300"
-            )
-        )
-
-        for (z in defaultZones) {
-            val cv = ContentValues().apply {
-                put("id", z.id)
-                put("name", z.name)
-                put("latitude", z.latitude)
-                put("longitude", z.longitude)
-                put("radius", z.radiusMeters)
-                put("category", z.category.name)
-                put("color_hex", z.colorHex)
-                put("alert_on_entry", if (z.alertOnEntry) 1 else 0)
-                put("alert_on_exit", if (z.alertOnExit) 1 else 0)
-                put("is_inside", if (z.isInside) 1 else 0)
-                put("last_transition", z.lastTransitionTime)
-            }
-            db.insert(TABLE_GEOFENCES, null, cv)
-        }
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {

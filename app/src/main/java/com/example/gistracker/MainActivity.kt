@@ -17,10 +17,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.CompareArrows
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Map
-import androidx.compose.material.icons.filled.School
-import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -51,10 +50,9 @@ import com.example.gistracker.viewmodel.TrackerViewModel
 
 enum class Screen(val title: String, val testTag: String) {
     MAP("Live Map", "nav_map"),
-    CELLULAR("Cell Towers", "nav_cellular"),
-    GEOFENCE("Geofences", "nav_geofence"),
-    HISTORY("History", "nav_history"),
-    RESEARCH("SWE2105 Docs", "nav_research")
+    CELLULAR("Cell Signal", "nav_cellular"),
+    COMPARE("GPS vs Cell", "nav_compare"),
+    HISTORY("Saved Trails", "nav_history")
 }
 
 class MainActivity : ComponentActivity() {
@@ -163,11 +161,11 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                 )
 
                 NavigationBarItem(
-                    selected = currentScreen == Screen.GEOFENCE,
-                    onClick = { currentScreen = Screen.GEOFENCE },
-                    icon = { Icon(Icons.Default.Security, contentDescription = "Geofences") },
-                    label = { Text("Safe Zones", fontSize = 11.sp) },
-                    modifier = Modifier.testTag(Screen.GEOFENCE.testTag),
+                    selected = currentScreen == Screen.COMPARE,
+                    onClick = { currentScreen = Screen.COMPARE },
+                    icon = { Icon(Icons.Default.CompareArrows, contentDescription = "GPS vs Cell Comparison") },
+                    label = { Text("Compare", fontSize = 11.sp) },
+                    modifier = Modifier.testTag(Screen.COMPARE.testTag),
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = colorScheme.onPrimary,
                         selectedTextColor = colorScheme.primary,
@@ -180,24 +178,9 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                 NavigationBarItem(
                     selected = currentScreen == Screen.HISTORY,
                     onClick = { currentScreen = Screen.HISTORY },
-                    icon = { Icon(Icons.Default.History, contentDescription = "History") },
-                    label = { Text("History", fontSize = 11.sp) },
+                    icon = { Icon(Icons.Default.History, contentDescription = "Saved Trails") },
+                    label = { Text("Trails", fontSize = 11.sp) },
                     modifier = Modifier.testTag(Screen.HISTORY.testTag),
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = colorScheme.onPrimary,
-                        selectedTextColor = colorScheme.primary,
-                        indicatorColor = colorScheme.primary,
-                        unselectedIconColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        unselectedTextColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                )
-
-                NavigationBarItem(
-                    selected = currentScreen == Screen.RESEARCH,
-                    onClick = { currentScreen = Screen.RESEARCH },
-                    icon = { Icon(Icons.Default.School, contentDescription = "SWE2105 Research") },
-                    label = { Text("Research", fontSize = 11.sp) },
-                    modifier = Modifier.testTag(Screen.RESEARCH.testTag),
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = colorScheme.onPrimary,
                         selectedTextColor = colorScheme.primary,
@@ -217,9 +200,8 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
             when (currentScreen) {
                 Screen.MAP -> MapScreen(viewModel = viewModel)
                 Screen.CELLULAR -> CellularDiagnosticScreen(viewModel = viewModel)
-                Screen.GEOFENCE -> GeofenceScreen(viewModel = viewModel)
+                Screen.COMPARE -> ResearchAnalysisScreen()
                 Screen.HISTORY -> HistoryScreen(viewModel = viewModel)
-                Screen.RESEARCH -> ResearchAnalysisScreen()
             }
         }
     }

@@ -64,13 +64,6 @@ class LocationRepository(private val context: Context) {
         }
     }
 
-    private val _isSimulationActive = MutableStateFlow(false)
-    val isSimulationActive: StateFlow<Boolean> = _isSimulationActive.asStateFlow()
-
-    fun setSimulationActive(active: Boolean) {
-        _isSimulationActive.value = active
-    }
-
     suspend fun setTrackingMode(mode: TrackingMode) {
         _trackingMode.value = mode
     }
@@ -173,13 +166,6 @@ class LocationRepository(private val context: Context) {
             return@withContext
         }
 
-        // Strict isolation: Do not mix simulation coordinates with live hardware GPS fixes
-        if (_isSimulationActive.value && point.provider != "simulation") {
-            return@withContext
-        }
-        if (!_isSimulationActive.value && point.provider == "simulation") {
-            return@withContext
-        }
 
         _currentLocation.value = point
 

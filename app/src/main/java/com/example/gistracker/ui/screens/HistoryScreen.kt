@@ -121,7 +121,7 @@ fun HistoryScreen(
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Start recording on the Map screen or toggle simulation to log trail telemetry.",
+                                text = "Start recording on the Map screen to log your real outdoor coordinates.",
                                 fontSize = 12.sp,
                                 color = colorScheme.onSurfaceVariant,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center

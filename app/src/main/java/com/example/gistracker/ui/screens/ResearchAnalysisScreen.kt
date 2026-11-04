@@ -165,11 +165,15 @@ fun ResearchAnalysisScreen(
                             )
                             Spacer(modifier = Modifier.height(10.dp))
 
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                TechMetric("Accuracy", selectedTech.accuracy, if (selectedTech.realTimeCapable) colorScheme.tertiary else colorScheme.error)
-                                TechMetric("Power", selectedTech.batteryDrain, customColors.warning)
-                                TechMetric("Indoor", selectedTech.indoorRating, colorScheme.secondary)
-                                TechMetric("Real-Time?", if (selectedTech.realTimeCapable) "YES (1 Hz)" else "NO", if (selectedTech.realTimeCapable) colorScheme.tertiary else colorScheme.error)
+                            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    TechMetric("ACCURACY", selectedTech.accuracy, if (selectedTech.realTimeCapable) colorScheme.tertiary else colorScheme.error, modifier = Modifier.weight(1f))
+                                    TechMetric("BATTERY DRAIN", selectedTech.batteryDrain, customColors.warning, modifier = Modifier.weight(1f))
+                                }
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    TechMetric("INDOOR FIX", selectedTech.indoorRating, colorScheme.secondary, modifier = Modifier.weight(1f))
+                                    TechMetric("REAL-TIME REFRESH", if (selectedTech.realTimeCapable) "Continuous (1 Hz)" else "Static Snapshot", if (selectedTech.realTimeCapable) colorScheme.tertiary else colorScheme.error, modifier = Modifier.weight(1f))
+                                }
                             }
                         }
                     }
@@ -288,8 +292,8 @@ fun ResearchAnalysisScreen(
 }
 
 @Composable
-private fun TechMetric(label: String, value: String, color: Color) {
-    Column {
+private fun TechMetric(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
+    Column(modifier = modifier) {
         Text(text = label, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
         Text(
             text = value,

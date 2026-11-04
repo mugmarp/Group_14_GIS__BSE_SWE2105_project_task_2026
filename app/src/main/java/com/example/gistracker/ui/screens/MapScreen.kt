@@ -1,6 +1,5 @@
 package com.example.gistracker.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -18,9 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -31,8 +28,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,7 +39,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -55,6 +49,9 @@ import com.example.gistracker.model.TrackingMode
 import com.example.gistracker.ui.components.MapViewComposable
 import com.example.gistracker.ui.theme.LocalCustomColors
 import com.example.gistracker.viewmodel.TrackerViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,21 +66,16 @@ fun MapScreen(
     val currentLocation by viewModel.currentLocation.collectAsState()
     val activeSession by viewModel.activeSession.collectAsState()
     val trailPoints by viewModel.activeTrailPoints.collectAsState()
-    val geofences by viewModel.geofenceZones.collectAsState()
-    val cellTowers by viewModel.cellTowers.collectAsState()
     val trackingMode by viewModel.trackingMode.collectAsState()
-    val isSimulating by viewModel.isSimulatingMovement.collectAsState()
 
     var showStartDialog by remember { mutableStateOf(false) }
-    var sessionNameInput by remember { mutableStateOf("Boda Transit Track") }
+    var sessionNameInput by remember { mutableStateOf("") }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // Interactive Map
+        // Real OpenStreetMap
         MapViewComposable(
             currentLocation = currentLocation,
-            trailPoints = trailPoints,
-            geofences = geofences,
-            cellTowers = cellTowers
+            trailPoints = trailPoints
         )
 
         // Top Telemetry HUD
@@ -91,18 +83,18 @@ fun MapScreen(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             Surface(
                 shape = RoundedCornerShape(16.dp),
-                color = colorScheme.surface.copy(alpha = 0.94f),
+                color = colorScheme.surface.copy(alpha = 0.96f),
                 shadowElevation = 8.dp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, colorScheme.outline.copy(alpha = 0.6f), RoundedCornerShape(16.dp))
+                    .border(1.dp, colorScheme.outline.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
                     .testTag("telemetry_hud_card")
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
+                Column(modifier = Modifier.padding(14.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -113,51 +105,48 @@ fun MapScreen(
                                 modifier = Modifier
                                     .size(10.dp)
                                     .clip(CircleShape)
-                                    .background(if (activeSession != null) colorScheme.error else colorScheme.tertiary)
+                                    .background(
+                                        when {
+                                            activeSession != null -> colorScheme.error
+                                            currentLocation != null -> colorScheme.tertiary
+                                            else -> customColors.warning
+                                        }
+                                    )
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = when {
-                                    isSimulating -> "DEMO SIMULATION RUNNING"
-                                    activeSession != null -> "RECORDING: ${activeSession?.name}"
-                                    currentLocation != null -> "GPS LOCKED (${currentLocation?.provider?.uppercase()})"
-                                    else -> "AWAITING GPS FIX (STANDBY)"
+                                    activeSession != null -> "RECORDING TRAIL"
+                                    currentLocation != null -> "GPS LOCKED"
+                                    else -> "SEARCHING SATELLITES"
                                 },
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = when {
-                                    isSimulating -> customColors.warning
                                     activeSession != null -> colorScheme.error
                                     currentLocation != null -> colorScheme.tertiary
-                                    else -> colorScheme.onSurfaceVariant
+                                    else -> customColors.warning
                                 }
                             )
                         }
 
-                        // Demo simulation toggle
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = "Demo",
-                                fontSize = 11.sp,
-                                color = if (isSimulating) customColors.warning else colorScheme.onSurfaceVariant,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Switch(
-                                checked = isSimulating,
-                                onCheckedChange = { viewModel.toggleSimulation(it) },
-                                modifier = Modifier.testTag("simulate_switch"),
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = customColors.warning,
-                                    checkedTrackColor = customColors.warning.copy(alpha = 0.4f)
-                                )
-                            )
-                        }
+                        // Live Coordinates badge inside header (eliminates bottom overlapping)
+                        Text(
+                            text = if (currentLocation != null) {
+                                "${String.format("%.4f", currentLocation?.latitude)}°, ${String.format("%.4f", currentLocation?.longitude)}°"
+                            } else {
+                                "No Fix"
+                            },
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium,
+                            color = colorScheme.onSurfaceVariant
+                        )
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                    // 4 Telemetry Metrics (Speed, Distance, Altitude, Accuracy)
+                    // 4 Telemetry Metrics
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -175,178 +164,143 @@ fun MapScreen(
                             accentColor = colorScheme.secondary
                         )
                         TelemetryItem(
-                            label = "ALTITUDE",
-                            value = "${String.format("%.0f", currentLocation?.altitude ?: 1190.0)}",
-                            unit = "m",
-                            accentColor = colorScheme.tertiary
+                            label = "ACCURACY",
+                            value = if (currentLocation != null) "±${currentLocation?.accuracy?.toInt()}m" else "--",
+                            unit = "",
+                            accentColor = if ((currentLocation?.accuracy ?: 99f) <= 10f) colorScheme.tertiary else customColors.warning
                         )
                         TelemetryItem(
-                            label = "ACCURACY",
-                            value = "±${String.format("%.1f", currentLocation?.accuracy ?: 3.5f)}",
-                            unit = "m",
-                            accentColor = if ((currentLocation?.accuracy ?: 3.5f) <= 10f) colorScheme.primary else customColors.warning
+                            label = "WAYPOINTS",
+                            value = "${trailPoints.size}",
+                            unit = "pts",
+                            accentColor = colorScheme.primary
                         )
                     }
 
                     if (activeSession != null) {
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Text(
-                                text = "⏱️ Duration: ${activeSession?.formattedDuration} | Mode: ${activeSession?.trackingMode?.name}",
+                                text = "⏱️ Active: ${activeSession?.formattedDuration}",
                                 fontSize = 11.sp,
                                 color = colorScheme.onSurfaceVariant,
                                 fontFamily = FontFamily.Monospace
                             )
                             Text(
-                                text = "📍 ${trailPoints.size} waypoints",
+                                text = "${activeSession?.name}",
                                 fontSize = 11.sp,
-                                color = colorScheme.secondary,
+                                color = colorScheme.primary,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
                     }
                 }
             }
-
-            AnimatedVisibility(visible = isSimulating) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = customColors.warning,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 4.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.Warning, contentDescription = null, tint = customColors.onWarning, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "[DEMO SIMULATION ACTIVE] Scripted path running. Turn off Demo switch to record real outdoor GPS movement.",
-                            color = customColors.onWarning,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
         }
 
-        // Bottom Controls Bar (Recording & Modes & SOS)
+        // Bottom Controls Bar (Recording & GPS Modes)
         Surface(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(12.dp)
+                .padding(14.dp)
                 .testTag("bottom_action_card"),
             shape = RoundedCornerShape(20.dp),
-            color = colorScheme.surface.copy(alpha = 0.95f),
+            color = colorScheme.surface.copy(alpha = 0.96f),
             shadowElevation = 8.dp,
-            border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.6f))
+            border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
         ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                // Tracking Mode Chips
+            Column(modifier = Modifier.padding(14.dp)) {
+                // Tracking Mode Selector
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TrackingMode.values().forEach { mode ->
-                        val selected = trackingMode == mode
+                    Text(
+                        text = "Positioning Profile:",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colorScheme.onSurface
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         FilterChip(
-                            selected = selected,
-                            onClick = { viewModel.setTrackingMode(mode) },
-                            label = {
-                                Text(
-                                    text = when (mode) {
-                                        TrackingMode.HIGH_ACCURACY -> "GPS (1s)"
-                                        TrackingMode.BALANCED -> "Balanced (10s)"
-                                        TrackingMode.POWER_SAVER -> "Cell Only"
-                                    },
-                                    fontSize = 11.sp,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
-                                )
-                            },
+                            selected = trackingMode == TrackingMode.HIGH_ACCURACY,
+                            onClick = { viewModel.setTrackingMode(TrackingMode.HIGH_ACCURACY) },
+                            label = { Text("GPS (1s)", fontSize = 11.sp) },
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = colorScheme.primary,
-                                selectedLabelColor = colorScheme.onPrimary,
-                                containerColor = colorScheme.surfaceVariant,
-                                labelColor = colorScheme.onSurfaceVariant
+                                selectedLabelColor = colorScheme.onPrimary
                             ),
-                            border = FilterChipDefaults.filterChipBorder(
-                                enabled = true,
-                                selected = selected,
-                                borderColor = if (selected) colorScheme.primary else colorScheme.outline.copy(alpha = 0.4f)
+                            modifier = Modifier.testTag("mode_high_acc")
+                        )
+                        FilterChip(
+                            selected = trackingMode == TrackingMode.BALANCED,
+                            onClick = { viewModel.setTrackingMode(TrackingMode.BALANCED) },
+                            label = { Text("Balanced (10s)", fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = colorScheme.primary,
+                                selectedLabelColor = colorScheme.onPrimary
                             ),
-                            modifier = Modifier.testTag("chip_${mode.name}")
+                            modifier = Modifier.testTag("mode_balanced")
+                        )
+                        FilterChip(
+                            selected = trackingMode == TrackingMode.POWER_SAVER,
+                            onClick = { viewModel.setTrackingMode(TrackingMode.POWER_SAVER) },
+                            label = { Text("Cell Only", fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = colorScheme.primary,
+                                selectedLabelColor = colorScheme.onPrimary
+                            ),
+                            modifier = Modifier.testTag("mode_power_save")
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Start/Stop Primary Button
-                    if (activeSession == null) {
-                        Button(
-                            onClick = { showStartDialog = true },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("start_tracking_btn"),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = colorScheme.primary,
-                                contentColor = colorScheme.onPrimary
-                            ),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Start Recording", fontWeight = FontWeight.Bold)
-                        }
-                    } else {
-                        Button(
-                            onClick = { viewModel.stopTracking() },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(48.dp)
-                                .testTag("stop_tracking_btn"),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = colorScheme.error,
-                                contentColor = colorScheme.onError
-                            ),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Default.Stop, contentDescription = null)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Stop & Save Trail", fontWeight = FontWeight.Bold)
-                        }
-                    }
-
-                    // Emergency SOS Share Button
+                // Primary Start / Stop Button
+                if (activeSession == null) {
                     Button(
-                        onClick = { viewModel.shareEmergencyAlert(context) },
+                        onClick = {
+                            val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                            sessionNameInput = "Field Trail $timeStr"
+                            showStartDialog = true
+                        },
                         modifier = Modifier
-                            .height(48.dp)
-                            .testTag("emergency_sos_btn"),
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("start_track_btn"),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = colorScheme.error.copy(alpha = 0.15f),
-                            contentColor = colorScheme.error
+                            containerColor = colorScheme.primary,
+                            contentColor = colorScheme.onPrimary
                         ),
-                        shape = RoundedCornerShape(12.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.2.dp, colorScheme.error)
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(Icons.Default.Share, contentDescription = "Emergency Share", tint = colorScheme.error)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("SOS Share", color = colorScheme.error, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Start Recording Real Trail", fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Button(
+                        onClick = { viewModel.stopTracking() },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("stop_track_btn"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.error,
+                            contentColor = colorScheme.onError
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Stop & Save Trail (${activeSession?.formattedDuration})", fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -357,15 +311,17 @@ fun MapScreen(
     if (showStartDialog) {
         AlertDialog(
             onDismissRequest = { showStartDialog = false },
-            title = { Text("Start New Location Trail", color = colorScheme.onSurface, fontWeight = FontWeight.Bold) },
+            title = {
+                Text("Start Real GPS Trail", fontWeight = FontWeight.Bold, color = colorScheme.onSurface)
+            },
             text = {
                 Column {
                     Text(
-                        "Give this tracking session a label (e.g. Boda trip, child school route, vehicle transit):",
-                        color = colorScheme.onSurfaceVariant,
-                        fontSize = 13.sp
+                        "Enter a name for this tracking session to log your live coordinates to local SQLite storage:",
+                        fontSize = 13.sp,
+                        color = colorScheme.onSurfaceVariant
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
                     OutlinedTextField(
                         value = sessionNameInput,
                         onValueChange = { sessionNameInput = it },
@@ -375,19 +331,13 @@ fun MapScreen(
                             .fillMaxWidth()
                             .testTag("session_name_input")
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Tracking Mode: ${trackingMode.title}",
-                        color = colorScheme.primary,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        viewModel.startTracking(sessionNameInput.ifBlank { "Track ${System.currentTimeMillis() % 1000}" }, trackingMode)
+                        val name = sessionNameInput.ifBlank { "Field Trail" }
+                        viewModel.startTracking(name, trackingMode)
                         showStartDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(
@@ -396,7 +346,7 @@ fun MapScreen(
                     ),
                     modifier = Modifier.testTag("confirm_start_btn")
                 ) {
-                    Text("Start", fontWeight = FontWeight.Bold)
+                    Text("Start Recording", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -414,25 +364,29 @@ private fun TelemetryItem(
     label: String,
     value: String,
     unit: String,
-    accentColor: Color
+    accentColor: androidx.compose.ui.graphics.Color
 ) {
-    Column(horizontalAlignment = Alignment.Start) {
-        Text(text = label, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
+    Column {
+        Text(
+            text = label,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 text = value,
                 fontSize = 17.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.ExtraBold,
-                color = accentColor
+                fontWeight = FontWeight.Bold,
+                color = accentColor,
+                fontFamily = FontFamily.Monospace
             )
             if (unit.isNotBlank()) {
                 Spacer(modifier = Modifier.width(2.dp))
                 Text(
                     text = unit,
                     fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 2.dp)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

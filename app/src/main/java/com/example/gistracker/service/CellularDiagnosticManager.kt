@@ -18,25 +18,7 @@ class CellularDiagnosticManager(private val context: Context) {
 
     private val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
 
-    // Known Ugandan Cell Tower coordinates from OpenCellID / UCC database for demonstration & verification
-    private val ugandaTowerRegistry = listOf(
-        UgandaTower(641, 10, 482101, 1205, 0.3345, 32.5712, "MTN Kololo Hill Primary Base Station"),
-        UgandaTower(641, 10, 482102, 1205, 0.3478, 32.5822, "MTN Mulago Hospital Macro Cell"),
-        UgandaTower(641, 22, 310501, 840, 0.3135, 32.5815, "Airtel Kampala Road Central Tower"),
-        UgandaTower(641, 22, 310502, 840, 0.3290, 32.5710, "Airtel Makerere University Tower"),
-        UgandaTower(641, 10, 750101, 2300, -0.6170, 30.6580, "MTN Mbarara MUST Campus Mast"),
-        UgandaTower(641, 22, 750201, 2300, -0.6120, 30.6520, "Airtel Mbarara Town Center")
-    )
 
-    data class UgandaTower(
-        val mcc: Int,
-        val mnc: Int,
-        val cid: Long,
-        val lac: Int,
-        val lat: Double,
-        val lon: Double,
-        val siteName: String
-    )
 
     fun readCurrentCellTowers(): List<CellTowerInfo> {
         val tm = telephonyManager ?: return emptyList()
@@ -85,8 +67,6 @@ class CellularDiagnosticManager(private val context: Context) {
                     signal.timingAdvance.takeIf { it != Int.MAX_VALUE }
                 } else null
 
-                val matchedTower = lookupTower(mcc, mnc, cid)
-
                 return CellTowerInfo(
                     type = "4G LTE",
                     mcc = mcc,
@@ -96,11 +76,9 @@ class CellularDiagnosticManager(private val context: Context) {
                     signalDbm = dbm,
                     signalLevel = signal.level,
                     isRegistered = info.isRegistered,
-                    operatorName = matchedTower?.siteName ?: identity.operatorAlphaLong?.toString(),
+                    operatorName = identity.operatorAlphaLong?.toString(),
                     timingAdvance = timingAdvance,
-                    estimatedDistanceKm = calculateEstimatedDistance(dbm, timingAdvance),
-                    latitude = matchedTower?.lat,
-                    longitude = matchedTower?.lon
+                    estimatedDistanceKm = calculateEstimatedDistance(dbm, timingAdvance)
                 )
             }
             info is CellInfoGsm -> {
@@ -120,7 +98,6 @@ class CellularDiagnosticManager(private val context: Context) {
                 }
                 val cid = identity.cid.toLong().takeIf { it != Int.MAX_VALUE.toLong() && it != -1L }
                 val lac = identity.lac.takeIf { it != Int.MAX_VALUE && it != -1 }
-                val matchedTower = lookupTower(mcc, mnc, cid)
 
                 return CellTowerInfo(
                     type = "2G GSM",
@@ -131,10 +108,8 @@ class CellularDiagnosticManager(private val context: Context) {
                     signalDbm = signal.dbm,
                     signalLevel = signal.level,
                     isRegistered = info.isRegistered,
-                    operatorName = matchedTower?.siteName ?: identity.operatorAlphaLong?.toString(),
-                    estimatedDistanceKm = calculateEstimatedDistance(signal.dbm, null),
-                    latitude = matchedTower?.lat,
-                    longitude = matchedTower?.lon
+                    operatorName = identity.operatorAlphaLong?.toString(),
+                    estimatedDistanceKm = calculateEstimatedDistance(signal.dbm, null)
                 )
             }
             info is CellInfoWcdma -> {
@@ -154,7 +129,6 @@ class CellularDiagnosticManager(private val context: Context) {
                 }
                 val cid = identity.cid.toLong().takeIf { it != Int.MAX_VALUE.toLong() && it != -1L }
                 val lac = identity.lac.takeIf { it != Int.MAX_VALUE && it != -1 }
-                val matchedTower = lookupTower(mcc, mnc, cid)
 
                 return CellTowerInfo(
                     type = "3G WCDMA",
@@ -165,10 +139,8 @@ class CellularDiagnosticManager(private val context: Context) {
                     signalDbm = signal.dbm,
                     signalLevel = signal.level,
                     isRegistered = info.isRegistered,
-                    operatorName = matchedTower?.siteName ?: identity.operatorAlphaLong?.toString(),
-                    estimatedDistanceKm = calculateEstimatedDistance(signal.dbm, null),
-                    latitude = matchedTower?.lat,
-                    longitude = matchedTower?.lon
+                    operatorName = identity.operatorAlphaLong?.toString(),
+                    estimatedDistanceKm = calculateEstimatedDistance(signal.dbm, null)
                 )
             }
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && info is CellInfoNr -> {
@@ -177,7 +149,6 @@ class CellularDiagnosticManager(private val context: Context) {
                 val mcc = identity?.mccString?.toIntOrNull()
                 val mnc = identity?.mncString?.toIntOrNull()
                 val nci = identity?.nci?.takeIf { it != Long.MAX_VALUE }
-                val matchedTower = lookupTower(mcc, mnc, nci)
 
                 return CellTowerInfo(
                     type = "5G NR",
@@ -185,23 +156,15 @@ class CellularDiagnosticManager(private val context: Context) {
                     mnc = mnc,
                     cid = nci,
                     lac = identity?.tac?.takeIf { it != Int.MAX_VALUE },
-                    signalDbm = signal?.dbm ?: -78,
-                    signalLevel = signal?.level ?: 4,
+                    signalDbm = signal?.dbm ?: -85,
+                    signalLevel = signal?.level ?: 3,
                     isRegistered = info.isRegistered,
-                    operatorName = matchedTower?.siteName ?: identity?.operatorAlphaLong?.toString(),
-                    estimatedDistanceKm = 0.35,
-                    latitude = matchedTower?.lat,
-                    longitude = matchedTower?.lon
+                    operatorName = identity?.operatorAlphaLong?.toString(),
+                    estimatedDistanceKm = 0.35
                 )
             }
             else -> return null
         }
-    }
-
-    private fun lookupTower(mcc: Int?, mnc: Int?, cid: Long?): UgandaTower? {
-        if (cid == null) return null
-        return ugandaTowerRegistry.find { it.cid == cid }
-            ?: ugandaTowerRegistry.find { it.mcc == mcc && it.mnc == mnc }
     }
 
     private fun calculateEstimatedDistance(dbm: Int, timingAdvance: Int?): Double {
@@ -210,7 +173,6 @@ class CellularDiagnosticManager(private val context: Context) {
             return (timingAdvance * 78.12) / 1000.0
         }
         // Free Space / Hata signal attenuation heuristic in urban 1800-2100MHz
-        // P(d) = P(d0) - 10 * n * log10(d/d0)
         return when {
             dbm >= -70 -> 0.15 // Very close (< 200m)
             dbm >= -85 -> 0.45 // 400-500m
@@ -218,58 +180,5 @@ class CellularDiagnosticManager(private val context: Context) {
             dbm >= -105 -> 1.8 // ~1.8 km
             else -> 3.2 // > 3 km
         }
-    }
-
-    fun createDemonstrationTowers(): List<CellTowerInfo> {
-        return listOf(
-            CellTowerInfo(
-                type = "4G LTE (Primary Serving)",
-                mcc = 641,
-                mnc = 10,
-                cid = 482101L,
-                lac = 1205,
-                signalDbm = -79,
-                signalLevel = 4,
-                isRegistered = true,
-                operatorName = "MTN Uganda (Kololo Mast #14)",
-                timingAdvance = 4, // ~312 meters
-                estimatedDistanceKm = 0.31,
-                latitude = 0.3345,
-                longitude = 32.5712,
-                isDemonstrationData = true
-            ),
-            CellTowerInfo(
-                type = "4G LTE (Neighbor Cell)",
-                mcc = 641,
-                mnc = 10,
-                cid = 482102L,
-                lac = 1205,
-                signalDbm = -91,
-                signalLevel = 3,
-                isRegistered = false,
-                operatorName = "MTN Uganda (Mulago Hill Sector B)",
-                timingAdvance = 9,
-                estimatedDistanceKm = 0.70,
-                latitude = 0.3478,
-                longitude = 32.5822,
-                isDemonstrationData = true
-            ),
-            CellTowerInfo(
-                type = "3G WCDMA (Neighbor Cell)",
-                mcc = 641,
-                mnc = 22,
-                cid = 310501L,
-                lac = 840,
-                signalDbm = -96,
-                signalLevel = 2,
-                isRegistered = false,
-                operatorName = "Airtel Uganda (Wandegeya NodeB)",
-                timingAdvance = null,
-                estimatedDistanceKm = 1.25,
-                latitude = 0.3340,
-                longitude = 32.5694,
-                isDemonstrationData = true
-            )
-        )
     }
 }

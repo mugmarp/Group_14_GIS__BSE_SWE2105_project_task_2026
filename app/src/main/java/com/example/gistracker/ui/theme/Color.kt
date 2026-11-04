@@ -2,29 +2,29 @@ package com.example.gistracker.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Light Mode Tokens
-val PrimaryLight = Color(0xFF0D6E6E) // Deep Teal
+// Light Mode Tokens (Crisp Daylight Outdoor Navigation)
+val PrimaryLight = Color(0xFF006270) // Marine Slate
 val OnPrimaryLight = Color(0xFFFFFFFF)
-val SecondaryLight = Color(0xFF1B4F72) // Deep Blue
-val TertiaryLight = Color(0xFF2E7D32) // Forest Green (Success / Safe)
-val ErrorLight = Color(0xFFC62828) // Crimson (SOS / Alert)
-val WarningLight = Color(0xFFF9A825) // Amber Gold
-val BackgroundLight = Color(0xFFF5F7FA) // App Background
-val SurfaceLight = Color(0xFFFFFFFF) // Cards, Bottom Sheets
-val OnSurfaceLight = Color(0xFF1A1C1E) // Main Text
-val OutlineLight = Color(0xFFC4C7C5) // Borders, Dividers
+val SecondaryLight = Color(0xFF1A568C) // Deep Cobalt Trail
+val TertiaryLight = Color(0xFF1B7E48) // Emerald GPS Fix
+val ErrorLight = Color(0xFFD32F2F) // Signal Crimson
+val WarningLight = Color(0xFFE67E00) // Safety Amber
+val BackgroundLight = Color(0xFFF8F9FA) // Clean Off-White
+val SurfaceLight = Color(0xFFFFFFFF) // Pure White Cards
+val OnSurfaceLight = Color(0xFF191C1E) // High Contrast Text
+val OutlineLight = Color(0xFFD0D7DE) // Crisp Dividers
 
-// Dark Mode Tokens
-val PrimaryDark = Color(0xFF4DB6AC) // Soft Teal
-val OnPrimaryDark = Color(0xFF003D3D)
-val SecondaryDark = Color(0xFF64B5F6) // Sky Blue
-val TertiaryDark = Color(0xFF81C784) // Soft Green (Success / Safe)
-val ErrorDark = Color(0xFFEF5350) // Coral Red (SOS / Alert)
-val WarningDark = Color(0xFFFFD54F) // Soft Gold
-val BackgroundDark = Color(0xFF0F1419) // App Background
-val SurfaceDark = Color(0xFF1A2332) // Cards, Bottom Sheets
-val OnSurfaceDark = Color(0xFFE3E2E6) // Main Text
-val OutlineDark = Color(0xFF44474E) // Borders, Dividers
+// Dark Mode Tokens (Deep Carbon & Electric Blue)
+val PrimaryDark = Color(0xFF4DD0E1) // Electric Cyan
+val OnPrimaryDark = Color(0xFF00363D)
+val SecondaryDark = Color(0xFF90CAF9) // Clear Sky Blue
+val TertiaryDark = Color(0xFF81C784) // Soft Mint
+val ErrorDark = Color(0xFFEF5350) // Coral
+val WarningDark = Color(0xFFFFB74D) // Amber Glow
+val BackgroundDark = Color(0xFF121820) // Deep Carbon
+val SurfaceDark = Color(0xFF1B222C) // Elevated Charcoal Cards
+val OnSurfaceDark = Color(0xFFE2E4E9) // Clean Text
+val OutlineDark = Color(0xFF333F4E) // Muted Border
 
 // Supplemental Operator Brand Accents
 val MtnYellow = Color(0xFFFFCC00)

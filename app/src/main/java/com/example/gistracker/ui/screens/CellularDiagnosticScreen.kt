@@ -1,9 +1,7 @@
 package com.example.gistracker.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,7 +13,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CellTower
@@ -37,16 +34,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.gistracker.model.CellTowerInfo
-import com.example.gistracker.ui.theme.AirtelRed
 import com.example.gistracker.ui.theme.LocalCustomColors
-import com.example.gistracker.ui.theme.MtnYellow
 import com.example.gistracker.viewmodel.TrackerViewModel
 
 @Composable
@@ -77,13 +71,13 @@ fun CellularDiagnosticScreen(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Cellular Diagnostic Hub",
+                        text = "Cellular Signal Hub",
                         fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
                         color = colorScheme.onBackground
                     )
                     Text(
-                        text = "TelephonyManager Tower Triangulation & Telemetry",
+                        text = "Real-time TelephonyManager base station diagnostics",
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant
                     )
@@ -105,36 +99,6 @@ fun CellularDiagnosticScreen(
             }
         }
 
-        // Demo Data Notice Banner if reference data is loaded
-        if (cellTowers.any { it.isDemonstrationData }) {
-            item {
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = customColors.warning.copy(alpha = 0.15f),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, customColors.warning)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Info,
-                            contentDescription = null,
-                            tint = customColors.warning,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "[DEMO / ACADEMIC REFERENCE DATA] Displaying pre-mapped Ugandan BTS towers (Kololo, Nakasero, Mulago). Live TelephonyManager reported no active physical cellular reception.",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = colorScheme.onSurface
-                        )
-                    }
-                }
-            }
-        }
-
         // Serving Cell Mast Card
         item {
             if (servingCell != null) {
@@ -142,36 +106,43 @@ fun CellularDiagnosticScreen(
             } else {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(14.dp),
                     colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                     border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
                 ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
+                    Column(modifier = Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.CellTower,
+                            contentDescription = null,
+                            tint = customColors.warning,
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "No Live Cellular Towers Detected",
-                            fontSize = 15.sp,
+                            text = "Waiting for Cellular Base Station",
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
-                            color = colorScheme.error
+                            color = colorScheme.onSurface
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "The device TelephonyManager returned 0 cell masts. This occurs on emulators, devices without active SIM cards, or when cellular radio is unprovisioned.",
+                            text = "No active physical cellular signal detected from TelephonyManager. Ensure an active SIM is inserted and device is not in Airplane Mode.",
                             fontSize = 12.sp,
-                            color = colorScheme.onSurfaceVariant
+                            color = colorScheme.onSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(14.dp))
                         Button(
-                            onClick = { viewModel.loadAcademicReferenceTowers() },
+                            onClick = { viewModel.refreshCellTowers() },
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = colorScheme.secondary,
-                                contentColor = colorScheme.onSecondary
+                                containerColor = colorScheme.primary,
+                                contentColor = colorScheme.onPrimary
                             ),
-                            shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.testTag("load_academic_towers_btn")
+                            shape = RoundedCornerShape(8.dp)
                         ) {
-                            Icon(Icons.Default.CellTower, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Load Academic Reference Towers (Uganda Demo)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Query Radio Hardware", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -188,17 +159,18 @@ fun CellularDiagnosticScreen(
             )
         }
 
-        if (neighborCells.isEmpty() && servingCell != null) {
+        if (neighborCells.isEmpty()) {
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(containerColor = colorScheme.surface)
                 ) {
                     Text(
-                        "No neighbor cells in immediate range (single sector serving)",
+                        if (servingCell != null) "Single sector serving (no neighbor masts in immediate measurement window)"
+                        else "No neighbor cells detected",
                         color = colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
-                        modifier = Modifier.padding(12.dp)
+                        modifier = Modifier.padding(14.dp)
                     )
                 }
             }
@@ -208,14 +180,9 @@ fun CellularDiagnosticScreen(
             }
         }
 
-        // Educational Comparison Card: GPS vs Cell Triangulation vs Cell ID Lookup
+        // Educational Comparison Card: GPS vs Cell Triangulation
         item {
             TriangulationComparisonCard()
-        }
-
-        // Uganda Legal & Telecom Framework
-        item {
-            UgandaTelecomContextCard()
         }
     }
 }
@@ -223,11 +190,7 @@ fun CellularDiagnosticScreen(
 @Composable
 private fun ServingCellCard(cell: CellTowerInfo) {
     val colorScheme = MaterialTheme.colorScheme
-    val carrierColor = when {
-        cell.mcc == 641 && cell.mnc == 10 -> MtnYellow
-        cell.mcc == 641 && cell.mnc == 22 -> AirtelRed
-        else -> colorScheme.primary
-    }
+    val carrierColor = colorScheme.primary
 
     Card(
         modifier = Modifier
@@ -235,7 +198,7 @@ private fun ServingCellCard(cell: CellTowerInfo) {
             .testTag("serving_cell_card"),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.5.dp, carrierColor.copy(alpha = 0.6f))
+        border = androidx.compose.foundation.BorderStroke(1.5.dp, carrierColor.copy(alpha = 0.5f))
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -267,34 +230,17 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                     }
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (cell.isDemonstrationData) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.15f),
-                            modifier = Modifier.padding(end = 6.dp)
-                        ) {
-                            Text(
-                                text = "DEMO",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = carrierColor.copy(alpha = 0.2f)
-                    ) {
-                        Text(
-                            text = cell.type,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = carrierColor,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = carrierColor.copy(alpha = 0.15f)
+                ) {
+                    Text(
+                        text = cell.type,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = carrierColor,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
                 }
             }
 
@@ -345,7 +291,7 @@ private fun ServingCellCard(cell: CellTowerInfo) {
             if (cell.timingAdvance != null) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    text = "LTE Timing Advance (TA): ${cell.timingAdvance} (1 TA step ≈ 78.12m round-trip)",
+                    text = "LTE Timing Advance (TA): ${cell.timingAdvance} (1 step ≈ 78.12m round-trip)",
                     fontSize = 11.sp,
                     color = colorScheme.onSurfaceVariant,
                     fontFamily = FontFamily.Monospace
@@ -380,29 +326,12 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = cell.operatorDisplayName,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colorScheme.onSurface
-                        )
-                        if (cell.isDemonstrationData) {
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
-                            ) {
-                                Text(
-                                    text = "DEMO",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                )
-                            }
-                        }
-                    }
+                    Text(
+                        text = cell.operatorDisplayName,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = colorScheme.onSurface
+                    )
                     Text(
                         text = "${cell.type} | CID: ${cell.cid ?: "?"} | LAC: ${cell.lac ?: "?"}",
                         fontSize = 11.sp,
@@ -457,7 +386,7 @@ private fun TriangulationComparisonCard() {
                 Icon(Icons.Default.Info, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(20.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Cell Triangulation vs GPS: Engineering Trade-offs",
+                    text = "GPS vs Cell Positioning Comparison",
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = colorScheme.onSurface
@@ -467,10 +396,10 @@ private fun TriangulationComparisonCard() {
             Spacer(modifier = Modifier.height(12.dp))
 
             ComparisonRow("Outdoor Accuracy", "2 – 5 meters (GNSS satellites)", "50 – 500m (Urban) / 5–20km (Rural)")
-            ComparisonRow("Indoor Penetration", "Fails / Blocked by concrete", "Strong cellular RF penetration")
-            ComparisonRow("Active Power", "20 – 30 mA (high drain)", "< 2 mA (piggybacks on radio)")
-            ComparisonRow("Offline Capability", "Works anywhere worldwide", "Requires cellular infrastructure")
-            ComparisonRow("Refresh Latency", "1 Hz (real-time continuous)", "Minutes (sector handover rate)")
+            ComparisonRow("Indoor Penetration", "Fails / Blocked by concrete", "High (Cellular RF penetrates walls)")
+            ComparisonRow("Active Power", "20 – 30 mA (high battery drain)", "< 2 mA (piggybacks on radio)")
+            ComparisonRow("Global Coverage", "Works anywhere worldwide", "Requires cellular infrastructure")
+            ComparisonRow("Fix Time (TTFF)", "1 – 30s (needs satellite lock)", "< 1s (instant network lookup)")
         }
     }
 }
@@ -486,41 +415,5 @@ private fun ComparisonRow(criterion: String, gpsText: String, cellText: String) 
             Text("📡 Cell: $cellText", fontSize = 11.sp, color = colorScheme.primary, modifier = Modifier.weight(1f))
         }
         Spacer(modifier = Modifier.height(4.dp))
-    }
-}
-
-@Composable
-private fun UgandaTelecomContextCard() {
-    val colorScheme = MaterialTheme.colorScheme
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = "🇺🇬 Uganda Telecom & Legal Findings",
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = MtnYellow
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = "• True Triangulation (TDOA/AoA from 3+ synchronized carrier towers) is restricted to internal network measurement systems. In Uganda, under the Regulation of Interception of Communications Act 2010 (Cap 101), only law enforcement with a judicial warrant can compel telecom carriers to triangulate devices.",
-                fontSize = 11.sp,
-                color = colorScheme.onSurfaceVariant
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
-            Text(
-                text = "• Mobile App Approach: Applications obtain on-device Cell ID (CID), Location Area Code (LAC), and RSSI via TelephonyManager. Combined with crowdsourced OpenCellID data (MCC 641 for Uganda, MNC 10 MTN, MNC 22 Airtel), the app identifies serving tower coordinates with ~200m–1km accuracy in Kampala.",
-                fontSize = 11.sp,
-                color = colorScheme.onSurfaceVariant
-            )
-        }
     }
 }
