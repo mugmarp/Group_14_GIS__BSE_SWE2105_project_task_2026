@@ -39,7 +39,7 @@ class CellularDiagnosticManager(private val context: Context) {
     )
 
     fun readCurrentCellTowers(): List<CellTowerInfo> {
-        val tm = telephonyManager ?: return createDemonstrationTowers()
+        val tm = telephonyManager ?: return emptyList()
         val results = mutableListOf<CellTowerInfo>()
 
         try {
@@ -55,11 +55,10 @@ class CellularDiagnosticManager(private val context: Context) {
         } catch (e: SecurityException) {
             // Permission not granted or restricted
         } catch (e: Exception) {
-            // Sensor unavailable on emulator
+            // Hardware/sensor unavailable
         }
 
-        // If running in Android emulator or device returns empty cell info, provide rich realistic Ugandan cell towers
-        return if (results.isNotEmpty()) results else createDemonstrationTowers()
+        return results
     }
 
     private fun parseCellInfo(info: CellInfo): CellTowerInfo? {
@@ -235,7 +234,8 @@ class CellularDiagnosticManager(private val context: Context) {
                 timingAdvance = 4, // ~312 meters
                 estimatedDistanceKm = 0.31,
                 latitude = 0.3345,
-                longitude = 32.5712
+                longitude = 32.5712,
+                isDemonstrationData = true
             ),
             CellTowerInfo(
                 type = "4G LTE (Neighbor Cell)",
@@ -250,7 +250,8 @@ class CellularDiagnosticManager(private val context: Context) {
                 timingAdvance = 9,
                 estimatedDistanceKm = 0.70,
                 latitude = 0.3478,
-                longitude = 32.5822
+                longitude = 32.5822,
+                isDemonstrationData = true
             ),
             CellTowerInfo(
                 type = "3G WCDMA (Neighbor Cell)",
@@ -265,7 +266,8 @@ class CellularDiagnosticManager(private val context: Context) {
                 timingAdvance = null,
                 estimatedDistanceKm = 1.25,
                 latitude = 0.3340,
-                longitude = 32.5694
+                longitude = 32.5694,
+                isDemonstrationData = true
             )
         )
     }

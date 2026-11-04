@@ -117,17 +117,27 @@ fun MapScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (activeSession != null) "RECORDING: ${activeSession?.name}" else "READY (GPS STANDBY)",
+                                text = when {
+                                    isSimulating -> "DEMO SIMULATION RUNNING"
+                                    activeSession != null -> "RECORDING: ${activeSession?.name}"
+                                    currentLocation != null -> "GPS LOCKED (${currentLocation?.provider?.uppercase()})"
+                                    else -> "AWAITING GPS FIX (STANDBY)"
+                                },
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (activeSession != null) colorScheme.error else colorScheme.tertiary
+                                color = when {
+                                    isSimulating -> customColors.warning
+                                    activeSession != null -> colorScheme.error
+                                    currentLocation != null -> colorScheme.tertiary
+                                    else -> colorScheme.onSurfaceVariant
+                                }
                             )
                         }
 
-                        // Simulation toggle
+                        // Demo simulation toggle
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "Simulate",
+                                text = "Demo",
                                 fontSize = 11.sp,
                                 color = if (isSimulating) customColors.warning else colorScheme.onSurfaceVariant,
                                 fontWeight = FontWeight.SemiBold
@@ -210,13 +220,13 @@ fun MapScreen(
                         .padding(top = 4.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.Default.Warning, contentDescription = null, tint = customColors.onWarning, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Simulation Mode Active: Generating realistic Kampala road telemetry",
+                            text = "[DEMO SIMULATION ACTIVE] Scripted path running. Turn off Demo switch to record real outdoor GPS movement.",
                             color = customColors.onWarning,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold

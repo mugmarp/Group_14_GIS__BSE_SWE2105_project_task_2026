@@ -3,6 +3,7 @@ package com.example.gistracker
 import android.app.Application
 import com.example.gistracker.data.LocationRepository
 import com.example.gistracker.service.CellularDiagnosticManager
+import org.osmdroid.config.Configuration
 
 class LocationTrackerApp : Application() {
 
@@ -14,10 +15,14 @@ class LocationTrackerApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        // Initialize OpenStreetMap (osmdroid) configuration
+        Configuration.getInstance().userAgentValue = packageName
+
         repository = LocationRepository(this)
         cellManager = CellularDiagnosticManager(this)
 
-        // Seed initial cell towers so UI displays data immediately
+        // Read real hardware cell towers if present
         val initialTowers = cellManager.readCurrentCellTowers()
         repository.updateCellTowers(initialTowers)
     }

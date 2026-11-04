@@ -101,7 +101,8 @@ data class CellTowerInfo(
     val timingAdvance: Int? = null,
     val estimatedDistanceKm: Double? = null,
     val latitude: Double? = null,
-    val longitude: Double? = null
+    val longitude: Double? = null,
+    val isDemonstrationData: Boolean = false
 ) {
     val operatorDisplayName: String
         get() = when {

@@ -63,4 +63,5 @@ dependencies {
     implementation(libs.androidx.compose.material.icons)
     implementation(libs.play.services.location)
     implementation(libs.coil.compose)
+    implementation(libs.osmdroid.android)
 }

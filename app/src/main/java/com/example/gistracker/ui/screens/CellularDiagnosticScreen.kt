@@ -75,7 +75,7 @@ fun CellularDiagnosticScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Cellular Diagnostic Hub",
                         fontSize = 22.sp,
@@ -105,6 +105,36 @@ fun CellularDiagnosticScreen(
             }
         }
 
+        // Demo Data Notice Banner if reference data is loaded
+        if (cellTowers.any { it.isDemonstrationData }) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = customColors.warning.copy(alpha = 0.15f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, customColors.warning)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = null,
+                            tint = customColors.warning,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "[DEMO / ACADEMIC REFERENCE DATA] Displaying pre-mapped Ugandan BTS towers (Kololo, Nakasero, Mulago). Live TelephonyManager reported no active physical cellular reception.",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        }
+
         // Serving Cell Mast Card
         item {
             if (servingCell != null) {
@@ -112,13 +142,38 @@ fun CellularDiagnosticScreen(
             } else {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = colorScheme.surface)
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
                 ) {
-                    Text(
-                        "Searching for serving cell tower...",
-                        color = colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(16.dp)
-                    )
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "No Live Cellular Towers Detected",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "The device TelephonyManager returned 0 cell masts. This occurs on emulators, devices without active SIM cards, or when cellular radio is unprovisioned.",
+                            fontSize = 12.sp,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Button(
+                            onClick = { viewModel.loadAcademicReferenceTowers() },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colorScheme.secondary,
+                                contentColor = colorScheme.onSecondary
+                            ),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.testTag("load_academic_towers_btn")
+                        ) {
+                            Icon(Icons.Default.CellTower, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Load Academic Reference Towers (Uganda Demo)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
         }
@@ -133,7 +188,7 @@ fun CellularDiagnosticScreen(
             )
         }
 
-        if (neighborCells.isEmpty()) {
+        if (neighborCells.isEmpty() && servingCell != null) {
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -212,17 +267,34 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                     }
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = carrierColor.copy(alpha = 0.2f)
-                ) {
-                    Text(
-                        text = cell.type,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = carrierColor,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (cell.isDemonstrationData) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.15f),
+                            modifier = Modifier.padding(end = 6.dp)
+                        ) {
+                            Text(
+                                text = "DEMO",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = carrierColor.copy(alpha = 0.2f)
+                    ) {
+                        Text(
+                            text = cell.type,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = carrierColor,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
                 }
             }
 
@@ -308,12 +380,29 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
-                    Text(
-                        text = cell.operatorDisplayName,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colorScheme.onSurface
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = cell.operatorDisplayName,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colorScheme.onSurface
+                        )
+                        if (cell.isDemonstrationData) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = "DEMO",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
                     Text(
                         text = "${cell.type} | CID: ${cell.cid ?: "?"} | LAC: ${cell.lac ?: "?"}",
                         fontSize = 11.sp,

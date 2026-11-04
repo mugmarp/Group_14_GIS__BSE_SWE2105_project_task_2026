@@ -57,22 +57,37 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         Pair(0.3478, 32.5822)  // Mulago Hill Top
     )
 
+    private val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(application)
+
     init {
-        // Provide an initial realistic position if none exists
-        if (currentLocation.value == null) {
-            val initial = LocationPoint(
-                latitude = 0.3345,
-                longitude = 32.5712,
-                accuracy = 4.2f,
-                speed = 0f,
-                altitude = 1195.0,
-                bearing = 45f,
-                provider = "gps",
-                sessionId = "init"
-            )
-            viewModelScope.launch {
-                repository.recordLocation(initial)
+        requestLastKnownLocation()
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    fun requestLastKnownLocation() {
+        try {
+            fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
+                if (loc != null && currentLocation.value == null) {
+                    val p = LocationPoint(
+                        latitude = loc.latitude,
+                        longitude = loc.longitude,
+                        accuracy = loc.accuracy,
+                        speed = if (loc.hasSpeed()) loc.speed else 0f,
+                        altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
+                        bearing = if (loc.hasBearing()) loc.bearing else 0f,
+                        provider = loc.provider ?: "fused",
+                        timestamp = loc.time,
+                        sessionId = "real_initial"
+                    )
+                    viewModelScope.launch {
+                        repository.recordLocation(p)
+                    }
+                }
             }
+        } catch (e: SecurityException) {
+            // Permission flow handled in UI
+        } catch (e: Exception) {
+            // Hardware unavailable
         }
     }
 
@@ -219,5 +234,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun refreshCellTowers() {
         val towers = cellManager.readCurrentCellTowers()
         repository.updateCellTowers(towers)
+    }
+
+    fun loadAcademicReferenceTowers() {
+        val demoTowers = cellManager.createDemonstrationTowers()
+        repository.updateCellTowers(demoTowers)
     }
 }

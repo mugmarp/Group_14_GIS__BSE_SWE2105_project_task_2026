@@ -1,22 +1,28 @@
 package com.example.gistracker.ui.components
 
-import androidx.compose.foundation.Canvas
+import android.graphics.Paint
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.GpsNotFixed
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -24,36 +30,36 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.example.gistracker.model.CellTowerInfo
 import com.example.gistracker.model.GeofenceCategory
 import com.example.gistracker.model.GeofenceZone
 import com.example.gistracker.model.LocationPoint
 import com.example.gistracker.ui.theme.LocalCustomColors
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polygon
+import org.osmdroid.views.overlay.Polyline
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -65,255 +71,170 @@ fun MapViewComposable(
     cellTowers: List<CellTowerInfo>,
     modifier: Modifier = Modifier
 ) {
-    // Theme colors
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
 
-    val canvasBg = colorScheme.background
-    val gridLineColor = colorScheme.outline.copy(alpha = 0.35f)
-    val gridTextColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
     val trailColor = colorScheme.secondary
     val userPinColor = colorScheme.primary
     val safeColor = colorScheme.tertiary
     val hazardColor = colorScheme.error
     val warningColor = customColors.warning
 
-    // Center coordinate of map
-    var centerLat by remember { mutableStateOf(currentLocation?.latitude ?: 0.3345) }
-    var centerLon by remember { mutableStateOf(currentLocation?.longitude ?: 32.5712) }
-    var zoomScale by remember { mutableFloatStateOf(45000f) }
+    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
+    var hasCenteredOnFirstFix by remember { mutableStateOf(false) }
+
     var showCellTowers by remember { mutableStateOf(true) }
     var showGeofences by remember { mutableStateOf(true) }
 
-    LaunchedEffect(currentLocation) {
-        if (currentLocation != null) {
-            centerLat = currentLocation.latitude
-            centerLon = currentLocation.longitude
+    // Manage MapView lifecycle
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> mapViewRef?.onResume()
+                Lifecycle.Event.ON_PAUSE -> mapViewRef?.onPause()
+                Lifecycle.Event.ON_DESTROY -> mapViewRef?.onDetach()
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            mapViewRef?.onDetach()
         }
     }
 
-    val textMeasurer = rememberTextMeasurer()
+    // Auto-center map when first genuine location fix arrives
+    LaunchedEffect(currentLocation) {
+        if (currentLocation != null && !hasCenteredOnFirstFix) {
+            mapViewRef?.controller?.animateTo(
+                GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                16.5,
+                1000L
+            )
+            hasCenteredOnFirstFix = true
+        }
+    }
 
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(canvasBg)
             .testTag("map_canvas_container")
     ) {
-        Canvas(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        zoomScale = (zoomScale * zoom).coerceIn(8000f, 350000f)
-                        val dLat = (pan.y / zoomScale).toDouble()
-                        val dLon = (-pan.x / (zoomScale * cos(Math.toRadians(centerLat)))).toDouble()
-                        centerLat += dLat
-                        centerLon += dLon
+        // Real OpenStreetMap View
+        AndroidView(
+            factory = { ctx ->
+                MapView(ctx).apply {
+                    setTileSource(TileSourceFactory.MAPNIK) // Genuine OSM street map tiles
+                    setMultiTouchControls(true)
+                    isTilesScaledToDpi = true
+                    zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
+                    controller.setZoom(15.0)
+
+                    if (currentLocation != null) {
+                        controller.setCenter(GeoPoint(currentLocation.latitude, currentLocation.longitude))
+                    } else {
+                        // Default neutral view (Uganda)
+                        controller.setCenter(GeoPoint(0.3345, 32.5712))
+                    }
+                    mapViewRef = this
+                }
+            },
+            update = { map ->
+                map.overlays.clear()
+
+                // 1. Draw Real GPS Trail
+                if (trailPoints.size >= 2) {
+                    val polyline = Polyline(map).apply {
+                        outlinePaint.color = trailColor.toArgb()
+                        outlinePaint.strokeWidth = 10f
+                        outlinePaint.strokeCap = Paint.Cap.ROUND
+                        outlinePaint.strokeJoin = Paint.Join.ROUND
+                        setPoints(trailPoints.map { GeoPoint(it.latitude, it.longitude) })
+                    }
+                    map.overlays.add(polyline)
+                }
+
+                // 2. Draw Geofence Safe Zones
+                if (showGeofences) {
+                    for (zone in geofences) {
+                        val zoneColor = when (zone.category) {
+                            GeofenceCategory.SAFE_ZONE, GeofenceCategory.HOME -> safeColor
+                            GeofenceCategory.BODA_HOTSPOT -> hazardColor
+                            GeofenceCategory.SCHOOL, GeofenceCategory.WORK -> trailColor
+                            GeofenceCategory.CUSTOM -> warningColor
+                        }
+
+                        val circlePoints = computeCircleGeoPoints(
+                            GeoPoint(zone.latitude, zone.longitude),
+                            zone.radiusMeters.toDouble()
+                        )
+                        val polygon = Polygon(map).apply {
+                            points = circlePoints
+                            fillPaint.color = zoneColor.copy(alpha = if (zone.isInside) 0.32f else 0.14f).toArgb()
+                            outlinePaint.color = zoneColor.toArgb()
+                            outlinePaint.strokeWidth = 3f
+                            title = "🛡️ ${zone.name} (${zone.radiusMeters.toInt()}m radius)"
+                        }
+                        map.overlays.add(polygon)
                     }
                 }
-        ) {
-            val width = size.width
-            val height = size.height
-            val centerX = width / 2f
-            val centerY = height / 2f
 
-            fun project(lat: Double, lon: Double): Offset {
-                val cosLat = cos(Math.toRadians(centerLat)).toFloat().coerceAtLeast(0.1f)
-                val x = centerX + ((lon - centerLon).toFloat() * zoomScale * cosLat)
-                val y = centerY - ((lat - centerLat).toFloat() * zoomScale)
-                return Offset(x, y)
-            }
-
-            // Draw coordinate grid lines
-            drawCoordinateGrid(centerLat, centerLon, zoomScale, gridLineColor, gridTextColor, textMeasurer)
-
-            // Draw Geofences
-            if (showGeofences) {
-                for (zone in geofences) {
-                    val zoneOffset = project(zone.latitude, zone.longitude)
-                    val radiusPixels = (zone.radiusMeters / 111000f) * zoomScale
-
-                    val zoneColor = when (zone.category) {
-                        GeofenceCategory.SAFE_ZONE, GeofenceCategory.HOME -> safeColor
-                        GeofenceCategory.BODA_HOTSPOT -> hazardColor
-                        GeofenceCategory.SCHOOL, GeofenceCategory.WORK -> trailColor
-                        GeofenceCategory.CUSTOM -> warningColor
-                    }
-
-                    // Translucent fill
-                    drawCircle(
-                        color = zoneColor.copy(alpha = if (zone.isInside) 0.30f else 0.12f),
-                        radius = radiusPixels,
-                        center = zoneOffset
-                    )
-
-                    // Dashed perimeter
-                    drawCircle(
-                        color = zoneColor,
-                        radius = radiusPixels,
-                        center = zoneOffset,
-                        style = Stroke(
-                            width = 2.5f,
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f)
-                        )
-                    )
-
-                    // Zone label
-                    drawSafeText(
-                        textMeasurer = textMeasurer,
-                        text = "🛡️ ${zone.name}",
-                        topLeft = Offset(zoneOffset.x - 60f, zoneOffset.y - radiusPixels - 25f),
-                        style = TextStyle(
-                            color = zoneColor,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    )
-                }
-            }
-
-            // Draw Cell Towers
-            if (showCellTowers) {
-                for (tower in cellTowers) {
-                    val towerLat = tower.latitude
-                    val towerLon = tower.longitude
-                    if (towerLat != null && towerLon != null) {
-                        val towerOffset = project(towerLat, towerLon)
-
-                        // Coverage arc
-                        val rangePixels = ((tower.estimatedDistanceKm ?: 1.0) * 1000f / 111000f).toFloat() * zoomScale
-                        drawCircle(
-                            color = trailColor.copy(alpha = 0.08f),
-                            radius = rangePixels,
-                            center = towerOffset
-                        )
-
-                        // Antenna icon marker
-                        drawCircle(
-                            color = if (tower.isRegistered) warningColor else trailColor,
-                            radius = 11f,
-                            center = towerOffset
-                        )
-                        drawCircle(
-                            color = canvasBg,
-                            radius = 4.5f,
-                            center = towerOffset
-                        )
-
-                        val towerText = "${tower.operatorDisplayName} (CID: ${tower.cid ?: "?"})"
-                        drawSafeText(
-                            textMeasurer = textMeasurer,
-                            text = "📡 $towerText",
-                            topLeft = Offset(towerOffset.x + 15f, towerOffset.y - 10f),
-                            style = TextStyle(
-                                color = if (tower.isRegistered) warningColor else trailColor,
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        )
+                // 3. Draw Cell Towers
+                if (showCellTowers) {
+                    for (tower in cellTowers) {
+                        val lat = tower.latitude
+                        val lon = tower.longitude
+                        if (lat != null && lon != null) {
+                            val towerMarker = Marker(map).apply {
+                                position = GeoPoint(lat, lon)
+                                title = "📡 ${tower.operatorDisplayName}\nCID: ${tower.cid ?: "N/A"}"
+                                snippet = if (tower.isDemonstrationData) "[Academic Reference Tower]" else "Signal: ${tower.signalDbm ?: 0} dBm"
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            }
+                            map.overlays.add(towerMarker)
+                        }
                     }
                 }
-            }
 
-            // Draw GPS Trail
-            if (trailPoints.size >= 2) {
-                val path = Path()
-                val first = project(trailPoints.first().latitude, trailPoints.first().longitude)
-                path.moveTo(first.x, first.y)
+                // 4. Draw Current User Location Marker & Accuracy Circle
+                if (currentLocation != null) {
+                    // Accuracy Circle
+                    val accuracyPoints = computeCircleGeoPoints(
+                        GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                        currentLocation.accuracy.toDouble().coerceAtLeast(10.0)
+                    )
+                    val accuracyPolygon = Polygon(map).apply {
+                        points = accuracyPoints
+                        fillPaint.color = userPinColor.copy(alpha = 0.18f).toArgb()
+                        outlinePaint.color = userPinColor.copy(alpha = 0.65f).toArgb()
+                        outlinePaint.strokeWidth = 2f
+                    }
+                    map.overlays.add(accuracyPolygon)
 
-                for (i in 1 until trailPoints.size) {
-                    val p = trailPoints[i]
-                    val pt = project(p.latitude, p.longitude)
-                    path.lineTo(pt.x, pt.y)
+                    // User Marker
+                    val userMarker = Marker(map).apply {
+                        position = GeoPoint(currentLocation.latitude, currentLocation.longitude)
+                        rotation = currentLocation.bearing
+                        title = "Current Position"
+                        snippet = "Speed: ${String.format("%.1f", currentLocation.speedKmh)} km/h | Acc: ±${currentLocation.accuracy.toInt()}m"
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                    }
+                    map.overlays.add(userMarker)
                 }
 
-                // Outer trail glow
-                drawPath(
-                    path = path,
-                    color = trailColor.copy(alpha = 0.28f),
-                    style = Stroke(
-                        width = 10f,
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round
-                    )
-                )
+                map.invalidate()
+            },
+            modifier = Modifier.fillMaxSize()
+        )
 
-                // Main trail line
-                drawPath(
-                    path = path,
-                    color = trailColor,
-                    style = Stroke(
-                        width = 4.5f,
-                        cap = StrokeCap.Round,
-                        join = StrokeJoin.Round
-                    )
-                )
-
-                // Vertices
-                for (p in trailPoints) {
-                    val pt = project(p.latitude, p.longitude)
-                    drawCircle(
-                        color = colorScheme.onSurface,
-                        radius = 3f,
-                        center = pt
-                    )
-                }
-            }
-
-            // Draw Current Location Marker
-            if (currentLocation != null) {
-                val currentOffset = project(currentLocation.latitude, currentLocation.longitude)
-                val accuracyPixels = (currentLocation.accuracy / 111000f) * zoomScale
-
-                // Accuracy circle
-                drawCircle(
-                    color = userPinColor.copy(alpha = 0.18f),
-                    radius = accuracyPixels.coerceAtLeast(18f),
-                    center = currentOffset
-                )
-                drawCircle(
-                    color = userPinColor.copy(alpha = 0.65f),
-                    radius = accuracyPixels.coerceAtLeast(18f),
-                    center = currentOffset,
-                    style = Stroke(width = 2f)
-                )
-
-                // Direction / Bearing beam
-                val bearingRad = Math.toRadians((currentLocation.bearing - 90.0))
-                val arrowLen = 28f
-                val arrowX = currentOffset.x + (arrowLen * cos(bearingRad)).toFloat()
-                val arrowY = currentOffset.y + (arrowLen * sin(bearingRad)).toFloat()
-
-                drawLine(
-                    color = userPinColor,
-                    start = currentOffset,
-                    end = Offset(arrowX, arrowY),
-                    strokeWidth = 5.5f,
-                    cap = StrokeCap.Round
-                )
-
-                // Center outer ring
-                drawCircle(
-                    color = colorScheme.surface,
-                    radius = 11f,
-                    center = currentOffset
-                )
-
-                // Center solid pulse
-                drawCircle(
-                    color = userPinColor,
-                    radius = 8f,
-                    center = currentOffset
-                )
-            }
-        }
-
-        // Overlay Map Controls
+        // Overlay Map Controls (Zoom, Layers, Recenter)
         Column(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(16.dp),
+                .padding(top = 110.dp, end = 16.dp),
             horizontalAlignment = Alignment.End
         ) {
             Surface(
@@ -324,13 +245,13 @@ fun MapViewComposable(
             ) {
                 Column {
                     IconButton(
-                        onClick = { zoomScale = (zoomScale * 1.35f).coerceAtMost(350000f) },
+                        onClick = { mapViewRef?.controller?.zoomIn() },
                         modifier = Modifier.testTag("zoom_in_btn")
                     ) {
                         Icon(Icons.Default.Add, contentDescription = "Zoom In", tint = colorScheme.onSurface)
                     }
                     IconButton(
-                        onClick = { zoomScale = (zoomScale / 1.35f).coerceAtLeast(8000f) },
+                        onClick = { mapViewRef?.controller?.zoomOut() },
                         modifier = Modifier.testTag("zoom_out_btn")
                     ) {
                         Icon(Icons.Default.Remove, contentDescription = "Zoom Out", tint = colorScheme.onSurface)
@@ -338,7 +259,7 @@ fun MapViewComposable(
                 }
             }
 
-            Box(modifier = Modifier.size(8.dp))
+            Spacer(modifier = Modifier.size(8.dp))
 
             Surface(
                 shape = CircleShape,
@@ -358,7 +279,7 @@ fun MapViewComposable(
                 }
             }
 
-            Box(modifier = Modifier.size(8.dp))
+            Spacer(modifier = Modifier.size(8.dp))
 
             Surface(
                 shape = CircleShape,
@@ -378,13 +299,16 @@ fun MapViewComposable(
                 }
             }
 
-            Box(modifier = Modifier.size(8.dp))
+            Spacer(modifier = Modifier.size(8.dp))
 
             FloatingActionButton(
                 onClick = {
                     if (currentLocation != null) {
-                        centerLat = currentLocation.latitude
-                        centerLon = currentLocation.longitude
+                        mapViewRef?.controller?.animateTo(
+                            GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                            17.0,
+                            800L
+                        )
                     }
                 },
                 modifier = Modifier
@@ -397,125 +321,95 @@ fun MapViewComposable(
             }
         }
 
-        // Map Scale & Coordinates Status Badge (Bottom-Left)
+        // Bottom Left Coordinates & Satellite Status Badge
         Surface(
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(16.dp),
+                .padding(start = 16.dp, bottom = 120.dp),
             shape = RoundedCornerShape(8.dp),
-            color = colorScheme.surface.copy(alpha = 0.92f),
+            color = colorScheme.surface.copy(alpha = 0.94f),
             shadowElevation = 3.dp,
             border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
         ) {
-            val scaleMeters = ((100f / zoomScale) * 111000f).toInt()
-            val scaleText = if (scaleMeters >= 1000) "${scaleMeters / 1000} km" else "$scaleMeters m"
             Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-                Text(
-                    text = "GPS: ${String.format("%.5f", centerLat)}°N, ${String.format("%.5f", centerLon)}°E",
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = colorScheme.primary,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "Scale: 100px ≈ $scaleText | Points: ${trailPoints.size}",
-                    fontSize = 10.sp,
-                    color = colorScheme.onSurfaceVariant
-                )
+                if (currentLocation != null) {
+                    Text(
+                        text = "GPS: ${String.format("%.5f", currentLocation.latitude)}°N, ${String.format("%.5f", currentLocation.longitude)}°E",
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Real Acc: ±${currentLocation.accuracy.toInt()}m | Trail Points: ${trailPoints.size}",
+                        fontSize = 10.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 2.dp, color = colorScheme.primary)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Awaiting Real GPS Fix (Walk Outdoors)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.primary
+                        )
+                    }
+                }
+            }
+        }
+
+        // "Awaiting GPS Satellites" Banner if user has not yet acquired location
+        AnimatedVisibility(
+            visible = currentLocation == null,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .padding(32.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = colorScheme.surface.copy(alpha = 0.95f),
+                shadowElevation = 8.dp,
+                border = androidx.compose.foundation.BorderStroke(1.2.dp, colorScheme.primary)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Icon(
+                        Icons.Default.GpsNotFixed,
+                        contentDescription = null,
+                        tint = colorScheme.primary,
+                        modifier = Modifier.size(40.dp)
+                    )
+                    Spacer(modifier = Modifier.size(10.dp))
+                    Text(
+                        text = "Acquiring Real GPS Position",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.size(6.dp))
+                    Text(
+                        text = "The app is listening to real device GNSS satellites and FusedLocation.\nNo artificial positions are being plotted.\nOnce satellite lock is achieved, the OpenStreetMap view will center onto your live location automatically.",
+                        fontSize = 12.sp,
+                        color = colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
             }
         }
     }
 }
 
-private fun DrawScope.drawCoordinateGrid(
-    centerLat: Double,
-    centerLon: Double,
-    zoomScale: Float,
-    gridLineColor: Color,
-    gridTextColor: Color,
-    textMeasurer: androidx.compose.ui.text.TextMeasurer
-) {
-    val width = size.width
-    val height = size.height
-    val centerX = width / 2f
-    val centerY = height / 2f
-    val cosLat = cos(Math.toRadians(centerLat)).toFloat().coerceAtLeast(0.1f)
-
-    val step = when {
-        zoomScale > 150000f -> 0.002
-        zoomScale > 60000f -> 0.005
-        zoomScale > 25000f -> 0.01
-        zoomScale > 12000f -> 0.02
-        else -> 0.05
+private fun computeCircleGeoPoints(center: GeoPoint, radiusMeters: Double): List<GeoPoint> {
+    val points = mutableListOf<GeoPoint>()
+    for (i in 0 until 36) {
+        val angle = Math.toRadians(i * 10.0)
+        val latOffset = (radiusMeters / 111320.0) * cos(angle)
+        val lonOffset = (radiusMeters / (111320.0 * cos(Math.toRadians(center.latitude)))) * sin(angle)
+        points.add(GeoPoint(center.latitude + latOffset, center.longitude + lonOffset))
     }
-
-    val minLat = centerLat - (height / (2f * zoomScale))
-    val maxLat = centerLat + (height / (2f * zoomScale))
-    val minLon = centerLon - (width / (2f * zoomScale * cosLat))
-    val maxLon = centerLon + (width / (2f * zoomScale * cosLat))
-
-    var curLat = (minLat / step).toInt() * step
-    while (curLat <= maxLat) {
-        val y = centerY - ((curLat - centerLat).toFloat() * zoomScale)
-        if (y in 0f..height) {
-            drawLine(
-                color = gridLineColor,
-                start = Offset(0f, y),
-                end = Offset(width, y),
-                strokeWidth = 1f
-            )
-            drawSafeText(
-                textMeasurer = textMeasurer,
-                text = "${String.format("%.3f", curLat)}°",
-                topLeft = Offset(8f, (y - 14f).coerceIn(4f, (height - 20f).coerceAtLeast(4f))),
-                style = TextStyle(color = gridTextColor, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
-            )
-        }
-        curLat += step
-    }
-
-    var curLon = (minLon / step).toInt() * step
-    while (curLon <= maxLon) {
-        val x = centerX + ((curLon - centerLon).toFloat() * zoomScale * cosLat)
-        if (x in 0f..width) {
-            drawLine(
-                color = gridLineColor,
-                start = Offset(x, 0f),
-                end = Offset(x, height),
-                strokeWidth = 1f
-            )
-            drawSafeText(
-                textMeasurer = textMeasurer,
-                text = "${String.format("%.3f", curLon)}°",
-                topLeft = Offset((x + 4f).coerceIn(4f, (width - 50f).coerceAtLeast(4f)), (height - 20f).coerceAtLeast(4f)),
-                style = TextStyle(color = gridTextColor, fontSize = 9.sp, fontFamily = FontFamily.Monospace)
-            )
-        }
-        curLon += step
-    }
-}
-
-private fun DrawScope.drawSafeText(
-    textMeasurer: androidx.compose.ui.text.TextMeasurer,
-    text: String,
-    topLeft: Offset,
-    style: TextStyle
-) {
-    val x = topLeft.x
-    val y = topLeft.y
-    val w = size.width
-    val h = size.height
-
-    if (x in 0f..(w - 10f) && y in 0f..(h - 10f)) {
-        try {
-            drawText(
-                textMeasurer = textMeasurer,
-                text = text,
-                topLeft = Offset(x, y),
-                style = style
-            )
-        } catch (e: Exception) {
-            // Guard against edge-case layout constraint violations
-        }
-    }
+    return points
 }
