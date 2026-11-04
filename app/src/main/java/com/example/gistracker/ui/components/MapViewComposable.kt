@@ -1,15 +1,13 @@
 package com.example.gistracker.ui.components
 
 import android.graphics.Paint
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -71,8 +69,9 @@ fun MapViewComposable(
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
 
-    val trailColor = colorScheme.secondary
-    val userPinColor = colorScheme.primary
+    // GeoTrack Safe Telemetry Vector Colors
+    val trailColor = colorScheme.secondary // Deep Mission-Critical Cobalt #0051D5
+    val userPinColor = colorScheme.primary // Technical Cyan #006194
 
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
     var hasCenteredOnFirstFix by remember { mutableStateOf(false) }
@@ -111,7 +110,7 @@ fun MapViewComposable(
             .fillMaxSize()
             .testTag("map_canvas_container")
     ) {
-        // Genuine OpenStreetMap View
+        // Genuine OpenStreetMap Viewport (Persistent Spatial Foundation)
         AndroidView(
             factory = { ctx ->
                 MapView(ctx).apply {
@@ -134,7 +133,7 @@ fun MapViewComposable(
             update = { map ->
                 map.overlays.clear()
 
-                // 1. Draw Real GPS Trail (segmented to avoid multi-km teleportation jumps)
+                // 1. Draw Real GPS Trail (segmented to prevent teleportation jumps)
                 if (trailPoints.size >= 2) {
                     val currentSegment = mutableListOf<GeoPoint>()
                     for (i in trailPoints.indices) {
@@ -149,7 +148,7 @@ fun MapViewComposable(
                                 if (currentSegment.size >= 2) {
                                     val polyline = Polyline(map).apply {
                                         outlinePaint.color = trailColor.toArgb()
-                                        outlinePaint.strokeWidth = 10f
+                                        outlinePaint.strokeWidth = 9f
                                         outlinePaint.strokeCap = Paint.Cap.ROUND
                                         outlinePaint.strokeJoin = Paint.Join.ROUND
                                         setPoints(currentSegment.toList())
@@ -164,7 +163,7 @@ fun MapViewComposable(
                     if (currentSegment.size >= 2) {
                         val polyline = Polyline(map).apply {
                             outlinePaint.color = trailColor.toArgb()
-                            outlinePaint.strokeWidth = 10f
+                            outlinePaint.strokeWidth = 9f
                             outlinePaint.strokeCap = Paint.Cap.ROUND
                             outlinePaint.strokeJoin = Paint.Join.ROUND
                             setPoints(currentSegment)
@@ -175,15 +174,15 @@ fun MapViewComposable(
 
                 // 2. Draw Current User Location Marker & Accuracy Circle
                 if (currentLocation != null) {
-                    // Accuracy Circle
+                    // Accuracy Circle with Calibrated Precision
                     val accuracyPoints = computeCircleGeoPoints(
                         GeoPoint(currentLocation.latitude, currentLocation.longitude),
-                        currentLocation.accuracy.toDouble().coerceAtLeast(8.0)
+                        currentLocation.accuracy.toDouble().coerceAtLeast(6.0)
                     )
                     val accuracyPolygon = Polygon(map).apply {
                         points = accuracyPoints
-                        fillPaint.color = userPinColor.copy(alpha = 0.18f).toArgb()
-                        outlinePaint.color = userPinColor.copy(alpha = 0.65f).toArgb()
+                        fillPaint.color = userPinColor.copy(alpha = 0.14f).toArgb()
+                        outlinePaint.color = userPinColor.copy(alpha = 0.70f).toArgb()
                         outlinePaint.strokeWidth = 2f
                     }
                     map.overlays.add(accuracyPolygon)
@@ -204,36 +203,41 @@ fun MapViewComposable(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Overlay Map Controls (Zoom, Recenter)
+        // Overlay Map Controls (Level 2 Elevation - Instrument Cluster)
         Column(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = 110.dp, end = 16.dp),
+                .padding(top = 114.dp, end = 14.dp),
             horizontalAlignment = Alignment.End
         ) {
             Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = colorScheme.surface.copy(alpha = 0.94f),
-                shadowElevation = 4.dp,
-                border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
+                shape = RoundedCornerShape(8.dp),
+                color = colorScheme.surface,
+                shadowElevation = 3.dp,
+                border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
                 Column {
                     IconButton(
                         onClick = { mapViewRef?.controller?.zoomIn() },
-                        modifier = Modifier.testTag("zoom_in_btn")
+                        modifier = Modifier
+                            .size(42.dp)
+                            .testTag("zoom_in_btn")
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = "Zoom In", tint = colorScheme.onSurface)
+                        Icon(Icons.Default.Add, contentDescription = "Zoom In", tint = colorScheme.onSurface, modifier = Modifier.size(20.dp))
                     }
+                    Box(modifier = Modifier.width(42.dp).height(1.dp).background(colorScheme.outlineVariant.copy(alpha = 0.6f)))
                     IconButton(
                         onClick = { mapViewRef?.controller?.zoomOut() },
-                        modifier = Modifier.testTag("zoom_out_btn")
+                        modifier = Modifier
+                            .size(42.dp)
+                            .testTag("zoom_out_btn")
                     ) {
-                        Icon(Icons.Default.Remove, contentDescription = "Zoom Out", tint = colorScheme.onSurface)
+                        Icon(Icons.Default.Remove, contentDescription = "Zoom Out", tint = colorScheme.onSurface, modifier = Modifier.size(20.dp))
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.size(10.dp))
+            Spacer(modifier = Modifier.size(8.dp))
 
             FloatingActionButton(
                 onClick = {
@@ -246,64 +250,84 @@ fun MapViewComposable(
                     }
                 },
                 modifier = Modifier
-                    .size(48.dp)
+                    .size(44.dp)
                     .testTag("recenter_map_btn"),
+                shape = RoundedCornerShape(8.dp),
                 containerColor = colorScheme.primary,
-                contentColor = colorScheme.onPrimary
+                contentColor = colorScheme.onPrimary,
+                elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp)
             ) {
-                Icon(Icons.Default.MyLocation, contentDescription = "Center on Location")
+                Icon(Icons.Default.MyLocation, contentDescription = "Center on Location", modifier = Modifier.size(20.dp))
             }
         }
 
-        // Prominent "Waiting for GPS satellite signal" State Banner when unacquired
+        // Prominent "Waiting for Satellite Signal" State Banner (Awaiting GNSS Lock)
         if (currentLocation == null) {
             Surface(
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .padding(24.dp),
-                shape = RoundedCornerShape(16.dp),
-                color = colorScheme.surface.copy(alpha = 0.96f),
-                shadowElevation = 8.dp,
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, customColors.warning)
+                    .padding(20.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = colorScheme.surface,
+                shadowElevation = 6.dp,
+                border = androidx.compose.foundation.BorderStroke(1.dp, customColors.statusWarningBorder)
             ) {
                 Column(
                     modifier = Modifier.padding(20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    // Top Accent indicator
+                    Box(
+                        modifier = Modifier
+                            .size(width = 40.dp, height = 3.dp)
+                            .background(customColors.warning, RoundedCornerShape(2.dp))
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+
                     Icon(
                         Icons.Default.SatelliteAlt,
                         contentDescription = null,
                         tint = customColors.warning,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(32.dp)
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = "Waiting for Satellite Signal",
-                        fontSize = 16.sp,
+                        text = "WAITING FOR GNSS SIGNAL",
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.04.sp,
                         color = colorScheme.onSurface
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Searching for GNSS fix via FusedLocationProviderClient.\nMove outdoors with a clear view of the sky.",
+                        text = "Acquiring live satellite constellation fix.\nEnsure an unobstructed view of the sky.",
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
                     Spacer(modifier = Modifier.height(14.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = customColors.warning
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Awaiting satellite lock...",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = colorScheme.onSurfaceVariant
-                        )
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = customColors.statusWarningBg,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, customColors.statusWarningBorder)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(12.dp),
+                                strokeWidth = 1.5.dp,
+                                color = customColors.warning
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Awaiting FusedLocationProviderClient lock...",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = customColors.statusWarningText
+                            )
+                        }
                     }
                 }
             }

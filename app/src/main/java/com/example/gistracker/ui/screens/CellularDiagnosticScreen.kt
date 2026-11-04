@@ -1,7 +1,9 @@
 package com.example.gistracker.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -34,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -60,7 +63,7 @@ fun CellularDiagnosticScreen(
             .fillMaxSize()
             .background(colorScheme.background)
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         // Header
         item {
@@ -71,13 +74,13 @@ fun CellularDiagnosticScreen(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Cellular Signal Hub",
-                        fontSize = 22.sp,
+                        text = "Cellular Telemetry Hub",
+                        fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         color = colorScheme.onBackground
                     )
                     Text(
-                        text = "Real-time TelephonyManager base station diagnostics",
+                        text = "Hardware TelephonyManager RF base station diagnostics",
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant
                     )
@@ -89,44 +92,56 @@ fun CellularDiagnosticScreen(
                         containerColor = colorScheme.primary,
                         contentColor = colorScheme.onPrimary
                     ),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(4.dp),
                     modifier = Modifier.testTag("refresh_cells_btn")
                 ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Refresh", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
         }
 
-        // Serving Cell Mast Card
+        // Serving Cell Mast Card (Level 1 Elevation)
         item {
             if (servingCell != null) {
                 ServingCellCard(cell = servingCell)
             } else {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(8.dp),
                     colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
+                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
                 ) {
-                    Column(modifier = Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        modifier = Modifier.padding(20.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // Top accent
+                        Box(
+                            modifier = Modifier
+                                .size(width = 36.dp, height = 3.dp)
+                                .background(customColors.warning, RoundedCornerShape(2.dp))
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+
                         Icon(
                             Icons.Default.CellTower,
                             contentDescription = null,
                             tint = customColors.warning,
-                            modifier = Modifier.size(36.dp)
+                            modifier = Modifier.size(32.dp)
                         )
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "Waiting for Cellular Base Station",
-                            fontSize = 16.sp,
+                            text = "NO CELLULAR BASE STATION DETECTED",
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.04.sp,
                             color = colorScheme.onSurface
                         )
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "No active physical cellular signal detected from TelephonyManager. Ensure an active SIM is inserted and device is not in Airplane Mode.",
+                            text = "No active physical cellular signal detected from TelephonyManager. Ensure an active SIM is inserted and Airplane Mode is disabled.",
                             fontSize = 12.sp,
                             color = colorScheme.onSurfaceVariant,
                             textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -138,9 +153,9 @@ fun CellularDiagnosticScreen(
                                 containerColor = colorScheme.primary,
                                 contentColor = colorScheme.onPrimary
                             ),
-                            shape = RoundedCornerShape(8.dp)
+                            shape = RoundedCornerShape(4.dp)
                         ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Query Radio Hardware", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
@@ -152,10 +167,11 @@ fun CellularDiagnosticScreen(
         // Neighboring Base Stations
         item {
             Text(
-                text = "Detected Neighbor Masts (${neighborCells.size})",
-                fontSize = 15.sp,
+                text = "DETECTED NEIGHBOR MASTS (${neighborCells.size})",
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
-                color = colorScheme.secondary
+                letterSpacing = 0.04.sp,
+                color = colorScheme.onSurfaceVariant
             )
         }
 
@@ -163,10 +179,12 @@ fun CellularDiagnosticScreen(
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = colorScheme.surface)
+                    shape = RoundedCornerShape(6.dp),
+                    colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f))
                 ) {
                     Text(
-                        if (servingCell != null) "Single sector serving (no neighbor masts in immediate measurement window)"
+                        text = if (servingCell != null) "Single sector serving (no neighbor base stations in immediate measurement frame)"
                         else "No neighbor cells detected",
                         color = colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
@@ -190,112 +208,143 @@ fun CellularDiagnosticScreen(
 @Composable
 private fun ServingCellCard(cell: CellTowerInfo) {
     val colorScheme = MaterialTheme.colorScheme
-    val carrierColor = colorScheme.primary
+    val customColors = LocalCustomColors.current
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("serving_cell_card"),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.5.dp, carrierColor.copy(alpha = 0.5f))
+        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.CellTower,
-                        contentDescription = null,
-                        tint = carrierColor,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Column {
-                        Text(
-                            text = "PRIMARY SERVING CELL",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = carrierColor
+        Column {
+            // Top Accent Line
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .background(colorScheme.primary)
+            )
+
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.CellTower,
+                            contentDescription = null,
+                            tint = colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = customColors.statusActiveBg,
+                                border = androidx.compose.foundation.BorderStroke(1.dp, customColors.statusActiveBorder)
+                            ) {
+                                Text(
+                                    text = "PRIMARY SERVING CELL",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.04.sp,
+                                    color = customColors.statusActiveText,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = cell.operatorDisplayName,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onSurface
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = customColors.surfaceContainerLow,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
+                    ) {
                         Text(
-                            text = cell.operatorDisplayName,
-                            fontSize = 16.sp,
+                            text = cell.type,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            color = colorScheme.onSurface
+                            color = colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                         )
                     }
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = carrierColor.copy(alpha = 0.15f)
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Cellular Telemetry Grid (Recessed Level 2 Container)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(customColors.surfaceContainerLow, RoundedCornerShape(4.dp))
+                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    CellMetricBox(label = "MCC (COUNTRY)", value = "${cell.mcc ?: "N/A"}\n(${cell.countryDisplayName})")
+                    Box(modifier = Modifier.width(1.dp).height(30.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
+                    CellMetricBox(label = "MNC (NETWORK)", value = "${cell.mnc ?: "N/A"}")
+                    Box(modifier = Modifier.width(1.dp).height(30.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
+                    CellMetricBox(label = "CID (CELL ID)", value = "${cell.cid ?: "N/A"}")
+                    Box(modifier = Modifier.width(1.dp).height(30.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
+                    CellMetricBox(label = "LAC/TAC", value = "${cell.lac ?: "N/A"}")
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Signal Strength & Distance Estimation
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = cell.type,
-                        fontSize = 11.sp,
+                        text = "Signal Level: ${cell.signalDbm ?: -85} dBm (${cell.signalLevel}/4 bars)",
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Est. Mast Radius: ~${String.format("%.2f", cell.estimatedDistanceKm ?: 0.45)} km",
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
-                        color = carrierColor,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        color = colorScheme.primary
                     )
                 }
-            }
 
-            Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
-            // Cellular Telemetry Grid
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                CellMetricBox(label = "MCC (Country)", value = "${cell.mcc ?: "N/A"} (${cell.countryDisplayName})")
-                CellMetricBox(label = "MNC (Network)", value = "${cell.mnc ?: "N/A"}")
-                CellMetricBox(label = "CID (Cell ID)", value = "${cell.cid ?: "N/A"}")
-                CellMetricBox(label = "LAC/TAC", value = "${cell.lac ?: "N/A"}")
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Signal Strength and Distance Estimation
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Signal Level: ${cell.signalDbm ?: -85} dBm (${cell.signalLevel}/4 bars)",
-                    fontSize = 12.sp,
-                    color = colorScheme.onSurfaceVariant
+                val signalProgress = (((cell.signalDbm ?: -100) + 120) / 70f).coerceIn(0.1f, 1.0f)
+                LinearProgressIndicator(
+                    progress = { signalProgress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp)),
+                    color = colorScheme.primary,
+                    trackColor = customColors.surfaceContainerHigh
                 )
-                Text(
-                    text = "Est. Mast Distance: ~${String.format("%.2f", cell.estimatedDistanceKm ?: 0.45)} km",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colorScheme.primary
-                )
-            }
 
-            Spacer(modifier = Modifier.height(6.dp))
-
-            val signalProgress = (((cell.signalDbm ?: -100) + 120) / 70f).coerceIn(0.1f, 1.0f)
-            LinearProgressIndicator(
-                progress = { signalProgress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(4.dp)),
-                color = carrierColor,
-                trackColor = colorScheme.surfaceVariant
-            )
-
-            if (cell.timingAdvance != null) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "LTE Timing Advance (TA): ${cell.timingAdvance} (1 step ≈ 78.12m round-trip)",
-                    fontSize = 11.sp,
-                    color = colorScheme.onSurfaceVariant,
-                    fontFamily = FontFamily.Monospace
-                )
+                if (cell.timingAdvance != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "LTE Timing Advance (TA): ${cell.timingAdvance} (1 step ≈ 78.12m)",
+                        fontSize = 11.sp,
+                        color = colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
         }
     }
@@ -306,9 +355,9 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
     val colorScheme = MaterialTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(6.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
+        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
         Row(
             modifier = Modifier
@@ -322,7 +371,7 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
                     Icons.Default.SignalCellularAlt,
                     contentDescription = null,
                     tint = colorScheme.secondary,
-                    modifier = Modifier.size(20.dp)
+                    modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
@@ -346,6 +395,7 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
                     text = "${cell.signalDbm ?: -95} dBm",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace,
                     color = colorScheme.primary
                 )
                 Text(
@@ -361,10 +411,16 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
 @Composable
 private fun CellMetricBox(label: String, value: String) {
     Column {
-        Text(text = label, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
+        Text(
+            text = label,
+            fontSize = 9.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.04.sp
+        )
         Text(
             text = value,
-            fontSize = 13.sp,
+            fontSize = 12.sp,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface
@@ -377,23 +433,24 @@ private fun TriangulationComparisonCard() {
     val colorScheme = MaterialTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
+        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Info, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(20.dp))
+                Icon(Icons.Default.Info, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "GPS vs Cell Positioning Comparison",
-                    fontSize = 14.sp,
+                    text = "GPS VS CELL POSITIONING COMPARISON",
+                    fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.04.sp,
                     color = colorScheme.onSurface
                 )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             ComparisonRow("Outdoor Accuracy", "2 – 5 meters (GNSS satellites)", "50 – 500m (Urban) / 5–20km (Rural)")
             ComparisonRow("Indoor Penetration", "Fails / Blocked by concrete", "High (Cellular RF penetrates walls)")
@@ -414,6 +471,6 @@ private fun ComparisonRow(criterion: String, gpsText: String, cellText: String) 
             Spacer(modifier = Modifier.width(8.dp))
             Text("📡 Cell: $cellText", fontSize = 11.sp, color = colorScheme.primary, modifier = Modifier.weight(1f))
         }
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(3.dp))
     }
 }

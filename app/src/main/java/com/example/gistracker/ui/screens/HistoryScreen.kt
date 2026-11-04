@@ -3,6 +3,7 @@ package com.example.gistracker.ui.screens
 import android.content.Context
 import android.content.Intent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.gistracker.model.TrackingSession
+import com.example.gistracker.ui.theme.LocalCustomColors
 import com.example.gistracker.viewmodel.TrackerViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -61,6 +63,7 @@ fun HistoryScreen(
 ) {
     val context = LocalContext.current
     val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
     val sessions by viewModel.allSessions.collectAsState()
 
     var exportContent by remember { mutableStateOf<Pair<String, String>?>(null) } // Pair(Type, Text)
@@ -74,19 +77,19 @@ fun HistoryScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // Header
             item {
                 Column {
                     Text(
-                        text = "Recorded Trails & Exports",
-                        fontSize = 22.sp,
+                        text = "Recorded Trails & Telemetry",
+                        fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         color = colorScheme.onBackground
                     )
                     Text(
-                        text = "Stored GPX/KML trails for analysis, GIS mapping & audit",
+                        text = "Persisted SQLite tracks with GPX, KML & CSV geospatial exports",
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant
                     )
@@ -97,8 +100,9 @@ fun HistoryScreen(
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
                         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
+                        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
                     ) {
                         Column(
                             modifier = Modifier
@@ -110,18 +114,19 @@ fun HistoryScreen(
                                 Icons.Default.Route,
                                 contentDescription = null,
                                 tint = colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(48.dp)
+                                modifier = Modifier.size(40.dp)
                             )
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Spacer(modifier = Modifier.height(10.dp))
                             Text(
-                                text = "No recorded sessions yet",
-                                fontSize = 16.sp,
+                                text = "NO RECORDED SESSIONS YET",
+                                fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.04.sp,
                                 color = colorScheme.onSurface
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Start recording on the Map screen to log your real outdoor coordinates.",
+                                text = "Start recording on the Live Map screen to capture real outdoor GPS trajectories.",
                                 fontSize = 12.sp,
                                 color = colorScheme.onSurfaceVariant,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -140,7 +145,7 @@ fun HistoryScreen(
                         },
                         onExportKml = {
                             viewModel.exportKml(session) { kml ->
-                                exportContent = Pair("KML (Google Earth Format)", kml)
+                                exportContent = Pair("KML (Google Earth)", kml)
                             }
                         },
                         onExportCsv = {
@@ -155,7 +160,7 @@ fun HistoryScreen(
         }
     }
 
-    // Export Preview & Share Dialog
+    // Export Preview & Share Dialog (Level 3 Elevation)
     if (exportContent != null) {
         val (type, content) = exportContent!!
         AlertDialog(
@@ -165,7 +170,7 @@ fun HistoryScreen(
                     text = "Export: $type",
                     color = colorScheme.onSurface,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 16.sp
+                    fontSize = 15.sp
                 )
             },
             text = {
@@ -180,8 +185,9 @@ fun HistoryScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(180.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        color = colorScheme.surfaceVariant
+                        shape = RoundedCornerShape(4.dp),
+                        color = customColors.surfaceContainerLow,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f))
                     ) {
                         Text(
                             text = content.take(1500) + if (content.length > 1500) "\n... [truncated]" else "",
@@ -203,18 +209,23 @@ fun HistoryScreen(
                         containerColor = colorScheme.primary,
                         contentColor = colorScheme.onPrimary
                     ),
+                    shape = RoundedCornerShape(4.dp),
                     modifier = Modifier.testTag("share_export_btn")
                 ) {
-                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(15.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("Share / Save File", fontWeight = FontWeight.Bold)
+                    Text("Share / Save File", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { exportContent = null }) {
-                    Text("Close", color = colorScheme.onSurfaceVariant)
+                TextButton(
+                    onClick = { exportContent = null },
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text("Close", color = colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 }
             },
+            shape = RoundedCornerShape(8.dp),
             containerColor = colorScheme.surface
         )
     }
@@ -229,85 +240,107 @@ private fun SessionHistoryCard(
     onDelete: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("session_card_${session.id}"),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
+        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = session.name,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.onSurface
-                    )
-                    val dateStr = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(session.startTime))
-                    Text(
-                        text = "$dateStr | ${session.trackingMode.name}",
-                        fontSize = 11.sp,
-                        color = colorScheme.onSurfaceVariant
-                    )
-                }
+        Column {
+            // Top Accent Line in Cobalt Secondary
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.dp)
+                    .background(colorScheme.secondary)
+            )
 
-                IconButton(onClick = onDelete) {
-                    Icon(Icons.Default.Delete, contentDescription = "Delete Session", tint = colorScheme.error)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Metrics Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                MetricItem("DISTANCE", session.formattedDistance, colorScheme.primary)
-                MetricItem("DURATION", session.formattedDuration, colorScheme.secondary)
-                MetricItem("AVG SPEED", "${String.format("%.1f", session.avgSpeedKmh)} km/h", colorScheme.onSurface)
-                MetricItem("POINTS", "${session.pointCount}", colorScheme.tertiary)
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
-            // Export Buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedButton(
-                    onClick = onExportGpx,
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.primary),
-                    modifier = Modifier.weight(1f).testTag("export_gpx_btn")
+            Column(modifier = Modifier.padding(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("GPX", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Column {
+                        Text(
+                            text = session.name,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface
+                        )
+                        val dateStr = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(session.startTime))
+                        Text(
+                            text = "$dateStr | ${session.trackingMode.name}",
+                            fontSize = 11.sp,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    IconButton(onClick = onDelete) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete Session", tint = colorScheme.error, modifier = Modifier.size(18.dp))
+                    }
                 }
 
-                OutlinedButton(
-                    onClick = onExportKml,
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.secondary),
-                    modifier = Modifier.weight(1f).testTag("export_kml_btn")
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Tabular Metrics Row (Recessed Well)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(customColors.surfaceContainerLow, RoundedCornerShape(4.dp))
+                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 10.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("KML", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    MetricItem("DISTANCE", session.formattedDistance, colorScheme.primary)
+                    Box(modifier = Modifier.width(1.dp).height(28.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
+                    MetricItem("DURATION", session.formattedDuration, colorScheme.secondary)
+                    Box(modifier = Modifier.width(1.dp).height(28.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
+                    MetricItem("AVG SPEED", "${String.format("%.1f", session.avgSpeedKmh)} km/h", colorScheme.onSurface)
+                    Box(modifier = Modifier.width(1.dp).height(28.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
+                    MetricItem("POINTS", "${session.pointCount}", colorScheme.tertiary)
                 }
 
-                OutlinedButton(
-                    onClick = onExportCsv,
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.onSurfaceVariant),
-                    modifier = Modifier.weight(1f).testTag("export_csv_btn")
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Action Export Buttons (Hairline Bordered Tactical Buttons)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("CSV", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    OutlinedButton(
+                        onClick = onExportGpx,
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.primary),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant),
+                        modifier = Modifier.weight(1f).height(36.dp).testTag("export_gpx_btn")
+                    ) {
+                        Text("GPX", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedButton(
+                        onClick = onExportKml,
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.secondary),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant),
+                        modifier = Modifier.weight(1f).height(36.dp).testTag("export_kml_btn")
+                    ) {
+                        Text("KML", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+
+                    OutlinedButton(
+                        onClick = onExportCsv,
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.onSurfaceVariant),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant),
+                        modifier = Modifier.weight(1f).height(36.dp).testTag("export_csv_btn")
+                    ) {
+                        Text("CSV", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
@@ -317,10 +350,16 @@ private fun SessionHistoryCard(
 @Composable
 private fun MetricItem(label: String, value: String, color: Color) {
     Column {
-        Text(text = label, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
+        Text(
+            text = label,
+            fontSize = 9.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.04.sp
+        )
         Text(
             text = value,
-            fontSize = 13.sp,
+            fontSize = 12.sp,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
             color = color

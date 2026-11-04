@@ -10,11 +10,16 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.CompareArrows
@@ -130,66 +135,69 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
         bottomBar = {
             NavigationBar(
                 containerColor = colorScheme.surface,
-                tonalElevation = 8.dp,
-                modifier = Modifier.testTag("bottom_nav_bar")
+                tonalElevation = 0.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)))
+                    .testTag("bottom_nav_bar")
             ) {
                 NavigationBarItem(
                     selected = currentScreen == Screen.MAP,
                     onClick = { currentScreen = Screen.MAP },
-                    icon = { Icon(Icons.Default.Map, contentDescription = "Live Map") },
-                    label = { Text("Map", fontSize = 11.sp) },
+                    icon = { Icon(Icons.Default.Map, contentDescription = "Live Map", modifier = Modifier.size(20.dp)) },
+                    label = { Text("Map", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.02.sp) },
                     modifier = Modifier.testTag(Screen.MAP.testTag),
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = colorScheme.onPrimary,
                         selectedTextColor = colorScheme.primary,
                         indicatorColor = colorScheme.primary,
-                        unselectedIconColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        unselectedTextColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        unselectedIconColor = colorScheme.onSurfaceVariant,
+                        unselectedTextColor = colorScheme.onSurfaceVariant
                     )
                 )
 
                 NavigationBarItem(
                     selected = currentScreen == Screen.CELLULAR,
                     onClick = { currentScreen = Screen.CELLULAR },
-                    icon = { Icon(Icons.Default.CellTower, contentDescription = "Cell Towers") },
-                    label = { Text("Cellular", fontSize = 11.sp) },
+                    icon = { Icon(Icons.Default.CellTower, contentDescription = "Cell Towers", modifier = Modifier.size(20.dp)) },
+                    label = { Text("Cellular", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.02.sp) },
                     modifier = Modifier.testTag(Screen.CELLULAR.testTag),
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = colorScheme.onPrimary,
                         selectedTextColor = colorScheme.primary,
                         indicatorColor = colorScheme.primary,
-                        unselectedIconColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        unselectedTextColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        unselectedIconColor = colorScheme.onSurfaceVariant,
+                        unselectedTextColor = colorScheme.onSurfaceVariant
                     )
                 )
 
                 NavigationBarItem(
                     selected = currentScreen == Screen.COMPARE,
                     onClick = { currentScreen = Screen.COMPARE },
-                    icon = { Icon(Icons.Default.CompareArrows, contentDescription = "GPS vs Cell Comparison") },
-                    label = { Text("Compare", fontSize = 11.sp) },
+                    icon = { Icon(Icons.Default.CompareArrows, contentDescription = "GPS vs Cell Comparison", modifier = Modifier.size(20.dp)) },
+                    label = { Text("Compare", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.02.sp) },
                     modifier = Modifier.testTag(Screen.COMPARE.testTag),
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = colorScheme.onPrimary,
                         selectedTextColor = colorScheme.primary,
                         indicatorColor = colorScheme.primary,
-                        unselectedIconColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        unselectedTextColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        unselectedIconColor = colorScheme.onSurfaceVariant,
+                        unselectedTextColor = colorScheme.onSurfaceVariant
                     )
                 )
 
                 NavigationBarItem(
                     selected = currentScreen == Screen.HISTORY,
                     onClick = { currentScreen = Screen.HISTORY },
-                    icon = { Icon(Icons.Default.History, contentDescription = "Saved Trails") },
-                    label = { Text("Trails", fontSize = 11.sp) },
+                    icon = { Icon(Icons.Default.History, contentDescription = "Saved Trails", modifier = Modifier.size(20.dp)) },
+                    label = { Text("Trails", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.02.sp) },
                     modifier = Modifier.testTag(Screen.HISTORY.testTag),
                     colors = NavigationBarItemDefaults.colors(
                         selectedIconColor = colorScheme.onPrimary,
                         selectedTextColor = colorScheme.primary,
                         indicatorColor = colorScheme.primary,
-                        unselectedIconColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        unselectedTextColor = colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        unselectedIconColor = colorScheme.onSurfaceVariant,
+                        unselectedTextColor = colorScheme.onSurfaceVariant
                     )
                 )
             }

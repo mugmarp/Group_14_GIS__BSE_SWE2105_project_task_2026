@@ -41,7 +41,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.gistracker.ui.theme.LocalCustomColors
-import com.example.gistracker.ui.theme.MtnYellow
 
 @Composable
 fun ResearchAnalysisScreen(
@@ -56,123 +55,160 @@ fun ResearchAnalysisScreen(
             .fillMaxSize()
             .background(colorScheme.background)
             .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         // Header
         item {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.School, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(24.dp))
+                    Icon(
+                        Icons.Default.School,
+                        contentDescription = null,
+                        tint = colorScheme.primary,
+                        modifier = Modifier.size(22.dp)
+                    )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         text = "SWE2105 Research Analysis",
-                        fontSize = 22.sp,
+                        fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         color = colorScheme.onBackground
                     )
                 }
                 Text(
-                    text = "BSE SWE2105 Project Task Evaluation (Group 14, 2026)",
+                    text = "BSE SWE2105 Course Option 2 Evaluation (GPS vs Cellular Triangulation)",
                     fontSize = 12.sp,
                     color = colorScheme.onSurfaceVariant
                 )
             }
         }
 
-        // Interactive Technology Simulator Chip Selector
+        // Interactive Technology Comparator Card (Level 1 Elevation)
         item {
             Card(
-                modifier = Modifier.fillMaxWidth().testTag("tech_comparator_card"),
-                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("tech_comparator_card"),
+                shape = RoundedCornerShape(8.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-                border = androidx.compose.foundation.BorderStroke(1.2.dp, colorScheme.primary.copy(alpha = 0.5f))
+                border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Science, contentDescription = null, tint = customColors.warning, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Interactive Tracking Method Comparator",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.onSurface
-                        )
-                    }
+                Column {
+                    // Top Accent Line in Technical Cyan
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(2.dp)
+                            .background(colorScheme.primary)
+                    )
 
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        TechOption.values().take(3).forEach { tech ->
-                            val selected = selectedTech == tech
-                            FilterChip(
-                                selected = selected,
-                                onClick = { selectedTech = tech },
-                                label = { Text(tech.shortLabel, fontSize = 11.sp) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = colorScheme.primary,
-                                    selectedLabelColor = colorScheme.onPrimary,
-                                    containerColor = colorScheme.surfaceVariant,
-                                    labelColor = colorScheme.onSurfaceVariant
-                                )
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Science,
+                                contentDescription = null,
+                                tint = customColors.warning,
+                                modifier = Modifier.size(18.dp)
                             )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        TechOption.values().drop(3).forEach { tech ->
-                            val selected = selectedTech == tech
-                            FilterChip(
-                                selected = selected,
-                                onClick = { selectedTech = tech },
-                                label = { Text(tech.shortLabel, fontSize = 11.sp) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = colorScheme.primary,
-                                    selectedLabelColor = colorScheme.onPrimary,
-                                    containerColor = colorScheme.surfaceVariant,
-                                    labelColor = colorScheme.onSurfaceVariant
-                                )
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Selected Tech Telemetry Evaluation
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.4f)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = selectedTech.title,
-                                fontSize = 15.sp,
+                                text = "INTERACTIVE TRACKING METHOD COMPARATOR",
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = colorScheme.primary
+                                letterSpacing = 0.04.sp,
+                                color = colorScheme.onSurface
                             )
-                            Spacer(modifier = Modifier.height(6.dp))
-                            Text(
-                                text = selectedTech.summary,
-                                fontSize = 12.sp,
-                                color = colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.height(10.dp))
+                        }
 
-                            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    TechMetric("ACCURACY", selectedTech.accuracy, if (selectedTech.realTimeCapable) colorScheme.tertiary else colorScheme.error, modifier = Modifier.weight(1f))
-                                    TechMetric("BATTERY DRAIN", selectedTech.batteryDrain, customColors.warning, modifier = Modifier.weight(1f))
-                                }
-                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                    TechMetric("INDOOR FIX", selectedTech.indoorRating, colorScheme.secondary, modifier = Modifier.weight(1f))
-                                    TechMetric("REAL-TIME REFRESH", if (selectedTech.realTimeCapable) "Continuous (1 Hz)" else "Static Snapshot", if (selectedTech.realTimeCapable) colorScheme.tertiary else colorScheme.error, modifier = Modifier.weight(1f))
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            TechOption.values().take(3).forEach { tech ->
+                                val selected = selectedTech == tech
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = { selectedTech = tech },
+                                    label = { Text(tech.shortLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                                    shape = RoundedCornerShape(4.dp),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = colorScheme.primary,
+                                        selectedLabelColor = colorScheme.onPrimary,
+                                        containerColor = customColors.surfaceContainerLow,
+                                        labelColor = colorScheme.onSurfaceVariant
+                                    ),
+                                    border = FilterChipDefaults.filterChipBorder(
+                                        enabled = true,
+                                        selected = selected,
+                                        borderColor = colorScheme.outlineVariant,
+                                        selectedBorderColor = colorScheme.primary
+                                    )
+                                )
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            TechOption.values().drop(3).forEach { tech ->
+                                val selected = selectedTech == tech
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = { selectedTech = tech },
+                                    label = { Text(tech.shortLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                                    shape = RoundedCornerShape(4.dp),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = colorScheme.primary,
+                                        selectedLabelColor = colorScheme.onPrimary,
+                                        containerColor = customColors.surfaceContainerLow,
+                                        labelColor = colorScheme.onSurfaceVariant
+                                    ),
+                                    border = FilterChipDefaults.filterChipBorder(
+                                        enabled = true,
+                                        selected = selected,
+                                        borderColor = colorScheme.outlineVariant,
+                                        selectedBorderColor = colorScheme.primary
+                                    )
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // Selected Tech Telemetry Evaluation (Recessed Well)
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = customColors.surfaceContainerLow,
+                            border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    text = selectedTech.title,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = selectedTech.summary,
+                                    fontSize = 12.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        TechMetric("ACCURACY", selectedTech.accuracy, if (selectedTech.realTimeCapable) colorScheme.tertiary else colorScheme.error, modifier = Modifier.weight(1f))
+                                        TechMetric("BATTERY DRAIN", selectedTech.batteryDrain, customColors.warning, modifier = Modifier.weight(1f))
+                                    }
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        TechMetric("INDOOR FIX", selectedTech.indoorRating, colorScheme.secondary, modifier = Modifier.weight(1f))
+                                        TechMetric("REFRESH CADENCE", if (selectedTech.realTimeCapable) "Continuous (1 Hz)" else "Static Snapshot", if (selectedTech.realTimeCapable) colorScheme.tertiary else colorScheme.error, modifier = Modifier.weight(1f))
+                                    }
                                 }
                             }
                         }
@@ -181,110 +217,122 @@ fun ResearchAnalysisScreen(
             }
         }
 
-        // Option 1 Deep Dive: IP Address Geolocation
+        // Option 1 Analysis Card: IP Geolocation
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(8.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-                border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
+                border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Option 1: Laptop Tracking via IP Address",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.error
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Why IP Geolocation Is Unsuitable For Real-Time Tracking:",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "1. Technical Mechanism: IP geolocation maps public IPv4/IPv6 addresses to geographic locations using RIR registry databases (WHOIS), BGP routing table announcements, latency trilateration, and crowdsourced WiFi BSSID caches (MaxMind, IP2Location).\n\n" +
-                               "2. Severe Accuracy Limitations: On dynamic residential ISPs, accuracy is city-level (50–150 km error). On cellular mobile networks (MTN/Airtel CGNAT), IP addresses map to carrier data centers in Kampala regardless of where the device is in Uganda (up to 400+ km error in Gulu/Arua).\n\n" +
-                               "3. Fundamental Defeat: A simple VPN, Tor proxy, or carrier APN switch instantly relocates the IP to foreign jurisdictions.\n\n" +
-                               "4. Conclusion: IP lookup is a static snapshot, not a continuous real-time tracker.",
-                        fontSize = 12.sp,
-                        color = colorScheme.onSurfaceVariant,
-                        lineHeight = 18.sp
-                    )
-                }
-            }
-        }
-
-        // Option 2 Deep Dive: Mobile Phone Tracking (GPS vs Cell Triangulation)
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-                border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Option 2: Mobile Phone Tracking (GPS vs Cell Triangulation)",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.tertiary
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Engineering Pros and Cons Comparison:",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "• GPS/GNSS Satellites:\n" +
-                               "  - Pros: High precision (2–5 m outdoors), global coverage without telecom dependency, exact bearing & speed telemetry.\n" +
-                               "  - Cons: High power drain (20–30 mA), 30s cold-start lock, signal blockage inside concrete buildings and urban canyons.\n\n" +
-                               "• Cell Tower Triangulation:\n" +
-                               "  - Pros: Penetrates concrete structures; consumes near-zero battery since radio is already connected; works in heavy cloud cover.\n" +
-                               "  - Cons: Coarse precision (200m–1km in urban Kampala, 5–20km in rural areas); depends on cellular base station density.",
-                        fontSize = 12.sp,
-                        color = colorScheme.onSurfaceVariant,
-                        lineHeight = 18.sp
-                    )
-                }
-            }
-        }
-
-        // Uganda Legal Framework & Constraints
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-                border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.5f))
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Policy, contentDescription = null, tint = customColors.warning, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
+                Column {
+                    Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(colorScheme.error))
+                    Column(modifier = Modifier.padding(14.dp)) {
                         Text(
-                            text = "Legal Constraints in Uganda (SWE2105 Ethics)",
-                            fontSize = 14.sp,
+                            text = "OPTION 1: LAPTOP TRACKING VIA IP ADDRESS",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.04.sp,
+                            color = colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Why IP Geolocation Fails As A Real-Time Movement Tracker:",
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurface
                         )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "1. Technical Mechanism: IP geolocation maps public IPv4/IPv6 addresses against static RIR databases (WHOIS), BGP routing announcements, and crowdsourced WiFi BSSID tables (MaxMind, IP2Location).\n\n" +
+                                   "2. Severe Accuracy Limitations: On dynamic mobile networks (MTN/Airtel CGNAT), IP addresses resolve to carrier data gateways in Kampala, regardless of physical device location across Uganda (error up to 400+ km in Gulu or Mbarara).\n\n" +
+                                   "3. Vulnerability to Spoofing: Simple VPN tunnels, proxy chains, or APN modifications instantly displace the reported IP to foreign jurisdictions.\n\n" +
+                                   "4. Academic Conclusion: IP lookup provides an intermittent network snapshot, not a continuous real-time movement trajectory.",
+                            fontSize = 12.sp,
+                            color = colorScheme.onSurfaceVariant,
+                            lineHeight = 18.sp
+                        )
                     }
+                }
+            }
+        }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+        // Option 2 Analysis Card: Mobile Phone Tracking (GPS vs Cell Triangulation)
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
+            ) {
+                Column {
+                    Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(colorScheme.tertiary))
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = "OPTION 2: MOBILE TRACKING (GPS VS CELL TRIANGULATION)",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.04.sp,
+                            color = colorScheme.tertiary
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Engineering Trade-offs & Scientific Comparison:",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "• GPS/GNSS Satellites:\n" +
+                                   "  - Pros: High spatial accuracy (2–5 m outdoors), global coverage independent of telecom towers, atomic-clock synchronized bearing and speed vectors.\n" +
+                                   "  - Cons: Substantial battery drain (20–30 mA active radio), line-of-sight satellite dependency (fails inside concrete basements and dense urban canyons).\n\n" +
+                                   "• Cell Tower Triangulation:\n" +
+                                   "  - Pros: Radio signals penetrate concrete walls; negligible additional energy draw (< 2 mA) by piggybacking on active cellular connection.\n" +
+                                   "  - Cons: Coarse precision (200m–1km in urban Kampala; 5–20km in rural areas); strictly dependent on base station tower density.",
+                            fontSize = 12.sp,
+                            color = colorScheme.onSurfaceVariant,
+                            lineHeight = 18.sp
+                        )
+                    }
+                }
+            }
+        }
 
-                    Text(
-                        text = "• Regulation of Interception of Communications Act 2010 (Cap 101): True multi-tower triangulation (TDOA/AoA) requires direct carrier core access. MTN and Airtel Uganda do not provide public triangulation APIs. Under Section 5, only authorized state security agencies with a judicial warrant issued by a designated judge can compel carrier-level triangulation.\n\n" +
-                               "• Data Protection and Privacy Act 2019 (Cap 97): GPS coordinates and Cell IDs constitute Personal Data under Section 2. Collection requires informed opt-in consent (Section 7), strict purpose limitation, and secure local storage with encrypted export.\n\n" +
-                               "• Group 14 Architectural Choice: Implemented Google Play Services Fused Location + On-device TelephonyManager Cell ID lookup with OpenCellID open database, respecting all Uganda laws without requiring carrier interception privileges.",
-                        fontSize = 12.sp,
-                        color = colorScheme.onSurfaceVariant,
-                        lineHeight = 18.sp
-                    )
+        // Legal & Regulatory Framework in Uganda
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
+            ) {
+                Column {
+                    Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(colorScheme.secondary))
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Policy, contentDescription = null, tint = colorScheme.secondary, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "LEGAL CONSTRAINTS IN UGANDA (SWE2105 ETHICS)",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.04.sp,
+                                color = colorScheme.onSurface
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = "• Regulation of Interception of Communications Act 2010 (Cap 101): True carrier-level triangulation (TDOA/AoA) requires direct telecom core access. MTN and Airtel Uganda do not expose triangulation endpoints publicly. Under Section 5, only designated security agencies with a judicial warrant issued by a High Court judge can compel carrier-level tracking.\n\n" +
+                                   "• Data Protection and Privacy Act 2019 (Cap 97): GPS coordinates and Cell IDs constitute Personal Data under Section 2. Collection requires informed opt-in consent (Section 7), strict purpose limitation, and secure on-device persistence.\n\n" +
+                                   "• Architectural Implementation: Our project implements Google Play Services Fused Location + On-device TelephonyManager Cell ID telemetry with OpenStreetMap, complying with Uganda laws without unauthorized carrier interception.",
+                            fontSize = 12.sp,
+                            color = colorScheme.onSurfaceVariant,
+                            lineHeight = 18.sp
+                        )
+                    }
                 }
             }
         }
@@ -294,7 +342,13 @@ fun ResearchAnalysisScreen(
 @Composable
 private fun TechMetric(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
     Column(modifier = modifier) {
-        Text(text = label, fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
+        Text(
+            text = label,
+            fontSize = 9.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.04.sp
+        )
         Text(
             text = value,
             fontSize = 12.sp,
