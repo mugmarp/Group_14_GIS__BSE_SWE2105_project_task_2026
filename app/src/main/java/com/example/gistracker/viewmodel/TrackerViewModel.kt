@@ -39,6 +39,9 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val cellTowers: StateFlow<List<CellTowerInfo>> = repository.cellTowers
     val trackingMode: StateFlow<TrackingMode> = repository.trackingMode
 
+    private val _settings = MutableStateFlow(com.example.gistracker.model.TrackerSettings())
+    val settings: StateFlow<com.example.gistracker.model.TrackerSettings> = _settings.asStateFlow()
+
     private val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(application)
     private var standbyCallback: com.google.android.gms.location.LocationCallback? = null
 
@@ -215,5 +218,34 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun refreshCellTowers() {
         val towers = cellManager.readCurrentCellTowers()
         repository.updateCellTowers(towers)
+    }
+
+    fun updateSpeedUnit(unit: com.example.gistracker.model.SpeedUnit) {
+        _settings.value = _settings.value.copy(speedUnit = unit)
+    }
+
+    fun updateCoordinateFormat(format: com.example.gistracker.model.CoordinateFormat) {
+        _settings.value = _settings.value.copy(coordinateFormat = format)
+    }
+
+    fun updateMapTileType(tileType: com.example.gistracker.model.MapTileType) {
+        _settings.value = _settings.value.copy(mapTileType = tileType)
+    }
+
+    fun toggleAccuracyRing(show: Boolean) {
+        _settings.value = _settings.value.copy(showAccuracyRing = show)
+    }
+
+    fun toggleFollowUser(follow: Boolean) {
+        _settings.value = _settings.value.copy(followUserLocation = follow)
+    }
+
+    fun updateJitterThreshold(thresholdMeters: Float) {
+        _settings.value = _settings.value.copy(stationaryJitterThresholdMeters = thresholdMeters)
+        repository.jitterThresholdMeters = thresholdMeters
+    }
+
+    fun toggleKeepScreenOn(keepOn: Boolean) {
+        _settings.value = _settings.value.copy(keepScreenOn = keepOn)
     }
 }

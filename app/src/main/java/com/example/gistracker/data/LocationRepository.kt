@@ -52,6 +52,9 @@ class LocationRepository(private val context: Context) {
     private val _trackingMode = MutableStateFlow(TrackingMode.HIGH_ACCURACY)
     val trackingMode: StateFlow<TrackingMode> = _trackingMode.asStateFlow()
 
+    @Volatile
+    var jitterThresholdMeters: Float = 1.5f
+
     init {
         loadInitialData()
     }
@@ -196,8 +199,8 @@ class LocationRepository(private val context: Context) {
                 // Discard sudden GPS teleportation/multipath jump (> 5km or implied speed > 200 km/h)
                 if (dist > 5000.0 || impliedSpeedMps > 55.0) {
                     0.0
-                } else if (dist < 1.5) {
-                    0.0 // Discard stationary jitter (< 1.5m)
+                } else if (jitterThresholdMeters > 0f && dist < jitterThresholdMeters) {
+                    0.0 // Discard stationary jitter according to configurable sensitivity
                 } else {
                     dist
                 }

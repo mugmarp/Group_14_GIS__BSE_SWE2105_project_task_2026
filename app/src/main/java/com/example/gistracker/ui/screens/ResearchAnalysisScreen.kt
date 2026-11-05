@@ -42,10 +42,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.gistracker.ui.theme.LocalCustomColors
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.IconButton
+
 @Composable
 fun ResearchAnalysisScreen(
+    onNavigateBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    if (onNavigateBack != null) {
+        BackHandler { onNavigateBack() }
+    }
+
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
     var selectedTech by remember { mutableStateOf(TechOption.GPS_FUSED) }
@@ -59,27 +68,42 @@ fun ResearchAnalysisScreen(
     ) {
         // Header
         item {
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.School,
-                        contentDescription = null,
-                        tint = colorScheme.primary,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (onNavigateBack != null) {
+                    IconButton(onClick = onNavigateBack, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back to Live Map",
+                            tint = colorScheme.onSurface
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.School,
+                            contentDescription = null,
+                            tint = colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "SWE2105 Research Analysis",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onBackground
+                        )
+                    }
                     Text(
-                        text = "SWE2105 Research Analysis",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.onBackground
+                        text = "BSE SWE2105 Option 2: GPS vs Cellular Triangulation Evaluation",
+                        fontSize = 11.sp,
+                        color = colorScheme.onSurfaceVariant
                     )
                 }
-                Text(
-                    text = "BSE SWE2105 Course Option 2 Evaluation (GPS vs Cellular Triangulation)",
-                    fontSize = 12.sp,
-                    color = colorScheme.onSurfaceVariant
-                )
             }
         }
 

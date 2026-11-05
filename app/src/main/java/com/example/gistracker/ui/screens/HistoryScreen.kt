@@ -56,11 +56,19 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+
 @Composable
 fun HistoryScreen(
     viewModel: TrackerViewModel,
+    onNavigateBack: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    if (onNavigateBack != null) {
+        BackHandler { onNavigateBack() }
+    }
+
     val context = LocalContext.current
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
@@ -81,18 +89,33 @@ fun HistoryScreen(
         ) {
             // Header
             item {
-                Column {
-                    Text(
-                        text = "Recorded Trails & Telemetry",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.onBackground
-                    )
-                    Text(
-                        text = "Persisted SQLite tracks with GPX, KML & CSV geospatial exports",
-                        fontSize = 12.sp,
-                        color = colorScheme.onSurfaceVariant
-                    )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (onNavigateBack != null) {
+                        IconButton(onClick = onNavigateBack, modifier = Modifier.size(36.dp)) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back to Live Map",
+                                tint = colorScheme.onSurface
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    Column {
+                        Text(
+                            text = "Recorded Trails & Telemetry",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onBackground
+                        )
+                        Text(
+                            text = "Persisted SQLite tracks with GPX, KML & CSV exports",
+                            fontSize = 11.sp,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
 

@@ -121,49 +121,29 @@ val ColorScheme.warningColor: Color
 
 @Composable
 fun GISTrackerTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = false, // Strictly light theme only for daylight field GIS operations
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) GeoTrackDarkColorScheme else GeoTrackLightColorScheme
-    val customColors = if (darkTheme) {
-        CustomThemeColors(
-            warning = Color(0xFFFFB74D),
-            onWarning = Color(0xFF2A1C00),
-            surfaceContainerLowest = Color(0xFF131B2E),
-            surfaceContainerLow = Color(0xFF1B2338),
-            surfaceContainer = Color(0xFF232B42),
-            surfaceContainerHigh = Color(0xFF2D354E),
-            surfaceContainerHighest = Color(0xFF38405A),
-            statusNominalBg = Color(0xFF003823),
-            statusNominalText = Color(0xFF85F8C4),
-            statusNominalBorder = Color(0xFF006948),
-            statusActiveBg = Color(0xFF003452),
-            statusActiveText = Color(0xFF93CCFF),
-            statusActiveBorder = Color(0xFF006194),
-            statusWarningBg = Color(0xFF332000),
-            statusWarningText = Color(0xFFFFCC80),
-            statusWarningBorder = Color(0xFFD97706)
-        )
-    } else {
-        CustomThemeColors(
-            warning = Warning,
-            onWarning = OnWarning,
-            surfaceContainerLowest = SurfaceContainerLowest,
-            surfaceContainerLow = SurfaceContainerLow,
-            surfaceContainer = SurfaceContainer,
-            surfaceContainerHigh = SurfaceContainerHigh,
-            surfaceContainerHighest = SurfaceContainerHighest,
-            statusNominalBg = StatusNominalBg,
-            statusNominalText = StatusNominalText,
-            statusNominalBorder = StatusNominalBorder,
-            statusActiveBg = StatusActiveBg,
-            statusActiveText = StatusActiveText,
-            statusActiveBorder = StatusActiveBorder,
-            statusWarningBg = StatusWarningBg,
-            statusWarningText = StatusWarningText,
-            statusWarningBorder = StatusWarningBorder
-        )
-    }
+    // Enforce GeoTrack Safe Telemetry Light Color Scheme exclusively
+    val colorScheme = GeoTrackLightColorScheme
+    val customColors = CustomThemeColors(
+        warning = Warning,
+        onWarning = OnWarning,
+        surfaceContainerLowest = SurfaceContainerLowest,
+        surfaceContainerLow = SurfaceContainerLow,
+        surfaceContainer = SurfaceContainer,
+        surfaceContainerHigh = SurfaceContainerHigh,
+        surfaceContainerHighest = SurfaceContainerHighest,
+        statusNominalBg = StatusNominalBg,
+        statusNominalText = StatusNominalText,
+        statusNominalBorder = StatusNominalBorder,
+        statusActiveBg = StatusActiveBg,
+        statusActiveText = StatusActiveText,
+        statusActiveBorder = StatusActiveBorder,
+        statusWarningBg = StatusWarningBg,
+        statusWarningText = StatusWarningText,
+        statusWarningBorder = StatusWarningBorder
+    )
 
     androidx.compose.runtime.CompositionLocalProvider(
         LocalCustomColors provides customColors

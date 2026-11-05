@@ -61,6 +61,7 @@ import kotlin.math.sin
 fun MapViewComposable(
     currentLocation: LocationPoint?,
     trailPoints: List<LocationPoint>,
+    settings: com.example.gistracker.model.TrackerSettings = com.example.gistracker.model.TrackerSettings(),
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -75,6 +76,33 @@ fun MapViewComposable(
 
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
     var hasCenteredOnFirstFix by remember { mutableStateOf(false) }
+
+    // Update Tile Source dynamically when user switches in Settings
+    LaunchedEffect(settings.mapTileType) {
+        mapViewRef?.let { map ->
+            val tileSource = when (settings.mapTileType) {
+                com.example.gistracker.model.MapTileType.STANDARD -> TileSourceFactory.MAPNIK
+                com.example.gistracker.model.MapTileType.TOPO -> TileSourceFactory.OpenTopo
+                com.example.gistracker.model.MapTileType.HUMANITARIAN -> TileSourceFactory.DEFAULT_TILE_SOURCE
+            }
+            map.setTileSource(tileSource)
+            map.invalidate()
+        }
+    }
+
+    // Auto-center map when first genuine location fix arrives, or if followUserLocation is enabled
+    LaunchedEffect(currentLocation, settings.followUserLocation) {
+        if (currentLocation != null) {
+            if (!hasCenteredOnFirstFix || settings.followUserLocation) {
+                mapViewRef?.controller?.animateTo(
+                    GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                    16.5,
+                    800L
+                )
+                hasCenteredOnFirstFix = true
+            }
+        }
+    }
 
     // Manage MapView lifecycle
     DisposableEffect(lifecycleOwner) {
@@ -93,18 +121,6 @@ fun MapViewComposable(
         }
     }
 
-    // Auto-center map when first genuine location fix arrives
-    LaunchedEffect(currentLocation) {
-        if (currentLocation != null && !hasCenteredOnFirstFix) {
-            mapViewRef?.controller?.animateTo(
-                GeoPoint(currentLocation.latitude, currentLocation.longitude),
-                16.5,
-                1000L
-            )
-            hasCenteredOnFirstFix = true
-        }
-    }
-
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -114,7 +130,12 @@ fun MapViewComposable(
         AndroidView(
             factory = { ctx ->
                 MapView(ctx).apply {
-                    setTileSource(TileSourceFactory.MAPNIK)
+                    val initialTile = when (settings.mapTileType) {
+                        com.example.gistracker.model.MapTileType.STANDARD -> TileSourceFactory.MAPNIK
+                        com.example.gistracker.model.MapTileType.TOPO -> TileSourceFactory.OpenTopo
+                        com.example.gistracker.model.MapTileType.HUMANITARIAN -> TileSourceFactory.DEFAULT_TILE_SOURCE
+                    }
+                    setTileSource(initialTile)
                     setMultiTouchControls(true)
                     isTilesScaledToDpi = true
                     zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
@@ -174,18 +195,20 @@ fun MapViewComposable(
 
                 // 2. Draw Current User Location Marker & Accuracy Circle
                 if (currentLocation != null) {
-                    // Accuracy Circle with Calibrated Precision
-                    val accuracyPoints = computeCircleGeoPoints(
-                        GeoPoint(currentLocation.latitude, currentLocation.longitude),
-                        currentLocation.accuracy.toDouble().coerceAtLeast(6.0)
-                    )
-                    val accuracyPolygon = Polygon(map).apply {
-                        points = accuracyPoints
-                        fillPaint.color = userPinColor.copy(alpha = 0.14f).toArgb()
-                        outlinePaint.color = userPinColor.copy(alpha = 0.70f).toArgb()
-                        outlinePaint.strokeWidth = 2f
+                    // Accuracy Circle with Calibrated Precision (if enabled in Settings)
+                    if (settings.showAccuracyRing) {
+                        val accuracyPoints = computeCircleGeoPoints(
+                            GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                            currentLocation.accuracy.toDouble().coerceAtLeast(6.0)
+                        )
+                        val accuracyPolygon = Polygon(map).apply {
+                            points = accuracyPoints
+                            fillPaint.color = userPinColor.copy(alpha = 0.14f).toArgb()
+                            outlinePaint.color = userPinColor.copy(alpha = 0.70f).toArgb()
+                            outlinePaint.strokeWidth = 2f
+                        }
+                        map.overlays.add(accuracyPolygon)
                     }
-                    map.overlays.add(accuracyPolygon)
 
                     // User Marker
                     val userMarker = Marker(map).apply {

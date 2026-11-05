@@ -46,11 +46,22 @@ import com.example.gistracker.model.CellTowerInfo
 import com.example.gistracker.ui.theme.LocalCustomColors
 import com.example.gistracker.viewmodel.TrackerViewModel
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.IconButton
+
 @Composable
 fun CellularDiagnosticScreen(
     viewModel: TrackerViewModel,
+    onNavigateBack: (() -> Unit)? = null,
+    onOpenMenu: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    if (onNavigateBack != null) {
+        BackHandler { onNavigateBack() }
+    }
+
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
 
@@ -72,32 +83,70 @@ fun CellularDiagnosticScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "Cellular Telemetry Hub",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.onBackground
-                    )
-                    Text(
-                        text = "Hardware TelephonyManager RF base station diagnostics",
-                        fontSize = 12.sp,
-                        color = colorScheme.onSurfaceVariant
-                    )
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (onNavigateBack != null) {
+                        IconButton(onClick = onNavigateBack, modifier = Modifier.size(36.dp)) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back to Live Map",
+                                tint = colorScheme.onSurface
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+                    Column {
+                        Text(
+                            text = "Cellular Telemetry Hub",
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onBackground
+                        )
+                        Text(
+                            text = "Hardware TelephonyManager RF base stations",
+                            fontSize = 11.sp,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
 
-                Button(
-                    onClick = { viewModel.refreshCellTowers() },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = colorScheme.primary,
-                        contentColor = colorScheme.onPrimary
-                    ),
-                    shape = RoundedCornerShape(4.dp),
-                    modifier = Modifier.testTag("refresh_cells_btn")
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Refresh", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Button(
+                        onClick = { viewModel.refreshCellTowers() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.primary,
+                            contentColor = colorScheme.onPrimary
+                        ),
+                        shape = RoundedCornerShape(4.dp),
+                        modifier = Modifier.testTag("refresh_cells_btn")
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Refresh", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+
+                    if (onOpenMenu != null) {
+                        IconButton(
+                            onClick = onOpenMenu,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(customColors.surfaceContainerLow, RoundedCornerShape(4.dp))
+                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                                .testTag("cellular_menu_btn")
+                        ) {
+                            Icon(
+                                Icons.Default.Menu,
+                                contentDescription = "Open Menu",
+                                tint = colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

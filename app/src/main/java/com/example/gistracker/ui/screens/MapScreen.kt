@@ -1,5 +1,7 @@
 package com.example.gistracker.ui.screens
 
+import android.app.Activity
+import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -16,7 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
@@ -26,12 +28,14 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,6 +51,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.gistracker.model.CoordinateFormat
 import com.example.gistracker.model.TrackingMode
 import com.example.gistracker.ui.components.MapViewComposable
 import com.example.gistracker.ui.theme.LocalCustomColors
@@ -59,6 +64,7 @@ import java.util.Locale
 @Composable
 fun MapScreen(
     viewModel: TrackerViewModel,
+    onOpenMenu: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -69,23 +75,36 @@ fun MapScreen(
     val activeSession by viewModel.activeSession.collectAsState()
     val trailPoints by viewModel.activeTrailPoints.collectAsState()
     val trackingMode by viewModel.trackingMode.collectAsState()
+    val settings by viewModel.settings.collectAsState()
 
     var showStartDialog by remember { mutableStateOf(false) }
     var sessionNameInput by remember { mutableStateOf("") }
+
+    // Keep screen awake while recording if enabled in settings
+    val activity = context as? Activity
+    DisposableEffect(settings.keepScreenOn, activeSession) {
+        if (settings.keepScreenOn && activeSession != null) {
+            activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
 
     Box(modifier = modifier.fillMaxSize()) {
         // Persistent Full-Bleed Spatial Viewport
         MapViewComposable(
             currentLocation = currentLocation,
-            trailPoints = trailPoints
+            trailPoints = trailPoints,
+            settings = settings
         )
 
-        // Top Telemetry HUD Card (Level 1 Elevation - Avionic HUD)
+        // Top Instrument & Telemetry HUD Cluster
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .padding(horizontal = 14.dp, vertical = 8.dp)
         ) {
             Surface(
                 shape = RoundedCornerShape(8.dp),
@@ -111,63 +130,77 @@ fun MapScreen(
                     )
 
                     Column(modifier = Modifier.padding(12.dp)) {
+                        // Title Bar with Right-Aligned ☰ Hamburger Menu
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Status Pill
-                            val (badgeBg, badgeText, badgeBorder, statusLabel) = when {
-                                activeSession != null -> Quad(
-                                    Color(0xFFFFDAD6),
-                                    Color(0xFF93000A),
-                                    Color(0xFFFFB4AB),
-                                    "RECORDING TRAIL"
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(accentLineColor)
                                 )
-                                currentLocation != null -> Quad(
-                                    customColors.statusNominalBg,
-                                    customColors.statusNominalText,
-                                    customColors.statusNominalBorder,
-                                    "GNSS LOCKED (RTK)"
-                                )
-                                else -> Quad(
-                                    customColors.statusWarningBg,
-                                    customColors.statusWarningText,
-                                    customColors.statusWarningBorder,
-                                    "AWAITING FIX"
-                                )
-                            }
-
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = badgeBg,
-                                border = androidx.compose.foundation.BorderStroke(1.dp, badgeBorder)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .clip(CircleShape)
-                                            .background(badgeText)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
                                     Text(
-                                        text = statusLabel,
-                                        fontSize = 10.sp,
+                                        text = "GeoTrack Safe Telemetry",
+                                        fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
+                                        color = colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = when {
+                                            activeSession != null -> "RECORDING • ${activeSession?.name}"
+                                            currentLocation != null -> "GNSS LOCKED • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
+                                            else -> "STANDBY • AWAITING GNSS SATELLITE FIX"
+                                        },
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.SemiBold,
                                         letterSpacing = 0.04.sp,
-                                        color = badgeText
+                                        color = accentLineColor
                                     )
                                 }
                             }
 
-                            // Coordinate Vector Readout (Tabular Monospace)
+                            // ☰ Hamburger Menu on the RIGHT
+                            IconButton(
+                                onClick = onOpenMenu,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(customColors.surfaceContainerLow, RoundedCornerShape(4.dp))
+                                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                                    .testTag("menu_btn")
+                            ) {
+                                Icon(
+                                    Icons.Default.Menu,
+                                    contentDescription = "Open Application Menu",
+                                    tint = colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Vector Coordinates Bar (Respects CoordinateFormat: DD vs DMS)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "VECTOR COORD:",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.04.sp,
+                                color = colorScheme.onSurfaceVariant
+                            )
                             Text(
                                 text = if (currentLocation != null) {
-                                    "${String.format("%.5f", currentLocation?.latitude)}°, ${String.format("%.5f", currentLocation?.longitude)}°"
+                                    formatCoordinates(currentLocation!!.latitude, currentLocation!!.longitude, settings.coordinateFormat)
                                 } else {
                                     "--.-----°, --.-----°"
                                 },
@@ -178,9 +211,10 @@ fun MapScreen(
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
 
                         // 4 Tabular Telemetry Scalar Metrics
+                        val convertedSpeed = (currentLocation?.speed ?: 0f) * settings.speedUnit.multiplier
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -191,8 +225,8 @@ fun MapScreen(
                         ) {
                             TelemetryMetric(
                                 label = "SPEED",
-                                value = "${String.format("%.1f", currentLocation?.speedKmh ?: 0f)}",
-                                unit = "km/h",
+                                value = String.format(Locale.US, "%.1f", convertedSpeed),
+                                unit = settings.speedUnit.label,
                                 valueColor = colorScheme.primary
                             )
                             Box(modifier = Modifier.width(1.dp).height(28.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
@@ -225,7 +259,7 @@ fun MapScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    text = "⏱️ ELAPSED: ${activeSession?.formattedDuration}",
+                                    text = "⏱️ ACTIVE SESSION: ${activeSession?.formattedDuration}",
                                     fontSize = 11.sp,
                                     color = colorScheme.onSurfaceVariant,
                                     fontFamily = FontFamily.Monospace,
@@ -244,7 +278,7 @@ fun MapScreen(
             }
         }
 
-        // Bottom Docked Controls Sheet (Level 1 Elevation - Tactical Controls)
+        // Bottom Docked Tactical Controls Sheet
         Surface(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -264,7 +298,7 @@ fun MapScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "SENSOR PROFILE",
+                        text = "POSITIONING PROFILE:",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.04.sp,
@@ -486,4 +520,24 @@ private fun TelemetryMetric(
     }
 }
 
-private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
+private fun formatCoordinates(lat: Double, lon: Double, format: CoordinateFormat): String {
+    return if (format == CoordinateFormat.DECIMAL) {
+        String.format(Locale.US, "%.5f°, %.5f°", lat, lon)
+    } else {
+        "${toDms(lat, true)}, ${toDms(lon, false)}"
+    }
+}
+
+private fun toDms(decimal: Double, isLat: Boolean): String {
+    val dir = if (isLat) {
+        if (decimal >= 0) "N" else "S"
+    } else {
+        if (decimal >= 0) "E" else "W"
+    }
+    val abs = kotlin.math.abs(decimal)
+    val deg = abs.toInt()
+    val minDec = (abs - deg) * 60.0
+    val min = minDec.toInt()
+    val sec = (minDec - min) * 60.0
+    return String.format(Locale.US, "%d°%02d'%04.1f\"%s", deg, min, sec, dir)
+}
