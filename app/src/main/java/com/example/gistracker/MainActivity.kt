@@ -275,7 +275,7 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                 sheetState = sheetState,
                 containerColor = colorScheme.surface,
                 tonalElevation = 0.dp,
-                shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+                shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
                 dragHandle = {
                     Surface(
                         modifier = Modifier.padding(top = 10.dp, bottom = 6.dp),
@@ -477,9 +477,9 @@ private fun MenuNavigationCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.8f))
     ) {
