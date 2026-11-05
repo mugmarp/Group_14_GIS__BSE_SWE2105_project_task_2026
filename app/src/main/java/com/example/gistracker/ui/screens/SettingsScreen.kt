@@ -203,10 +203,10 @@ fun SettingsScreen(
                         val selected = settings.mapTileType == tile
                         Row(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .background(if (selected) customColors.statusActiveBg else customColors.surfaceContainerLow, RoundedCornerShape(4.dp))
-                                .border(1.dp, if (selected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                                 .fillMaxWidth()
+                                 .background(if (selected) customColors.statusActiveBg else customColors.surfaceContainerLow, RoundedCornerShape(8.dp))
+                                 .border(1.dp, if (selected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                                 .padding(horizontal = 10.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -227,7 +227,7 @@ fun SettingsScreen(
                                 selected = selected,
                                 onClick = { viewModel.updateMapTileType(tile) },
                                 label = { Text(if (selected) "Active" else "Select", fontSize = 10.sp) },
-                                shape = RoundedCornerShape(4.dp),
+                                shape = RoundedCornerShape(8.dp),
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = colorScheme.primary,
                                     selectedLabelColor = colorScheme.onPrimary
@@ -362,12 +362,12 @@ private fun SettingsCard(
     val colorScheme = MaterialTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
         Column {
-            Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(accentColor))
+            Box(modifier = Modifier.fillMaxWidth().height(3.dp).background(accentColor))
             Column(modifier = Modifier.padding(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     icon()

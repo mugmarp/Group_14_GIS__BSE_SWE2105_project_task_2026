@@ -113,7 +113,7 @@ fun ResearchAnalysisScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("tech_comparator_card"),
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                 border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
@@ -122,7 +122,7 @@ fun ResearchAnalysisScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(2.dp)
+                            .height(3.dp)
                             .background(colorScheme.primary)
                     )
 
@@ -156,7 +156,7 @@ fun ResearchAnalysisScreen(
                                     selected = selected,
                                     onClick = { selectedTech = tech },
                                     label = { Text(tech.shortLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
-                                    shape = RoundedCornerShape(4.dp),
+                                    shape = RoundedCornerShape(8.dp),
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = colorScheme.primary,
                                         selectedLabelColor = colorScheme.onPrimary,
@@ -183,7 +183,7 @@ fun ResearchAnalysisScreen(
                                     selected = selected,
                                     onClick = { selectedTech = tech },
                                     label = { Text(tech.shortLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
-                                    shape = RoundedCornerShape(4.dp),
+                                    shape = RoundedCornerShape(8.dp),
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = colorScheme.primary,
                                         selectedLabelColor = colorScheme.onPrimary,
@@ -245,12 +245,12 @@ fun ResearchAnalysisScreen(
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                 border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
                 Column {
-                    Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(colorScheme.error))
+                    Box(modifier = Modifier.fillMaxWidth().height(3.dp).background(colorScheme.error))
                     Column(modifier = Modifier.padding(14.dp)) {
                         Text(
                             text = "OPTION 1: LAPTOP TRACKING VIA IP ADDRESS",
@@ -285,12 +285,12 @@ fun ResearchAnalysisScreen(
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                 border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
                 Column {
-                    Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(colorScheme.tertiary))
+                    Box(modifier = Modifier.fillMaxWidth().height(3.dp).background(colorScheme.tertiary))
                     Column(modifier = Modifier.padding(14.dp)) {
                         Text(
                             text = "OPTION 2: MOBILE TRACKING (GPS VS CELL TRIANGULATION)",
@@ -327,12 +327,12 @@ fun ResearchAnalysisScreen(
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                 border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
                 Column {
-                    Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(colorScheme.secondary))
+                    Box(modifier = Modifier.fillMaxWidth().height(3.dp).background(colorScheme.secondary))
                     Column(modifier = Modifier.padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Policy, contentDescription = null, tint = colorScheme.secondary, modifier = Modifier.size(18.dp))

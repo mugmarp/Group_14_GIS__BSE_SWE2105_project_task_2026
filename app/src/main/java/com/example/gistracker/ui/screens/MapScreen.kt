@@ -2,8 +2,10 @@ package com.example.gistracker.ui.screens
 
 import android.app.Activity
 import android.view.WindowManager
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,15 +20,22 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Balance
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RadioButtonChecked
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -52,6 +62,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.gistracker.model.CoordinateFormat
+import com.example.gistracker.model.MapTileType
 import com.example.gistracker.model.TrackingMode
 import com.example.gistracker.ui.components.MapViewComposable
 import com.example.gistracker.ui.theme.LocalCustomColors
@@ -78,6 +89,7 @@ fun MapScreen(
     val settings by viewModel.settings.collectAsState()
 
     var showStartDialog by remember { mutableStateOf(false) }
+    var showProfileDialog by remember { mutableStateOf(false) }
     var sessionNameInput by remember { mutableStateOf("") }
 
     // Keep screen awake while recording if enabled in settings
@@ -92,11 +104,19 @@ fun MapScreen(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // Persistent Full-Bleed Spatial Viewport
+        // Persistent Full-Bleed Spatial Viewport with Google Maps-style Dynamic Tile Cycling
         MapViewComposable(
             currentLocation = currentLocation,
             trailPoints = trailPoints,
-            settings = settings
+            settings = settings,
+            onCycleTileLayer = {
+                val nextTile = when (settings.mapTileType) {
+                    MapTileType.STANDARD -> MapTileType.TOPO
+                    MapTileType.TOPO -> MapTileType.HUMANITARIAN
+                    MapTileType.HUMANITARIAN -> MapTileType.STANDARD
+                }
+                viewModel.updateMapTileType(nextTile)
+            }
         )
 
         // Top Instrument & Telemetry HUD Cluster
@@ -107,12 +127,12 @@ fun MapScreen(
                 .padding(horizontal = 14.dp, vertical = 8.dp)
         ) {
             Surface(
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(16.dp),
                 color = colorScheme.surface,
                 shadowElevation = 3.dp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(8.dp))
+                    .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(16.dp))
                     .testTag("telemetry_hud_card")
             ) {
                 Column {
@@ -125,11 +145,11 @@ fun MapScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(2.dp)
+                            .height(3.dp)
                             .background(accentLineColor)
                     )
 
-                    Column(modifier = Modifier.padding(12.dp)) {
+                    Column(modifier = Modifier.padding(14.dp)) {
                         // Title Bar with Right-Aligned ☰ Hamburger Menu
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -153,9 +173,9 @@ fun MapScreen(
                                     )
                                     Text(
                                         text = when {
-                                            activeSession != null -> "RECORDING • ${activeSession?.name}"
-                                            currentLocation != null -> "GNSS LOCKED • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
-                                            else -> "STANDBY • AWAITING GNSS SATELLITE FIX"
+                                             activeSession != null -> "RECORDING • ${activeSession?.name}"
+                                             currentLocation != null -> "GNSS LOCKED • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
+                                             else -> "STANDBY • AWAITING GNSS SATELLITE FIX"
                                         },
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.SemiBold,
@@ -169,9 +189,9 @@ fun MapScreen(
                             IconButton(
                                 onClick = onOpenMenu,
                                 modifier = Modifier
-                                    .size(36.dp)
-                                    .background(customColors.surfaceContainerLow, RoundedCornerShape(4.dp))
-                                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                                    .size(38.dp)
+                                    .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
+                                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
                                     .testTag("menu_btn")
                             ) {
                                 Icon(
@@ -218,8 +238,8 @@ fun MapScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(customColors.surfaceContainerLow, RoundedCornerShape(4.dp))
-                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                                .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
+                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
                                 .padding(horizontal = 10.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
@@ -276,99 +296,107 @@ fun MapScreen(
                     }
                 }
             }
+
+            // Quick Floating Badges Row (Positioning Engine Profile + Active Map Layer)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Floating Positioning Profile Pill
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = colorScheme.surface,
+                    shadowElevation = 3.dp,
+                    border = BorderStroke(1.dp, colorScheme.outlineVariant),
+                    modifier = Modifier
+                        .clickable { showProfileDialog = true }
+                        .testTag("floating_profile_pill")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        val profile = getProfileInfo(trackingMode, colorScheme)
+                        Icon(profile.icon, contentDescription = null, tint = profile.badgeColor, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = profile.label,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = profile.badgeColor.copy(alpha = 0.12f)
+                        ) {
+                            Text(
+                                text = profile.power,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = profile.badgeColor,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                    }
+                }
+
+                // Map Layer Indicator Pill
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = colorScheme.surface,
+                    shadowElevation = 3.dp,
+                    border = BorderStroke(1.dp, colorScheme.outlineVariant),
+                    modifier = Modifier
+                        .clickable {
+                            val nextTile = when (settings.mapTileType) {
+                                MapTileType.STANDARD -> MapTileType.TOPO
+                                MapTileType.TOPO -> MapTileType.HUMANITARIAN
+                                MapTileType.HUMANITARIAN -> MapTileType.STANDARD
+                            }
+                            viewModel.updateMapTileType(nextTile)
+                        }
+                        .testTag("layer_indicator_pill")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                    ) {
+                        Icon(Icons.Default.Layers, contentDescription = null, tint = colorScheme.secondary, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = when (settings.mapTileType) {
+                                MapTileType.STANDARD -> "Vector"
+                                MapTileType.TOPO -> "Topo Rel"
+                                MapTileType.HUMANITARIAN -> "Infra"
+                            },
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
         }
 
-        // Bottom Docked Tactical Controls Sheet
+        // Bottom Docked Tactical Action Sheet (Clean, Streamlined, No Overlaps)
         Surface(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(14.dp)
+                .padding(horizontal = 14.dp, vertical = 10.dp)
                 .testTag("bottom_action_card"),
-            shape = RoundedCornerShape(8.dp),
+            shape = RoundedCornerShape(16.dp),
             color = colorScheme.surface,
             shadowElevation = 4.dp,
-            border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
+            border = BorderStroke(1.dp, colorScheme.outlineVariant)
         ) {
-            Column(modifier = Modifier.padding(14.dp)) {
-                // Tracking Mode Selector
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "POSITIONING PROFILE:",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.04.sp,
-                        color = colorScheme.onSurfaceVariant
-                    )
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FilterChip(
-                            selected = trackingMode == TrackingMode.HIGH_ACCURACY,
-                            onClick = { viewModel.setTrackingMode(TrackingMode.HIGH_ACCURACY) },
-                            label = { Text("GPS (1s)", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
-                            shape = RoundedCornerShape(4.dp),
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = colorScheme.primary,
-                                selectedLabelColor = colorScheme.onPrimary,
-                                containerColor = customColors.surfaceContainerLow,
-                                labelColor = colorScheme.onSurfaceVariant
-                            ),
-                            border = FilterChipDefaults.filterChipBorder(
-                                enabled = true,
-                                selected = trackingMode == TrackingMode.HIGH_ACCURACY,
-                                borderColor = colorScheme.outlineVariant,
-                                selectedBorderColor = colorScheme.primary
-                            ),
-                            modifier = Modifier.testTag("mode_high_acc")
-                        )
-                        FilterChip(
-                            selected = trackingMode == TrackingMode.BALANCED,
-                            onClick = { viewModel.setTrackingMode(TrackingMode.BALANCED) },
-                            label = { Text("Balanced (10s)", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
-                            shape = RoundedCornerShape(4.dp),
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = colorScheme.primary,
-                                selectedLabelColor = colorScheme.onPrimary,
-                                containerColor = customColors.surfaceContainerLow,
-                                labelColor = colorScheme.onSurfaceVariant
-                            ),
-                            border = FilterChipDefaults.filterChipBorder(
-                                enabled = true,
-                                selected = trackingMode == TrackingMode.BALANCED,
-                                borderColor = colorScheme.outlineVariant,
-                                selectedBorderColor = colorScheme.primary
-                            ),
-                            modifier = Modifier.testTag("mode_balanced")
-                        )
-                        FilterChip(
-                            selected = trackingMode == TrackingMode.POWER_SAVER,
-                            onClick = { viewModel.setTrackingMode(TrackingMode.POWER_SAVER) },
-                            label = { Text("Cell Only", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
-                            shape = RoundedCornerShape(4.dp),
-                            colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = colorScheme.primary,
-                                selectedLabelColor = colorScheme.onPrimary,
-                                containerColor = customColors.surfaceContainerLow,
-                                labelColor = colorScheme.onSurfaceVariant
-                            ),
-                            border = FilterChipDefaults.filterChipBorder(
-                                enabled = true,
-                                selected = trackingMode == TrackingMode.POWER_SAVER,
-                                borderColor = colorScheme.outlineVariant,
-                                selectedBorderColor = colorScheme.primary
-                            ),
-                            modifier = Modifier.testTag("mode_power_save")
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Primary Start / Stop Recording Button
+            Column(modifier = Modifier.padding(12.dp)) {
                 if (activeSession == null) {
                     Button(
                         onClick = {
@@ -378,16 +406,16 @@ fun MapScreen(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(46.dp)
+                            .height(48.dp)
                             .testTag("start_track_btn"),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = colorScheme.primary,
                             contentColor = colorScheme.onPrimary
                         ),
-                        shape = RoundedCornerShape(4.dp)
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             "START RECORDING REAL TRAIL",
                             fontSize = 13.sp,
@@ -396,30 +424,137 @@ fun MapScreen(
                         )
                     }
                 } else {
-                    Button(
-                        onClick = { viewModel.stopTracking() },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(46.dp)
-                            .testTag("stop_track_btn"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = colorScheme.error,
-                            contentColor = colorScheme.onError
-                        ),
-                        shape = RoundedCornerShape(4.dp)
-                    ) {
-                        Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            "STOP & SAVE TRAIL (${activeSession?.formattedDuration})",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.04.sp
-                        )
+                    Column {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(colorScheme.error)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "RECORDING: ${activeSession?.name}",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                            }
+                            Text(
+                                text = "${activeSession?.formattedDuration} • ${activeSession?.formattedDistance}",
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.primary
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = { viewModel.stopTracking() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("stop_track_btn"),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colorScheme.error,
+                                contentColor = colorScheme.onError
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                "STOP & SAVE TRAIL",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.04.sp
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+
+    // Positioning Engine & Battery Profile Modal Dialog
+    if (showProfileDialog) {
+        AlertDialog(
+            onDismissRequest = { showProfileDialog = false },
+            title = {
+                Text(
+                    text = "Positioning Engine & Battery Profile",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = colorScheme.onSurface
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = "Select positioning telemetry engine based on mission requirement and battery budget:",
+                        fontSize = 12.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+
+                    ProfileOptionCard(
+                        title = "GPS Real-Time (1 sec)",
+                        subtitle = "High-Accuracy GNSS satellites",
+                        accuracy = "±2 – 5m",
+                        power = "~25 mA",
+                        description = "Continuous GNSS chipset lock. Essential for velocity vector analysis and official trail logging.",
+                        isSelected = trackingMode == TrackingMode.HIGH_ACCURACY,
+                        color = colorScheme.primary,
+                        onClick = {
+                            viewModel.setTrackingMode(TrackingMode.HIGH_ACCURACY)
+                            showProfileDialog = false
+                        }
+                    )
+
+                    ProfileOptionCard(
+                        title = "Balanced Fused (10 sec)",
+                        subtitle = "Hybrid GNSS + Network duty cycling",
+                        accuracy = "±10 – 20m",
+                        power = "~8 mA",
+                        description = "Cycles hardware positioning receiver. Conserves battery during extended expeditions.",
+                        isSelected = trackingMode == TrackingMode.BALANCED,
+                        color = colorScheme.secondary,
+                        onClick = {
+                            viewModel.setTrackingMode(TrackingMode.BALANCED)
+                            showProfileDialog = false
+                        }
+                    )
+
+                    ProfileOptionCard(
+                        title = "Cellular Only (RF Masts)",
+                        subtitle = "Zero GNSS hardware activation",
+                        accuracy = "±200 – 800m",
+                        power = "<2 mA",
+                        description = "TelephonyManager base station sectoring. Zero satellite drain. Works indoors & in tunnels.",
+                        isSelected = trackingMode == TrackingMode.POWER_SAVER,
+                        color = colorScheme.tertiary,
+                        onClick = {
+                            viewModel.setTrackingMode(TrackingMode.POWER_SAVER)
+                            showProfileDialog = false
+                        }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { showProfileDialog = false },
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Text("Close", fontWeight = FontWeight.Bold, color = colorScheme.primary)
+                }
+            },
+            shape = RoundedCornerShape(20.dp),
+            containerColor = colorScheme.surface
+        )
     }
 
     // Start Session Dialog (Level 3 Elevation)
@@ -447,7 +582,7 @@ fun MapScreen(
                         onValueChange = { sessionNameInput = it },
                         label = { Text("Session Identifier", fontSize = 12.sp) },
                         singleLine = true,
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(8.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("session_name_input")
@@ -465,7 +600,7 @@ fun MapScreen(
                         containerColor = colorScheme.primary,
                         contentColor = colorScheme.onPrimary
                     ),
-                    shape = RoundedCornerShape(4.dp),
+                    shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.testTag("confirm_start_btn")
                 ) {
                     Text("Start Recording", fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -474,14 +609,115 @@ fun MapScreen(
             dismissButton = {
                 TextButton(
                     onClick = { showStartDialog = false },
-                    shape = RoundedCornerShape(4.dp)
+                    shape = RoundedCornerShape(8.dp)
                 ) {
                     Text("Cancel", color = colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 }
             },
-            shape = RoundedCornerShape(8.dp),
+            shape = RoundedCornerShape(16.dp),
             containerColor = colorScheme.surface
         )
+    }
+}
+
+private data class ProfileInfo(
+    val icon: ImageVector,
+    val label: String,
+    val power: String,
+    val badgeColor: Color
+)
+
+private fun getProfileInfo(mode: TrackingMode, colorScheme: androidx.compose.material3.ColorScheme): ProfileInfo {
+    return when (mode) {
+        TrackingMode.HIGH_ACCURACY -> ProfileInfo(Icons.Default.Bolt, "GPS Real-Time (1s)", "~25mA", colorScheme.primary)
+        TrackingMode.BALANCED -> ProfileInfo(Icons.Default.Balance, "Balanced (10s)", "~8mA", colorScheme.secondary)
+        TrackingMode.POWER_SAVER -> ProfileInfo(Icons.Default.CellTower, "Cell Only", "<2mA", colorScheme.tertiary)
+    }
+}
+
+@Composable
+private fun ProfileOptionCard(
+    title: String,
+    subtitle: String,
+    accuracy: String,
+    power: String,
+    description: String,
+    isSelected: Boolean,
+    color: Color,
+    onClick: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) color.copy(alpha = 0.08f) else colorScheme.surface
+        ),
+        border = BorderStroke(
+            width = if (isSelected) 1.5.dp else 1.dp,
+            color = if (isSelected) color else colorScheme.outlineVariant
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (isSelected) Icons.Default.RadioButtonChecked else Icons.Default.RadioButtonUnchecked,
+                        contentDescription = null,
+                        tint = if (isSelected) color else colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Column {
+                        Text(
+                            text = title,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface
+                        )
+                        Text(
+                            text = subtitle,
+                            fontSize = 10.sp,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = color.copy(alpha = 0.15f)
+                ) {
+                    Text(
+                        text = power,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = color,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = description,
+                fontSize = 11.sp,
+                color = colorScheme.onSurfaceVariant,
+                lineHeight = 15.sp
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Nominal Resolution: $accuracy",
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = color
+            )
+        }
     }
 }
 

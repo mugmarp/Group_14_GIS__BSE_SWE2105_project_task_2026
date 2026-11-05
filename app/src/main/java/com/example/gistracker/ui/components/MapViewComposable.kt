@@ -3,6 +3,7 @@ package com.example.gistracker.ui.components
 import android.graphics.Paint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.SatelliteAlt
@@ -62,6 +64,7 @@ fun MapViewComposable(
     currentLocation: LocationPoint?,
     trailPoints: List<LocationPoint>,
     settings: com.example.gistracker.model.TrackerSettings = com.example.gistracker.model.TrackerSettings(),
+    onCycleTileLayer: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -226,15 +229,55 @@ fun MapViewComposable(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Overlay Map Controls (Level 2 Elevation - Instrument Cluster)
+        // Overlay Map Controls (Level 2 Elevation - Viewport Controls anchored to Bottom-Right)
         Column(
             modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 114.dp, end = 14.dp),
-            horizontalAlignment = Alignment.End
+                .align(Alignment.BottomEnd)
+                .padding(bottom = 84.dp, end = 16.dp),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Layer Switcher FAB (Google Maps style)
+            if (onCycleTileLayer != null) {
+                FloatingActionButton(
+                    onClick = onCycleTileLayer,
+                    modifier = Modifier
+                        .size(42.dp)
+                        .testTag("layer_switcher_btn"),
+                    shape = RoundedCornerShape(12.dp),
+                    containerColor = colorScheme.surface,
+                    contentColor = colorScheme.secondary,
+                    elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp)
+                ) {
+                    Icon(Icons.Default.Layers, contentDescription = "Switch Map Layer", modifier = Modifier.size(20.dp))
+                }
+            }
+
+            // Recenter FAB
+            FloatingActionButton(
+                onClick = {
+                    if (currentLocation != null) {
+                        mapViewRef?.controller?.animateTo(
+                            GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                            17.0,
+                            800L
+                        )
+                    }
+                },
+                modifier = Modifier
+                    .size(44.dp)
+                    .testTag("recenter_map_btn"),
+                shape = RoundedCornerShape(12.dp),
+                containerColor = colorScheme.primary,
+                contentColor = colorScheme.onPrimary,
+                elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp)
+            ) {
+                Icon(Icons.Default.MyLocation, contentDescription = "Center on Location", modifier = Modifier.size(20.dp))
+            }
+
+            // Zoom In / Out Cluster
             Surface(
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(12.dp),
                 color = colorScheme.surface,
                 shadowElevation = 3.dp,
                 border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
@@ -259,29 +302,6 @@ fun MapViewComposable(
                     }
                 }
             }
-
-            Spacer(modifier = Modifier.size(8.dp))
-
-            FloatingActionButton(
-                onClick = {
-                    if (currentLocation != null) {
-                        mapViewRef?.controller?.animateTo(
-                            GeoPoint(currentLocation.latitude, currentLocation.longitude),
-                            17.0,
-                            800L
-                        )
-                    }
-                },
-                modifier = Modifier
-                    .size(44.dp)
-                    .testTag("recenter_map_btn"),
-                shape = RoundedCornerShape(8.dp),
-                containerColor = colorScheme.primary,
-                contentColor = colorScheme.onPrimary,
-                elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp)
-            ) {
-                Icon(Icons.Default.MyLocation, contentDescription = "Center on Location", modifier = Modifier.size(20.dp))
-            }
         }
 
         // Prominent "Waiting for Satellite Signal" State Banner (Awaiting GNSS Lock)
@@ -290,13 +310,13 @@ fun MapViewComposable(
                 modifier = Modifier
                     .align(Alignment.Center)
                     .padding(20.dp),
-                shape = RoundedCornerShape(8.dp),
+                shape = RoundedCornerShape(16.dp),
                 color = colorScheme.surface,
                 shadowElevation = 6.dp,
                 border = androidx.compose.foundation.BorderStroke(1.dp, customColors.statusWarningBorder)
             ) {
                 Column(
-                    modifier = Modifier.padding(20.dp),
+                    modifier = Modifier.padding(22.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     // Top Accent indicator
@@ -311,7 +331,7 @@ fun MapViewComposable(
                         Icons.Default.SatelliteAlt,
                         contentDescription = null,
                         tint = customColors.warning,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(34.dp)
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
@@ -330,7 +350,7 @@ fun MapViewComposable(
                     )
                     Spacer(modifier = Modifier.height(14.dp))
                     Surface(
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(6.dp),
                         color = customColors.statusWarningBg,
                         border = androidx.compose.foundation.BorderStroke(1.dp, customColors.statusWarningBorder)
                     ) {

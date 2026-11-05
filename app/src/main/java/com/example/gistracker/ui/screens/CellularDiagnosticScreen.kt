@@ -122,7 +122,7 @@ fun CellularDiagnosticScreen(
                             containerColor = colorScheme.primary,
                             contentColor = colorScheme.onPrimary
                         ),
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(10.dp),
                         modifier = Modifier.testTag("refresh_cells_btn")
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
@@ -134,9 +134,9 @@ fun CellularDiagnosticScreen(
                         IconButton(
                             onClick = onOpenMenu,
                             modifier = Modifier
-                                .size(36.dp)
-                                .background(customColors.surfaceContainerLow, RoundedCornerShape(4.dp))
-                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                                .size(38.dp)
+                                .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
+                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
                                 .testTag("cellular_menu_btn")
                         ) {
                             Icon(
@@ -158,7 +158,7 @@ fun CellularDiagnosticScreen(
             } else {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                     border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
                 ) {
@@ -202,7 +202,7 @@ fun CellularDiagnosticScreen(
                                 containerColor = colorScheme.primary,
                                 contentColor = colorScheme.onPrimary
                             ),
-                            shape = RoundedCornerShape(4.dp)
+                            shape = RoundedCornerShape(10.dp)
                         ) {
                             Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
                             Spacer(modifier = Modifier.width(6.dp))
@@ -263,7 +263,7 @@ private fun ServingCellCard(cell: CellTowerInfo) {
         modifier = Modifier
             .fillMaxWidth()
             .testTag("serving_cell_card"),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
@@ -272,7 +272,7 @@ private fun ServingCellCard(cell: CellTowerInfo) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(2.dp)
+                    .height(3.dp)
                     .background(colorScheme.primary)
             )
 
@@ -292,7 +292,7 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
                             Surface(
-                                shape = RoundedCornerShape(4.dp),
+                                shape = RoundedCornerShape(6.dp),
                                 color = customColors.statusActiveBg,
                                 border = androidx.compose.foundation.BorderStroke(1.dp, customColors.statusActiveBorder)
                             ) {
@@ -316,7 +316,7 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                     }
 
                     Surface(
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(6.dp),
                         color = customColors.surfaceContainerLow,
                         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
                     ) {
@@ -336,8 +336,8 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(customColors.surfaceContainerLow, RoundedCornerShape(4.dp))
-                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
+                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -404,7 +404,7 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
     val colorScheme = MaterialTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(6.dp),
+        shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
@@ -482,7 +482,7 @@ private fun TriangulationComparisonCard() {
     val colorScheme = MaterialTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {

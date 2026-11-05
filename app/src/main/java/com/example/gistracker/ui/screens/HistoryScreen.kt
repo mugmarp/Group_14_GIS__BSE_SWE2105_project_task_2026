@@ -123,7 +123,7 @@ fun HistoryScreen(
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
                     ) {
@@ -243,12 +243,12 @@ fun HistoryScreen(
             dismissButton = {
                 TextButton(
                     onClick = { exportContent = null },
-                    shape = RoundedCornerShape(4.dp)
+                    shape = RoundedCornerShape(8.dp)
                 ) {
                     Text("Close", color = colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 }
             },
-            shape = RoundedCornerShape(8.dp),
+            shape = RoundedCornerShape(16.dp),
             containerColor = colorScheme.surface
         )
     }
@@ -269,7 +269,7 @@ private fun SessionHistoryCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("session_card_${session.id}"),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
@@ -278,7 +278,7 @@ private fun SessionHistoryCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(2.dp)
+                    .height(3.dp)
                     .background(colorScheme.secondary)
             )
 
@@ -314,8 +314,8 @@ private fun SessionHistoryCard(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(customColors.surfaceContainerLow, RoundedCornerShape(4.dp))
-                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                        .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
+                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
                         .padding(horizontal = 10.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -337,7 +337,7 @@ private fun SessionHistoryCard(
                 ) {
                     OutlinedButton(
                         onClick = onExportGpx,
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.primary),
                         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant),
                         modifier = Modifier.weight(1f).height(36.dp).testTag("export_gpx_btn")
@@ -347,7 +347,7 @@ private fun SessionHistoryCard(
 
                     OutlinedButton(
                         onClick = onExportKml,
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.secondary),
                         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant),
                         modifier = Modifier.weight(1f).height(36.dp).testTag("export_kml_btn")
@@ -357,7 +357,7 @@ private fun SessionHistoryCard(
 
                     OutlinedButton(
                         onClick = onExportCsv,
-                        shape = RoundedCornerShape(4.dp),
+                        shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.onSurfaceVariant),
                         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant),
                         modifier = Modifier.weight(1f).height(36.dp).testTag("export_csv_btn")

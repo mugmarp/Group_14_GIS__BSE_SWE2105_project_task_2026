@@ -246,7 +246,7 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                 )
                 Screen.CELLULAR -> CellularDiagnosticScreen(
                     viewModel = viewModel,
-                    onNavigateBack = { currentScreen = Screen.MAP },
+                    onNavigateBack = null,
                     onOpenMenu = {
                         scope.launch {
                             showMenuSheet = true
@@ -275,7 +275,7 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                 sheetState = sheetState,
                 containerColor = colorScheme.surface,
                 tonalElevation = 0.dp,
-                shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
+                shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
                 dragHandle = {
                     Surface(
                         modifier = Modifier.padding(top = 10.dp, bottom = 6.dp),
@@ -327,9 +327,9 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Live Status Pill Card in Sheet (8.dp radius)
+                    // Live Status Pill Card in Sheet (12.dp radius)
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(12.dp),
                         color = customColors.surfaceContainerLow,
                         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
                         modifier = Modifier.fillMaxWidth()
@@ -477,9 +477,9 @@ private fun MenuNavigationCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(14.dp))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.8f))
     ) {
@@ -495,9 +495,9 @@ private fun MenuNavigationCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(
-                    shape = RoundedCornerShape(6.dp),
+                    shape = RoundedCornerShape(10.dp),
                     color = customColors.surfaceContainerLow,
-                    modifier = Modifier.size(38.dp)
+                    modifier = Modifier.size(40.dp)
                 ) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         icon()
@@ -523,7 +523,7 @@ private fun MenuNavigationCard(
             Spacer(modifier = Modifier.width(8.dp))
 
             Surface(
-                shape = RoundedCornerShape(4.dp),
+                shape = RoundedCornerShape(6.dp),
                 color = customColors.surfaceContainerLow,
                 border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.5f))
             ) {
@@ -532,7 +532,7 @@ private fun MenuNavigationCard(
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = badgeColor,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                 )
             }
         }
