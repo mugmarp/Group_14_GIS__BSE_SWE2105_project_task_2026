@@ -127,13 +127,16 @@ data class CellTowerInfo(
         }
 }
 
-enum class GeofenceCategory {
-    SAFE_ZONE,
-    SCHOOL,
-    HOME,
-    WORK,
-    BODA_HOTSPOT,
-    CUSTOM
+enum class GeofenceCategory(val label: String, val iconEmoji: String, val defaultColor: String) {
+    SAFE_ZONE("Safe Zone", "🛡️", "#006948"),
+    CAMPUS("University Campus", "🎓", "#006948"),
+    LIBRARY("Main Library", "📚", "#0051D5"),
+    HOSTEL("Student Hostel", "🏠", "#7C3AED"),
+    SCHOOL("Academic Faculty", "🏫", "#006194"),
+    HOME("Home Residence", "🏡", "#006948"),
+    WORK("Workplace", "🏢", "#0051D5"),
+    BODA_HOTSPOT("Boda Boda Hotspot", "🏍️", "#D97706"),
+    CUSTOM("Custom Zone", "📍", "#006194")
 }
 
 data class GeofenceZone(

@@ -38,6 +38,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val recentAlerts = repository.recentAlerts
     val cellTowers: StateFlow<List<CellTowerInfo>> = repository.cellTowers
     val trackingMode: StateFlow<TrackingMode> = repository.trackingMode
+    val filteredJitterMeters: StateFlow<Double> = repository.filteredJitterMeters
+    val filteredJitterCount: StateFlow<Int> = repository.filteredJitterCount
 
     private val _settings = MutableStateFlow(com.example.gistracker.model.TrackerSettings())
     val settings: StateFlow<com.example.gistracker.model.TrackerSettings> = _settings.asStateFlow()
@@ -179,6 +181,12 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun updateGeofence(zone: GeofenceZone) {
+        viewModelScope.launch {
+            repository.updateGeofence(zone)
+        }
+    }
+
     fun deleteGeofence(id: String) {
         viewModelScope.launch {
             repository.deleteGeofence(id)
@@ -243,6 +251,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun updateJitterThreshold(thresholdMeters: Float) {
         _settings.value = _settings.value.copy(stationaryJitterThresholdMeters = thresholdMeters)
         repository.jitterThresholdMeters = thresholdMeters
+    }
+
+    fun calculateDistanceMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        return repository.calculateDistanceMeters(lat1, lon1, lat2, lon2)
     }
 
     fun toggleKeepScreenOn(keepOn: Boolean) {

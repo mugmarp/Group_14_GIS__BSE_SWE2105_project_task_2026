@@ -71,7 +71,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.compose.material.icons.filled.NotificationsActive
 import com.example.gistracker.ui.screens.CellularDiagnosticScreen
+import com.example.gistracker.ui.screens.GeofenceScreen
 import com.example.gistracker.ui.screens.HistoryScreen
 import com.example.gistracker.ui.screens.MapScreen
 import com.example.gistracker.ui.screens.ResearchAnalysisScreen
@@ -84,6 +86,7 @@ import kotlinx.coroutines.launch
 enum class Screen(val title: String, val testTag: String) {
     MAP("Live Map & Telemetry", "nav_map"),
     CELLULAR("Cellular Signal Hub", "nav_cellular"),
+    GEOFENCE("Safe Zones & Geofencing", "nav_geofence"),
     HISTORY("Saved Trails & Exports", "nav_history"),
     RESEARCH("SWE2105 Research Analysis", "nav_research"),
     SETTINGS("Telemetry Settings", "nav_settings")
@@ -121,6 +124,7 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
     val activeSession by viewModel.activeSession.collectAsState()
     val allSessions by viewModel.allSessions.collectAsState()
     val cellTowers by viewModel.cellTowers.collectAsState()
+    val geofenceZones by viewModel.geofenceZones.collectAsState()
 
     // Handle Back Press: Close menu bottom sheet if open, or return to Map screen
     if (showMenuSheet) {
@@ -254,6 +258,10 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                         }
                     }
                 )
+                Screen.GEOFENCE -> GeofenceScreen(
+                    viewModel = viewModel,
+                    onNavigateBack = { currentScreen = Screen.MAP }
+                )
                 Screen.HISTORY -> HistoryScreen(
                     viewModel = viewModel,
                     onNavigateBack = { currentScreen = Screen.MAP }
@@ -376,7 +384,6 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // 3 Secondary Navigation Cards (8dp card radius, 4dp badge radius)
                     // Card 1: Saved Trails & Exports
                     MenuNavigationCard(
                         title = "Saved Trails & Exports",
@@ -396,7 +403,26 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Card 2: SWE2105 Research Paper
+                    // Card 2: Geofencing & Safe Zones (Phase 3)
+                    MenuNavigationCard(
+                        title = "Geofencing & Safe Zones",
+                        subtitle = "Perimeter surveillance, safety radii & transition alerts",
+                        badgeText = "${geofenceZones.size} zones",
+                        badgeColor = colorScheme.tertiary,
+                        icon = { Icon(Icons.Default.NotificationsActive, contentDescription = null, tint = colorScheme.tertiary, modifier = Modifier.size(22.dp)) },
+                        onClick = {
+                            scope.launch {
+                                sheetState.hide()
+                                showMenuSheet = false
+                                currentScreen = Screen.GEOFENCE
+                            }
+                        },
+                        modifier = Modifier.testTag("menu_nav_geofence")
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Card 3: SWE2105 Research Paper
                     MenuNavigationCard(
                         title = "SWE2105 Research & Comparison",
                         subtitle = "Option 1 (IP) vs Option 2 (GPS/Cell) & Uganda legal framework",

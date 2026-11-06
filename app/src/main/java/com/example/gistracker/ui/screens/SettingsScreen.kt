@@ -307,6 +307,47 @@ fun SettingsScreen(
                     }
                 }
 
+                // Live Jitter Rejection Metric Well (Academic Verification of Stationary Deadband)
+                val jitterCount by viewModel.filteredJitterCount.collectAsState()
+                val jitterMeters by viewModel.filteredJitterMeters.collectAsState()
+
+                Spacer(modifier = Modifier.height(10.dp))
+                androidx.compose.material3.Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = customColors.surfaceContainerLow,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("ELIMINATED MULTIPATH DRIFT", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = colorScheme.onSurfaceVariant)
+                            Text(
+                                String.format(java.util.Locale.US, "%.1f m fake drift (%d spikes)", jitterMeters, jitterCount),
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.tertiary
+                            )
+                        }
+                        androidx.compose.material3.Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = colorScheme.tertiary.copy(alpha = 0.15f)
+                        ) {
+                            Text(
+                                "Deadband Active",
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.tertiary,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(14.dp))
 
                 // Toggle Keep Screen On

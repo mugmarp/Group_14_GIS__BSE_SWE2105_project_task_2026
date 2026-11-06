@@ -86,6 +86,7 @@ fun MapScreen(
     val activeSession by viewModel.activeSession.collectAsState()
     val trailPoints by viewModel.activeTrailPoints.collectAsState()
     val trackingMode by viewModel.trackingMode.collectAsState()
+    val geofenceZones by viewModel.geofenceZones.collectAsState()
     val settings by viewModel.settings.collectAsState()
 
     var showStartDialog by remember { mutableStateOf(false) }
@@ -106,10 +107,11 @@ fun MapScreen(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // Persistent Full-Bleed Spatial Viewport with Google Maps-style Integrated Bottom Layer Selection
+        // Persistent Full-Bleed Spatial Viewport with Google Maps-style Integrated Bottom Layer Selection & Geofence Perimeters
         MapViewComposable(
             currentLocation = currentLocation,
             trailPoints = trailPoints,
+            geofenceZones = geofenceZones,
             settings = settings,
             onSelectTileLayer = { selectedTile ->
                 viewModel.updateMapTileType(selectedTile)
@@ -340,6 +342,39 @@ fun MapScreen(
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                         Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                    }
+                }
+
+                // Live Geofence Zone Proximity Chip (Active Perimeter Alert)
+                val activeZone = geofenceZones.firstOrNull { it.isInside }
+                if (activeZone != null) {
+                    val isHotspot = activeZone.category == com.example.gistracker.model.GeofenceCategory.BODA_HOTSPOT
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (isHotspot) customColors.warning.copy(alpha = 0.14f) else colorScheme.tertiary.copy(alpha = 0.14f),
+                        shadowElevation = 3.dp,
+                        border = BorderStroke(1.dp, if (isHotspot) customColors.warning else colorScheme.tertiary),
+                        modifier = Modifier.testTag("active_geofence_chip")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isHotspot) customColors.warning else colorScheme.tertiary)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (isHotspot) "⚠️ ${activeZone.name}" else "🛡️ ${activeZone.name}",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isHotspot) customColors.warning else colorScheme.tertiary
+                            )
+                        }
                     }
                 }
             }

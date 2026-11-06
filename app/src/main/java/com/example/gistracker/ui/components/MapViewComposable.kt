@@ -65,6 +65,7 @@ import kotlin.math.sin
 fun MapViewComposable(
     currentLocation: LocationPoint?,
     trailPoints: List<LocationPoint>,
+    geofenceZones: List<com.example.gistracker.model.GeofenceZone> = emptyList(),
     settings: com.example.gistracker.model.TrackerSettings = com.example.gistracker.model.TrackerSettings(),
     onSelectTileLayer: ((com.example.gistracker.model.MapTileType) -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -225,6 +226,39 @@ fun MapViewComposable(
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     }
                     map.overlays.add(userMarker)
+                }
+
+                // 3. Draw Geofence Circular Zones (Safe Zones & Boda Warning Perimeters)
+                for (zone in geofenceZones) {
+                    val zoneCenter = GeoPoint(zone.latitude, zone.longitude)
+                    val circlePoints = computeCircleGeoPoints(zoneCenter, zone.radiusMeters.toDouble())
+                    val zoneColor = try {
+                        android.graphics.Color.parseColor(zone.colorHex)
+                    } catch (e: Exception) {
+                        android.graphics.Color.parseColor("#006948")
+                    }
+                    val fillColor = android.graphics.Color.argb(
+                        40,
+                        android.graphics.Color.red(zoneColor),
+                        android.graphics.Color.green(zoneColor),
+                        android.graphics.Color.blue(zoneColor)
+                    )
+                    val outlineColor = android.graphics.Color.argb(
+                        210,
+                        android.graphics.Color.red(zoneColor),
+                        android.graphics.Color.green(zoneColor),
+                        android.graphics.Color.blue(zoneColor)
+                    )
+
+                    val zonePolygon = Polygon(map).apply {
+                        points = circlePoints
+                        fillPaint.color = fillColor
+                        outlinePaint.color = outlineColor
+                        outlinePaint.strokeWidth = 3f
+                        title = "${zone.category.iconEmoji} ${zone.name} (${zone.radiusMeters.toInt()}m)"
+                        snippet = "Category: ${zone.category.label} | Status: ${if (zone.isInside) "INSIDE SAFE ZONE" else "OUTSIDE"}"
+                    }
+                    map.overlays.add(zonePolygon)
                 }
 
                 map.invalidate()
