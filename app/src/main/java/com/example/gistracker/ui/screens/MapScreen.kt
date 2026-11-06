@@ -93,7 +93,6 @@ fun MapScreen(
     var showProfileDialog by remember { mutableStateOf(false) }
     var sessionNameInput by remember { mutableStateOf("") }
 
-    var isMicroSheetExpanded by remember { mutableStateOf(false) }
 
     // Keep screen awake while recording if enabled in settings
     val activity = context as? Activity
@@ -380,228 +379,121 @@ fun MapScreen(
             }
         }
 
-        // Option C: Collapsible / Swipeable Micro-Sheet (Ultra-Compact, Space-Saving, No Overlaps)
-        Surface(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 6.dp)
-                .testTag("bottom_action_card"),
-            shape = RoundedCornerShape(22.dp),
-            color = colorScheme.surface,
-            shadowElevation = 4.dp,
-            border = BorderStroke(1.dp, colorScheme.outlineVariant)
-        ) {
-            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
-                // Subtle Center Pull/Toggle Handle
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { isMicroSheetExpanded = !isMicroSheetExpanded }
-                        .padding(bottom = 6.dp),
-                    contentAlignment = Alignment.Center
+        // Floating Recording Action Pill (Centered, Compact, Clean Spatial Viewport)
+        if (activeSession == null) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 12.dp)
+                    .testTag("floating_recording_pill"),
+                shape = RoundedCornerShape(24.dp),
+                color = colorScheme.surface,
+                shadowElevation = 5.dp,
+                border = BorderStroke(1.dp, colorScheme.outlineVariant)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp)
                 ) {
                     Box(
                         modifier = Modifier
-                            .width(36.dp)
-                            .height(4.dp)
-                            .background(colorScheme.outlineVariant, RoundedCornerShape(2.dp))
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(if (currentLocation != null) colorScheme.tertiary else customColors.warning)
                     )
-                }
-
-                // Primary Compact Action Row
-                if (activeSession == null) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clickable { isMicroSheetExpanded = !isMicroSheetExpanded }
-                                .padding(vertical = 2.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(if (currentLocation != null) colorScheme.tertiary else customColors.warning)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Column {
-                                Text(
-                                    text = "STANDBY TRAIL",
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.03.sp,
-                                    color = colorScheme.onSurface
-                                )
-                                Text(
-                                    text = if (currentLocation != null) "GNSS Locked (±${currentLocation?.accuracy?.toInt()}m)" else "Indoor / Awaiting Fix",
-                                    fontSize = 9.sp,
-                                    color = colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Button(
-                                onClick = {
-                                    val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-                                    sessionNameInput = "Field Trail $timeStr"
-                                    showStartDialog = true
-                                },
-                                modifier = Modifier
-                                    .height(40.dp)
-                                    .testTag("start_track_btn"),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = colorScheme.primary,
-                                    contentColor = colorScheme.onPrimary
-                                ),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    "START RECORDING",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.03.sp
-                                )
-                            }
-
-                            IconButton(
-                                onClick = { isMicroSheetExpanded = !isMicroSheetExpanded },
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isMicroSheetExpanded) Icons.Default.ArrowDropDown else Icons.Default.ArrowDropDown,
-                                    contentDescription = "Toggle Micro-Sheet Details",
-                                    tint = colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    // Recording Active Compact Header Row
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier
-                                .clickable { isMicroSheetExpanded = !isMicroSheetExpanded }
-                                .padding(vertical = 2.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(9.dp)
-                                    .clip(CircleShape)
-                                    .background(colorScheme.error)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Column {
-                                Text(
-                                    text = "REC • ${activeSession?.formattedDuration}",
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.error
-                                )
-                                Text(
-                                    text = activeSession?.formattedDistance ?: "0 m",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Button(
-                                onClick = { viewModel.stopTracking() },
-                                modifier = Modifier
-                                    .height(40.dp)
-                                    .testTag("stop_track_btn"),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = colorScheme.error,
-                                    contentColor = colorScheme.onError
-                                ),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    "STOP & SAVE",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-
-                            IconButton(
-                                onClick = { isMicroSheetExpanded = !isMicroSheetExpanded },
-                                modifier = Modifier.size(36.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isMicroSheetExpanded) Icons.Default.ArrowDropDown else Icons.Default.ArrowDropDown,
-                                    contentDescription = "Toggle Micro-Sheet Details",
-                                    tint = colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Expanded Telemetry Section (Option C: Reveals live lap times, coordinates, and waypoints on demand)
-                if (isMicroSheetExpanded) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text("ACTIVE TRAIL NAME", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = colorScheme.onSurfaceVariant)
-                            Text(activeSession?.name ?: "Standby Pre-Trail", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = colorScheme.onSurface)
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("RECORDED VECTORS", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = colorScheme.onSurfaceVariant)
-                            Text("${trailPoints.size} logged waypoints", fontSize = 11.sp, fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, color = colorScheme.primary)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = if (currentLocation != null) "Ready" else "Standby",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Button(
+                        onClick = {
+                            val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                            sessionNameInput = "Field Trail $timeStr"
+                            showStartDialog = true
+                        },
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
-                            .padding(8.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                            .height(38.dp)
+                            .testTag("start_track_btn"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.primary,
+                            contentColor = colorScheme.onPrimary
+                        ),
+                        shape = RoundedCornerShape(19.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 0.dp)
                     ) {
-                        Column {
-                            Text("COORDINATE FIX", fontSize = 9.sp, color = colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                if (currentLocation != null) "${String.format(Locale.US, "%.5f", currentLocation!!.latitude)}, ${String.format(Locale.US, "%.5f", currentLocation!!.longitude)}" else "No Satellite Lock",
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
-                                color = colorScheme.onSurface
-                            )
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text("ALTITUDE (ASL)", fontSize = 9.sp, color = colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
-                            Text(
-                                if (currentLocation != null) "${currentLocation!!.altitude.toInt()} m" else "--",
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
-                                color = colorScheme.secondary
-                            )
-                        }
+                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            "START RECORDING",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.03.sp
+                        )
+                    }
+                }
+            }
+        } else {
+            // Floating Recording Action Pill (Active Recording State)
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 12.dp)
+                    .testTag("floating_recording_pill"),
+                shape = RoundedCornerShape(24.dp),
+                color = colorScheme.surface,
+                shadowElevation = 6.dp,
+                border = BorderStroke(1.5.dp, colorScheme.error.copy(alpha = 0.7f))
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(9.dp)
+                            .clip(CircleShape)
+                            .background(colorScheme.error)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Column {
+                        Text(
+                            text = "REC • ${activeSession?.formattedDuration}",
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.error
+                        )
+                        Text(
+                            text = activeSession?.formattedDistance ?: "0 m",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Button(
+                        onClick = { viewModel.stopTracking() },
+                        modifier = Modifier
+                            .height(38.dp)
+                            .testTag("stop_track_btn"),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.error,
+                            contentColor = colorScheme.onError
+                        ),
+                        shape = RoundedCornerShape(19.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 0.dp)
+                    ) {
+                        Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            "STOP & SAVE",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
                 }
             }

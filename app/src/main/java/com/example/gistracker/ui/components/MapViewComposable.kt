@@ -270,7 +270,7 @@ fun MapViewComposable(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(bottom = 76.dp, end = 16.dp),
+                .padding(bottom = 16.dp, end = 16.dp),
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {

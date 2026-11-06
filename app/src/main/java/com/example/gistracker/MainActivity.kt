@@ -188,47 +188,56 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
-        // Streamlined 2-Pillar Bottom Bar (GPS Live Map & Cellular Hub)
+        // Streamlined 2-Pillar Bottom Bar with Top-Only Corner Radius
         bottomBar = {
             if (currentScreen == Screen.MAP || currentScreen == Screen.CELLULAR) {
-                NavigationBar(
-                    containerColor = colorScheme.surface,
-                    tonalElevation = 0.dp,
+                Surface(
+                    shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+                    color = colorScheme.surface,
+                    shadowElevation = 8.dp,
+                    border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(58.dp)
-                        .border(BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)))
                         .testTag("bottom_nav_bar")
                 ) {
-                    NavigationBarItem(
-                        selected = currentScreen == Screen.MAP,
-                        onClick = { currentScreen = Screen.MAP },
-                        icon = { Icon(Icons.Default.Map, contentDescription = "Live Map", modifier = Modifier.size(20.dp)) },
-                        label = { Text("GPS Map", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.02.sp) },
-                        modifier = Modifier.testTag("nav_bottom_map"),
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = colorScheme.onPrimary,
-                            selectedTextColor = colorScheme.primary,
-                            indicatorColor = colorScheme.primary,
-                            unselectedIconColor = colorScheme.onSurfaceVariant,
-                            unselectedTextColor = colorScheme.onSurfaceVariant
+                    NavigationBar(
+                        containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                        tonalElevation = 0.dp,
+                        windowInsets = WindowInsets(0, 0, 0, 0),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(66.dp)
+                    ) {
+                        NavigationBarItem(
+                            selected = currentScreen == Screen.MAP,
+                            onClick = { currentScreen = Screen.MAP },
+                            icon = { Icon(Icons.Default.Map, contentDescription = "Live Map", modifier = Modifier.size(20.dp)) },
+                            label = { Text("GPS Map", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.02.sp) },
+                            modifier = Modifier.testTag("nav_bottom_map"),
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = colorScheme.onPrimary,
+                                selectedTextColor = colorScheme.primary,
+                                indicatorColor = colorScheme.primary,
+                                unselectedIconColor = colorScheme.onSurfaceVariant,
+                                unselectedTextColor = colorScheme.onSurfaceVariant
+                            )
                         )
-                    )
 
-                    NavigationBarItem(
-                        selected = currentScreen == Screen.CELLULAR,
-                        onClick = { currentScreen = Screen.CELLULAR },
-                        icon = { Icon(Icons.Default.CellTower, contentDescription = "Cellular Hub", modifier = Modifier.size(20.dp)) },
-                        label = { Text("Cellular Hub", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.02.sp) },
-                        modifier = Modifier.testTag("nav_bottom_cellular"),
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = colorScheme.onPrimary,
-                            selectedTextColor = colorScheme.primary,
-                            indicatorColor = colorScheme.primary,
-                            unselectedIconColor = colorScheme.onSurfaceVariant,
-                            unselectedTextColor = colorScheme.onSurfaceVariant
+                        NavigationBarItem(
+                            selected = currentScreen == Screen.CELLULAR,
+                            onClick = { currentScreen = Screen.CELLULAR },
+                            icon = { Icon(Icons.Default.CellTower, contentDescription = "Cellular Hub", modifier = Modifier.size(20.dp)) },
+                            label = { Text("Cellular Hub", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.02.sp) },
+                            modifier = Modifier.testTag("nav_bottom_cellular"),
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = colorScheme.onPrimary,
+                                selectedTextColor = colorScheme.primary,
+                                indicatorColor = colorScheme.primary,
+                                unselectedIconColor = colorScheme.onSurfaceVariant,
+                                unselectedTextColor = colorScheme.onSurfaceVariant
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
