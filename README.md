@@ -1,4 +1,4 @@
-# GIS Group 14 — SWE2105 Real-Time Location Tracker (Android App)
+# GeoTrace — SWE2105 Real-Time Location Tracker (Android App)
 
 **Course:** BSE SWE2105 (Software Engineering)  
 **Institution:** MUST (Mbarara University of Science and Technology)  
@@ -9,11 +9,9 @@
 
 ## 📱 Application Overview
 
-> "This Android app tracks a person’s real-time movement using GPS and cell-tower information, displays the path on a real map, and allows comparison of GPS vs cellular positioning."
+> "GeoTrace tracks a person’s real-time movement using GPS and cell-tower information, displays the path on a real map, and allows comparison of GPS vs cellular positioning."
 
-Built with **Kotlin** and **Jetpack Compose** for the BSE SWE2105 course project, the application strictly implements **Option 2 (Mobile Phone Tracking via GPS & Cellular Information)**, featuring live OpenStreetMap tracking, live base station diagnostics via Android `TelephonyManager`, a side-by-side positioning trade-off comparator, and GPX/KML/CSV export.
-
-![Launcher Icon](app/src/main/res/drawable/gis_tracker_icon_1793733901193.jpg)
+Built with **Kotlin** and **Jetpack Compose** for the BSE SWE2105 course project, the application strictly implements **Option 2 (Mobile Phone Tracking via GPS & Cellular Information)**, featuring live OpenStreetMap tracking, live base station diagnostics via Android `TelephonyManager`, a side-by-side positioning trade-off comparator, academic geofencing with anti-flapping hysteresis, and GPX/KML/CSV export.
 
 ---
 

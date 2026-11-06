@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "GIS Tracker"
+rootProject.name = "GeoTrace"
 include(":app")

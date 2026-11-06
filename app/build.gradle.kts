@@ -8,7 +8,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.aistudio.gistracker.kxnvpz"
+        applicationId = "com.geotrace"
         minSdk = 26
         targetSdk = 36
         versionCode = 1

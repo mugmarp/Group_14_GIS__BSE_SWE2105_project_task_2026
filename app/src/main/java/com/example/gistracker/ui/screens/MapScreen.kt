@@ -164,7 +164,7 @@ fun MapScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
                                     Text(
-                                        text = "GeoTrack Safe Telemetry",
+                                        text = "GeoTrace Safe Telemetry",
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = colorScheme.onSurface

@@ -92,7 +92,7 @@ class LocationForegroundService : Service() {
     }
 
     private fun startForegroundTracking(mode: TrackingMode) {
-        val initialNotification = buildNotification("GIS Tracker Active", "Acquiring real-time GPS & cell fix...", mode)
+        val initialNotification = buildNotification("GeoTrace Active", "Acquiring real-time GPS & cell fix...", mode)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,

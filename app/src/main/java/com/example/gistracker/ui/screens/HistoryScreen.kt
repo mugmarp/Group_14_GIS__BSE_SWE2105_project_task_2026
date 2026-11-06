@@ -394,8 +394,8 @@ private fun shareExportText(context: Context, type: String, content: String) {
     val intent = Intent().apply {
         action = Intent.ACTION_SEND
         putExtra(Intent.EXTRA_TEXT, content)
-        putExtra(Intent.EXTRA_SUBJECT, "GIS Tracker Export - $type")
-        putExtra(Intent.EXTRA_TITLE, "GIS Tracker Export")
+        putExtra(Intent.EXTRA_SUBJECT, "GeoTrace Export - $type")
+        putExtra(Intent.EXTRA_TITLE, "GeoTrace Export")
         this.type = "text/plain"
     }
     val chooser = Intent.createChooser(intent, "Share $type Export")

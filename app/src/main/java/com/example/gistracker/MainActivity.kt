@@ -317,7 +317,7 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                     ) {
                         Column {
                             Text(
-                                text = "GeoTrack Safe Menu",
+                                text = "GeoTrace Safe Menu",
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = colorScheme.onSurface
