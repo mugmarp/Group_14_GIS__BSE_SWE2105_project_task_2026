@@ -7,12 +7,15 @@ android {
     namespace = "com.example.gistracker"
     compileSdk = 36
 
+    val versionCodeOverride = System.getenv("ORG_GRADLE_PROJECT_versionCode")?.toIntOrNull()
+    val versionNameOverride = System.getenv("ORG_GRADLE_PROJECT_versionName")
+
     defaultConfig {
         applicationId = "com.geotrace"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = versionCodeOverride ?: 1
+        versionName = versionNameOverride ?: "1.0"
     }
 
     signingConfigs {
@@ -22,6 +25,25 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        create("releaseConfig") {
+            val storeFilePath = System.getenv("ORG_GRADLE_PROJECT_signingStoreFile") ?: ""
+            val storePassword = System.getenv("ORG_GRADLE_PROJECT_signingStorePassword") ?: ""
+            val keyAlias = System.getenv("ORG_GRADLE_PROJECT_signingKeyAlias") ?: ""
+            val keyPassword = System.getenv("ORG_GRADLE_PROJECT_signingKeyPassword") ?: ""
+
+            if (storeFilePath.isNotBlank() && file(storeFilePath).exists() && storePassword.isNotBlank() && keyAlias.isNotBlank() && keyPassword.isNotBlank()) {
+                this.storeFile = file(storeFilePath)
+                this.storePassword = storePassword
+                this.keyAlias = keyAlias
+                this.keyPassword = keyPassword
+            } else {
+                // Fallback to debug keystore so release builds succeed reliably on CI and local
+                this.storeFile = file("${rootDir}/debug.keystore")
+                this.storePassword = "android"
+                this.keyAlias = "androiddebugkey"
+                this.keyPassword = "android"
+            }
+        }
     }
 
     buildTypes {
@@ -30,7 +52,7 @@ android {
         }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debugConfig")
+            signingConfig = signingConfigs.getByName("releaseConfig")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
