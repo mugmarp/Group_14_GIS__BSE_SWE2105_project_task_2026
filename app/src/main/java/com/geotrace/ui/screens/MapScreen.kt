@@ -1,4 +1,4 @@
-package com.example.gistracker.ui.screens
+package com.geotrace.ui.screens
 
 import android.app.Activity
 import android.view.WindowManager
@@ -61,12 +61,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.gistracker.model.CoordinateFormat
-import com.example.gistracker.model.MapTileType
-import com.example.gistracker.model.TrackingMode
-import com.example.gistracker.ui.components.MapViewComposable
-import com.example.gistracker.ui.theme.LocalCustomColors
-import com.example.gistracker.viewmodel.TrackerViewModel
+import com.geotrace.model.CoordinateFormat
+import com.geotrace.model.MapTileType
+import com.geotrace.model.TrackingMode
+import com.geotrace.ui.components.MapViewComposable
+import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.viewmodel.TrackerViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -347,7 +347,7 @@ fun MapScreen(
                 // Live Geofence Zone Proximity Chip (Active Perimeter Alert)
                 val activeZone = geofenceZones.firstOrNull { it.isInside }
                 if (activeZone != null) {
-                    val isHotspot = activeZone.category == com.example.gistracker.model.GeofenceCategory.BODA_HOTSPOT
+                    val isHotspot = activeZone.category == com.geotrace.model.GeofenceCategory.BODA_HOTSPOT
                     Spacer(modifier = Modifier.width(8.dp))
                     Surface(
                         shape = RoundedCornerShape(20.dp),

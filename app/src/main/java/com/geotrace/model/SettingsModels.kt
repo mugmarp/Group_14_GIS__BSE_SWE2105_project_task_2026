@@ -1,4 +1,4 @@
-package com.example.gistracker.model
+package com.geotrace.model
 
 enum class SpeedUnit(val label: String, val multiplier: Float) {
     KMH("km/h", 3.6f),

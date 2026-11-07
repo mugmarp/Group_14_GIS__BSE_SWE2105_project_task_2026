@@ -1,4 +1,4 @@
-package com.example.gistracker.ui.theme
+package com.geotrace.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme

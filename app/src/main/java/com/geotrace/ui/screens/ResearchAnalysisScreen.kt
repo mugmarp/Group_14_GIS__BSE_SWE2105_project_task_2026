@@ -1,4 +1,4 @@
-package com.example.gistracker.ui.screens
+package com.geotrace.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -40,7 +40,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.gistracker.ui.theme.LocalCustomColors
+import com.geotrace.ui.theme.LocalCustomColors
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.automirrored.filled.ArrowBack

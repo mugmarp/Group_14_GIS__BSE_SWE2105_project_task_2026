@@ -3,5 +3,5 @@
 -dontwarn org.osmdroid.**
 
 # Keep data models for persistence and export
--keep class com.example.gistracker.data.model.** { *; }
+-keep class com.geotrace.model.** { *; }
 -keepclassmembers class * implements java.io.Serializable { *; }

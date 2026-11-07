@@ -1,4 +1,4 @@
-package com.example.gistracker.model
+package com.geotrace.model
 
 enum class TrackingMode(
     val title: String,

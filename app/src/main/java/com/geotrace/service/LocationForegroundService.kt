@@ -1,4 +1,4 @@
-package com.example.gistracker.service
+package com.geotrace.service
 
 import android.annotation.SuppressLint
 import android.app.Notification
@@ -13,10 +13,10 @@ import android.os.Build
 import android.os.IBinder
 import android.os.Looper
 import androidx.core.app.NotificationCompat
-import com.example.gistracker.LocationTrackerApp
-import com.example.gistracker.MainActivity
-import com.example.gistracker.model.LocationPoint
-import com.example.gistracker.model.TrackingMode
+import com.geotrace.LocationTrackerApp
+import com.geotrace.MainActivity
+import com.geotrace.model.LocationPoint
+import com.geotrace.model.TrackingMode
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationCallback
 import com.google.android.gms.location.LocationRequest

@@ -1,4 +1,4 @@
-package com.example.gistracker.ui.components
+package com.geotrace.ui.components
 
 import android.graphics.Paint
 import androidx.compose.foundation.background
@@ -50,8 +50,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import com.example.gistracker.model.LocationPoint
-import com.example.gistracker.ui.theme.LocalCustomColors
+import com.geotrace.model.LocationPoint
+import com.geotrace.ui.theme.LocalCustomColors
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
@@ -65,9 +65,9 @@ import kotlin.math.sin
 fun MapViewComposable(
     currentLocation: LocationPoint?,
     trailPoints: List<LocationPoint>,
-    geofenceZones: List<com.example.gistracker.model.GeofenceZone> = emptyList(),
-    settings: com.example.gistracker.model.TrackerSettings = com.example.gistracker.model.TrackerSettings(),
-    onSelectTileLayer: ((com.example.gistracker.model.MapTileType) -> Unit)? = null,
+    geofenceZones: List<com.geotrace.model.GeofenceZone> = emptyList(),
+    settings: com.geotrace.model.TrackerSettings = com.geotrace.model.TrackerSettings(),
+    onSelectTileLayer: ((com.geotrace.model.MapTileType) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -88,9 +88,9 @@ fun MapViewComposable(
     LaunchedEffect(settings.mapTileType) {
         mapViewRef?.let { map ->
             val tileSource = when (settings.mapTileType) {
-                com.example.gistracker.model.MapTileType.STANDARD -> TileSourceFactory.MAPNIK
-                com.example.gistracker.model.MapTileType.TOPO -> TileSourceFactory.OpenTopo
-                com.example.gistracker.model.MapTileType.HUMANITARIAN -> TileSourceFactory.DEFAULT_TILE_SOURCE
+                com.geotrace.model.MapTileType.STANDARD -> TileSourceFactory.MAPNIK
+                com.geotrace.model.MapTileType.TOPO -> TileSourceFactory.OpenTopo
+                com.geotrace.model.MapTileType.HUMANITARIAN -> TileSourceFactory.DEFAULT_TILE_SOURCE
             }
             map.setTileSource(tileSource)
             map.invalidate()
@@ -138,9 +138,9 @@ fun MapViewComposable(
             factory = { ctx ->
                 MapView(ctx).apply {
                     val initialTile = when (settings.mapTileType) {
-                        com.example.gistracker.model.MapTileType.STANDARD -> TileSourceFactory.MAPNIK
-                        com.example.gistracker.model.MapTileType.TOPO -> TileSourceFactory.OpenTopo
-                        com.example.gistracker.model.MapTileType.HUMANITARIAN -> TileSourceFactory.DEFAULT_TILE_SOURCE
+                        com.geotrace.model.MapTileType.STANDARD -> TileSourceFactory.MAPNIK
+                        com.geotrace.model.MapTileType.TOPO -> TileSourceFactory.OpenTopo
+                        com.geotrace.model.MapTileType.HUMANITARIAN -> TileSourceFactory.DEFAULT_TILE_SOURCE
                     }
                     setTileSource(initialTile)
                     setMultiTouchControls(true)
@@ -292,7 +292,7 @@ fun MapViewComposable(
                             letterSpacing = 0.04.sp,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
-                        com.example.gistracker.model.MapTileType.values().forEach { tileType ->
+                        com.geotrace.model.MapTileType.values().forEach { tileType ->
                             val isSelected = settings.mapTileType == tileType
                             Surface(
                                 shape = RoundedCornerShape(8.dp),

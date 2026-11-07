@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.gistracker"
+    namespace = "com.geotrace"
     compileSdk = 36
 
     val versionCodeOverride = System.getenv("ORG_GRADLE_PROJECT_versionCode")?.toIntOrNull()
@@ -52,7 +52,7 @@ android {
         }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("releaseConfig")
+            signingConfig = signingConfigs.getByName("debugConfig")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

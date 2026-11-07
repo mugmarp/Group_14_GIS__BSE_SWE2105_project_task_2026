@@ -1,8 +1,8 @@
-package com.example.gistracker
+package com.geotrace
 
 import android.app.Application
-import com.example.gistracker.data.LocationRepository
-import com.example.gistracker.service.CellularDiagnosticManager
+import com.geotrace.data.LocationRepository
+import com.geotrace.service.CellularDiagnosticManager
 import org.osmdroid.config.Configuration
 
 class LocationTrackerApp : Application() {

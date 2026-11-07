@@ -1,4 +1,4 @@
-package com.example.gistracker.ui.screens
+package com.geotrace.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -42,11 +42,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.gistracker.model.CoordinateFormat
-import com.example.gistracker.model.MapTileType
-import com.example.gistracker.model.SpeedUnit
-import com.example.gistracker.ui.theme.LocalCustomColors
-import com.example.gistracker.viewmodel.TrackerViewModel
+import com.geotrace.model.CoordinateFormat
+import com.geotrace.model.MapTileType
+import com.geotrace.model.SpeedUnit
+import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.viewmodel.TrackerViewModel
 
 @Composable
 fun SettingsScreen(

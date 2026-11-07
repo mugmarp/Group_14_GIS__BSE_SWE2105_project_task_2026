@@ -1,4 +1,4 @@
-package com.example.gistracker.ui.screens
+package com.geotrace.ui.screens
 
 import android.content.Context
 import android.content.Intent
@@ -49,9 +49,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.gistracker.model.TrackingSession
-import com.example.gistracker.ui.theme.LocalCustomColors
-import com.example.gistracker.viewmodel.TrackerViewModel
+import com.geotrace.model.TrackingSession
+import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.viewmodel.TrackerViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale

@@ -1,4 +1,4 @@
-package com.example.gistracker.service
+package com.geotrace.service
 
 import android.content.Context
 import android.os.Build
@@ -12,7 +12,7 @@ import android.telephony.CellSignalStrengthLte
 import android.telephony.CellSignalStrengthNr
 import android.telephony.CellSignalStrengthWcdma
 import android.telephony.TelephonyManager
-import com.example.gistracker.model.CellTowerInfo
+import com.geotrace.model.CellTowerInfo
 
 class CellularDiagnosticManager(private val context: Context) {
 

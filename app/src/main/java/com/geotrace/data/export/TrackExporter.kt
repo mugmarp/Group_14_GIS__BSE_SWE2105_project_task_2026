@@ -1,8 +1,8 @@
-package com.example.gistracker.data.export
+package com.geotrace.data.export
 
-import com.example.gistracker.model.CellTowerInfo
-import com.example.gistracker.model.LocationPoint
-import com.example.gistracker.model.TrackingSession
+import com.geotrace.model.CellTowerInfo
+import com.geotrace.model.LocationPoint
+import com.geotrace.model.TrackingSession
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale

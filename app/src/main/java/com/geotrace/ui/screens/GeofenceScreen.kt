@@ -1,4 +1,4 @@
-package com.example.gistracker.ui.screens
+package com.geotrace.ui.screens
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
@@ -67,10 +67,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.gistracker.model.GeofenceCategory
-import com.example.gistracker.model.GeofenceZone
-import com.example.gistracker.ui.theme.LocalCustomColors
-import com.example.gistracker.viewmodel.TrackerViewModel
+import com.geotrace.model.GeofenceCategory
+import com.geotrace.model.GeofenceZone
+import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.viewmodel.TrackerViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale

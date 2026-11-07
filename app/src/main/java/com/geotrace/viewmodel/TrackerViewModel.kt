@@ -1,19 +1,19 @@
-package com.example.gistracker.viewmodel
+package com.geotrace.viewmodel
 
 import android.app.Application
 import android.content.Context
 import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.gistracker.LocationTrackerApp
-import com.example.gistracker.data.export.TrackExporter
-import com.example.gistracker.model.CellTowerInfo
-import com.example.gistracker.model.GeofenceCategory
-import com.example.gistracker.model.GeofenceZone
-import com.example.gistracker.model.LocationPoint
-import com.example.gistracker.model.TrackingMode
-import com.example.gistracker.model.TrackingSession
-import com.example.gistracker.service.LocationForegroundService
+import com.geotrace.LocationTrackerApp
+import com.geotrace.data.export.TrackExporter
+import com.geotrace.model.CellTowerInfo
+import com.geotrace.model.GeofenceCategory
+import com.geotrace.model.GeofenceZone
+import com.geotrace.model.LocationPoint
+import com.geotrace.model.TrackingMode
+import com.geotrace.model.TrackingSession
+import com.geotrace.service.LocationForegroundService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -41,8 +41,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val filteredJitterMeters: StateFlow<Double> = repository.filteredJitterMeters
     val filteredJitterCount: StateFlow<Int> = repository.filteredJitterCount
 
-    private val _settings = MutableStateFlow(com.example.gistracker.model.TrackerSettings())
-    val settings: StateFlow<com.example.gistracker.model.TrackerSettings> = _settings.asStateFlow()
+    private val _settings = MutableStateFlow(com.geotrace.model.TrackerSettings())
+    val settings: StateFlow<com.geotrace.model.TrackerSettings> = _settings.asStateFlow()
 
     private val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(application)
     private var standbyCallback: com.google.android.gms.location.LocationCallback? = null
@@ -228,15 +228,15 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         repository.updateCellTowers(towers)
     }
 
-    fun updateSpeedUnit(unit: com.example.gistracker.model.SpeedUnit) {
+    fun updateSpeedUnit(unit: com.geotrace.model.SpeedUnit) {
         _settings.value = _settings.value.copy(speedUnit = unit)
     }
 
-    fun updateCoordinateFormat(format: com.example.gistracker.model.CoordinateFormat) {
+    fun updateCoordinateFormat(format: com.geotrace.model.CoordinateFormat) {
         _settings.value = _settings.value.copy(coordinateFormat = format)
     }
 
-    fun updateMapTileType(tileType: com.example.gistracker.model.MapTileType) {
+    fun updateMapTileType(tileType: com.geotrace.model.MapTileType) {
         _settings.value = _settings.value.copy(mapTileType = tileType)
     }
 

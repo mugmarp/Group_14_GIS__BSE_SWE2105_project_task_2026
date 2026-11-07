@@ -1,4 +1,4 @@
-package com.example.gistracker
+package com.geotrace
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -72,15 +72,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.compose.material.icons.filled.NotificationsActive
-import com.example.gistracker.ui.screens.CellularDiagnosticScreen
-import com.example.gistracker.ui.screens.GeofenceScreen
-import com.example.gistracker.ui.screens.HistoryScreen
-import com.example.gistracker.ui.screens.MapScreen
-import com.example.gistracker.ui.screens.ResearchAnalysisScreen
-import com.example.gistracker.ui.screens.SettingsScreen
-import com.example.gistracker.ui.theme.GISTrackerTheme
-import com.example.gistracker.ui.theme.LocalCustomColors
-import com.example.gistracker.viewmodel.TrackerViewModel
+import com.geotrace.ui.screens.CellularDiagnosticScreen
+import com.geotrace.ui.screens.GeofenceScreen
+import com.geotrace.ui.screens.HistoryScreen
+import com.geotrace.ui.screens.MapScreen
+import com.geotrace.ui.screens.ResearchAnalysisScreen
+import com.geotrace.ui.screens.SettingsScreen
+import com.geotrace.ui.theme.GISTrackerTheme
+import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.viewmodel.TrackerViewModel
 import kotlinx.coroutines.launch
 
 enum class Screen(val title: String, val testTag: String) {

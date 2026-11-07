@@ -1,4 +1,4 @@
-package com.example.gistracker.ui.theme
+package com.geotrace.ui.theme
 
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Shapes

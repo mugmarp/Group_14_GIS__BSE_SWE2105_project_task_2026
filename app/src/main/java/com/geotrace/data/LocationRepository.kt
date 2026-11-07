@@ -1,15 +1,15 @@
-package com.example.gistracker.data
+package com.geotrace.data
 
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
-import com.example.gistracker.model.CellTowerInfo
-import com.example.gistracker.model.GeofenceAlert
-import com.example.gistracker.model.GeofenceCategory
-import com.example.gistracker.model.GeofenceZone
-import com.example.gistracker.model.LocationPoint
-import com.example.gistracker.model.TrackingMode
-import com.example.gistracker.model.TrackingSession
+import com.geotrace.model.CellTowerInfo
+import com.geotrace.model.GeofenceAlert
+import com.geotrace.model.GeofenceCategory
+import com.geotrace.model.GeofenceZone
+import com.geotrace.model.LocationPoint
+import com.geotrace.model.TrackingMode
+import com.geotrace.model.TrackingSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
