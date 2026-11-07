@@ -35,6 +35,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -360,7 +362,177 @@ fun SettingsScreen(
             }
         }
 
-        // Section 4: Mission Telemetry Summary
+        // Section 4: Cellular Positioning Engine (OpenCellID Uganda Live Tower Pinning)
+        item {
+            var apiKeyInput by androidx.compose.runtime.remember(settings.openCellIdApiKey) {
+                androidx.compose.runtime.mutableStateOf(settings.openCellIdApiKey)
+            }
+
+            SettingsCard(
+                title = "CELLULAR POSITIONING ENGINE (OPENCELLID)",
+                icon = { Icon(Icons.Default.Tune, contentDescription = null, tint = colorScheme.secondary, modifier = Modifier.size(18.dp)) },
+                accentColor = colorScheme.secondary
+            ) {
+                SettingToggleRow(
+                    title = "Live Uganda Cell Tower Pinning",
+                    subtitle = "Plot serving base station coordinates, estimated coverage radius & distance ray on map (MTN 641-10 & Airtel 641-22)",
+                    checked = settings.showCellTowerPin,
+                    onCheckedChange = { viewModel.toggleCellTowerPin(it) }
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                androidx.compose.material3.OutlinedTextField(
+                    value = apiKeyInput,
+                    onValueChange = {
+                        apiKeyInput = it
+                        viewModel.updateOpenCellIdApiKey(it)
+                    },
+                    label = { Text("OpenCellID API Key (Optional)", fontSize = 11.sp) },
+                    placeholder = { Text("Bundled Uganda offline cache active", fontSize = 11.sp) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
+                    singleLine = true
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "A pre-seeded offline Uganda database is bundled covering MUST Kihumuro (FAST Block, Kihumuro Hill), MUST Town Campus, and Mbarara Central. Live queries execute automatically when an API key is provided.",
+                    fontSize = 10.sp,
+                    color = colorScheme.onSurfaceVariant,
+                    lineHeight = 14.sp
+                )
+            }
+        }
+
+        // Section 5: In-App Updates & CI/CD Engine
+        item {
+            val updateStatus by viewModel.updateStatus.collectAsState()
+            val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
+
+            SettingsCard(
+                title = "APPLICATION UPDATES & CI/CD RELEASES",
+                icon = { Icon(Icons.Default.Power, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(18.dp)) },
+                accentColor = colorScheme.primary
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Installed Version: v${com.geotrace.BuildConfig.VERSION_NAME} (${com.geotrace.BuildConfig.VERSION_CODE})",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Source: github.com/${com.geotrace.service.AppUpdateManager.GITHUB_REPO}",
+                            fontSize = 10.sp,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    androidx.compose.material3.Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                viewModel.appUpdateManager.checkForUpdates()
+                            }
+                        },
+                        enabled = updateStatus !is com.geotrace.service.UpdateStatus.Checking,
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        if (updateStatus is com.geotrace.service.UpdateStatus.Checking) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                color = colorScheme.onPrimary,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text("Check Updates", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                // Status details card
+                when (val status = updateStatus) {
+                    is com.geotrace.service.UpdateStatus.UpdateAvailable -> {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        androidx.compose.material3.Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = colorScheme.primary.copy(alpha = 0.1f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.4f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = "New Update Available: ${status.info.tagName}",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.primary
+                                )
+                                Text(
+                                    text = status.info.body,
+                                    fontSize = 10.sp,
+                                    color = colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                )
+                                androidx.compose.material3.Button(
+                                    onClick = {
+                                        viewModel.appUpdateManager.startDownload(status.info)
+                                    },
+                                    shape = RoundedCornerShape(6.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Download & Install Release APK (${status.info.apkFileName})", fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+                    is com.geotrace.service.UpdateStatus.UpToDate -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "GeoTrace is on the latest official SWE2105 release.",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colorScheme.tertiary
+                        )
+                    }
+                    is com.geotrace.service.UpdateStatus.Downloading -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Downloading APK in background via DownloadManager...",
+                            fontSize = 11.sp,
+                            color = colorScheme.primary
+                        )
+                    }
+                    is com.geotrace.service.UpdateStatus.ReadyToInstall -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        androidx.compose.material3.Button(
+                            onClick = { viewModel.appUpdateManager.installApk(status.apkFile) },
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Install Downloaded APK Now", fontSize = 11.sp)
+                        }
+                    }
+                    is com.geotrace.service.UpdateStatus.Error -> {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Update Check Notice: ${status.message}",
+                            fontSize = 11.sp,
+                            color = colorScheme.error
+                        )
+                    }
+                    else -> {}
+                }
+            }
+        }
+
+        // Section 6: Mission Telemetry Summary
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -370,7 +542,7 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text(
-                        text = "GEOTRACK SAFE TELEMETRY CORE",
+                        text = "GEOTRACE SAFE TELEMETRY CORE",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.04.sp,
@@ -379,8 +551,9 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         text = "• Positioning Engine: FusedLocationProviderClient (GNSS Multi-Constellation)\n" +
-                               "• Cellular Telemetry: TelephonyManager Hardware Radio Layer\n" +
-                               "• Persistence: SQLite Local (zero-cloud leak, cap 97 compliant)\n" +
+                               "• Cellular Telemetry: TelephonyManager Radio Layer + OpenCellID\n" +
+                               "• Release Channel: GitHub Releases (${com.geotrace.service.AppUpdateManager.GITHUB_REPO})\n" +
+                               "• Persistence: SQLite Local (zero-cloud leak, Cap 97 compliant)\n" +
                                "• Active Recording Session: ${activeSession?.name ?: "Idle (Standby Mode)"}",
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,

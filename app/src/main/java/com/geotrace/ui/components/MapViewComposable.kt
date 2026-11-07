@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -66,8 +67,10 @@ fun MapViewComposable(
     currentLocation: LocationPoint?,
     trailPoints: List<LocationPoint>,
     geofenceZones: List<com.geotrace.model.GeofenceZone> = emptyList(),
+    cellTowerLocation: com.geotrace.model.CellTowerLocation? = null,
     settings: com.geotrace.model.TrackerSettings = com.geotrace.model.TrackerSettings(),
     onSelectTileLayer: ((com.geotrace.model.MapTileType) -> Unit)? = null,
+    onToggleCellTowerPin: ((Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -261,6 +264,49 @@ fun MapViewComposable(
                     map.overlays.add(zonePolygon)
                 }
 
+                // 4. Draw Serving Cell Tower Pin, Coverage Radius & Vector Ray (Option 2 requirement)
+                if (settings.showCellTowerPin && cellTowerLocation != null) {
+                    val towerGeoPoint = GeoPoint(cellTowerLocation.latitude, cellTowerLocation.longitude)
+
+                    // Cell Tower Coverage / Uncertainty Radius Circle
+                    val towerCirclePoints = computeCircleGeoPoints(towerGeoPoint, cellTowerLocation.rangeMeters)
+                    val towerCoveragePolygon = Polygon(map).apply {
+                        points = towerCirclePoints
+                        fillPaint.color = android.graphics.Color.argb(35, 217, 119, 6) // Amber/Gold translucent
+                        outlinePaint.color = android.graphics.Color.argb(190, 217, 119, 6)
+                        outlinePaint.strokeWidth = 2.5f
+                        outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(12f, 10f), 0f)
+                        title = "📡 ${cellTowerLocation.operatorName} Base Station"
+                        snippet = "CID: ${cellTowerLocation.cellId} | Coverage Radius: ±${cellTowerLocation.rangeMeters.toInt()}m"
+                    }
+                    map.overlays.add(towerCoveragePolygon)
+
+                    // Connecting Vector Ray (from GPS fix to Cell Tower)
+                    if (currentLocation != null) {
+                        val vectorRay = Polyline(map).apply {
+                            outlinePaint.color = android.graphics.Color.argb(220, 217, 119, 6)
+                            outlinePaint.strokeWidth = 3f
+                            outlinePaint.strokeCap = Paint.Cap.ROUND
+                            outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 10f), 0f)
+                            title = "GPS to Cell Tower Vector Distance"
+                            setPoints(listOf(
+                                GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                                towerGeoPoint
+                            ))
+                        }
+                        map.overlays.add(vectorRay)
+                    }
+
+                    // Cell Tower Marker
+                    val towerMarker = Marker(map).apply {
+                        position = towerGeoPoint
+                        title = "📡 Serving Cell Tower: ${cellTowerLocation.operatorName}"
+                        snippet = "${cellTowerLocation.addressEstimate ?: "Uganda Cellular Network"} | Range: ±${cellTowerLocation.rangeMeters.toInt()}m"
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    }
+                    map.overlays.add(towerMarker)
+                }
+
                 map.invalidate()
             },
             modifier = Modifier.fillMaxSize()
@@ -323,6 +369,52 @@ fun MapViewComposable(
                                         )
                                         Text(
                                             text = tileType.description,
+                                            fontSize = 9.sp,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (onToggleCellTowerPin != null) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(1.dp)
+                                    .background(colorScheme.outlineVariant.copy(alpha = 0.5f))
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (settings.showCellTowerPin) colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
+                                modifier = Modifier
+                                    .clickable {
+                                        onToggleCellTowerPin(!settings.showCellTowerPin)
+                                    }
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.SatelliteAlt,
+                                        contentDescription = null,
+                                        tint = if (settings.showCellTowerPin) colorScheme.primary else colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text(
+                                            text = if (settings.showCellTowerPin) "Serving Cell Tower: ON" else "Serving Cell Tower: OFF",
+                                            fontSize = 11.sp,
+                                            fontWeight = if (settings.showCellTowerPin) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (settings.showCellTowerPin) colorScheme.primary else colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "OpenCellID Uganda Pin & Ray",
                                             fontSize = 9.sp,
                                             color = colorScheme.onSurfaceVariant
                                         )

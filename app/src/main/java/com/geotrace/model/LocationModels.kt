@@ -159,3 +159,15 @@ data class GeofenceAlert(
     val eventType: String, // "ENTERED" or "EXITED"
     val timestamp: Long = System.currentTimeMillis()
 )
+
+data class CellTowerLocation(
+    val latitude: Double,
+    val longitude: Double,
+    val rangeMeters: Double,
+    val operatorName: String,
+    val radioType: String,
+    val cellId: Long,
+    val lac: Int,
+    val isFromOfflineCache: Boolean = false,
+    val addressEstimate: String? = null
+)

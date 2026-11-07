@@ -24,5 +24,7 @@ data class TrackerSettings(
     val showAccuracyRing: Boolean = true,
     val followUserLocation: Boolean = true,
     val stationaryJitterThresholdMeters: Float = 1.5f,
-    val keepScreenOn: Boolean = true
+    val keepScreenOn: Boolean = true,
+    val showCellTowerPin: Boolean = true,
+    val openCellIdApiKey: String = ""
 )

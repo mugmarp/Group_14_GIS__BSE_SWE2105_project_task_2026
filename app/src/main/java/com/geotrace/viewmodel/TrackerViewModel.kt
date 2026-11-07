@@ -16,6 +16,7 @@ import com.geotrace.model.TrackingSession
 import com.geotrace.service.LocationForegroundService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -41,14 +42,41 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val filteredJitterMeters: StateFlow<Double> = repository.filteredJitterMeters
     val filteredJitterCount: StateFlow<Int> = repository.filteredJitterCount
 
+    private val _cellTowerLocation = MutableStateFlow<com.geotrace.model.CellTowerLocation?>(null)
+    val cellTowerLocation: StateFlow<com.geotrace.model.CellTowerLocation?> = _cellTowerLocation.asStateFlow()
+
     private val _settings = MutableStateFlow(com.geotrace.model.TrackerSettings())
     val settings: StateFlow<com.geotrace.model.TrackerSettings> = _settings.asStateFlow()
+
+    val appUpdateManager = com.geotrace.service.AppUpdateManager(application)
+    val updateStatus = appUpdateManager.updateStatus
 
     private val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(application)
     private var standbyCallback: com.google.android.gms.location.LocationCallback? = null
 
     init {
         startStandbyLocationUpdates()
+        observeCellTowerLocation()
+    }
+
+    private fun observeCellTowerLocation() {
+        viewModelScope.launch {
+            combine(cellTowers, currentLocation) { towers, loc ->
+                Pair(towers.firstOrNull { it.isRegistered } ?: towers.firstOrNull(), loc)
+            }.collect { (servingCell, loc) ->
+                if (servingCell != null) {
+                    val location = com.geotrace.service.OpenCellIdClient.resolveCellLocation(
+                        cellInfo = servingCell,
+                        apiKey = _settings.value.openCellIdApiKey,
+                        userLatitude = loc?.latitude,
+                        userLongitude = loc?.longitude
+                    )
+                    _cellTowerLocation.value = location
+                } else {
+                    _cellTowerLocation.value = null
+                }
+            }
+        }
     }
 
     @android.annotation.SuppressLint("MissingPermission")
@@ -259,5 +287,14 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     fun toggleKeepScreenOn(keepOn: Boolean) {
         _settings.value = _settings.value.copy(keepScreenOn = keepOn)
+    }
+
+    fun toggleCellTowerPin(show: Boolean) {
+        _settings.value = _settings.value.copy(showCellTowerPin = show)
+    }
+
+    fun updateOpenCellIdApiKey(apiKey: String) {
+        _settings.value = _settings.value.copy(openCellIdApiKey = apiKey)
+        refreshCellTowers()
     }
 }

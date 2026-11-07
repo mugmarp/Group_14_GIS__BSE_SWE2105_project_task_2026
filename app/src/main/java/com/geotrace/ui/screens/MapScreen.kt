@@ -88,6 +88,7 @@ fun MapScreen(
     val trackingMode by viewModel.trackingMode.collectAsState()
     val geofenceZones by viewModel.geofenceZones.collectAsState()
     val settings by viewModel.settings.collectAsState()
+    val cellTowerLocation by viewModel.cellTowerLocation.collectAsState()
 
     var showStartDialog by remember { mutableStateOf(false) }
     var showProfileDialog by remember { mutableStateOf(false) }
@@ -111,9 +112,13 @@ fun MapScreen(
             currentLocation = currentLocation,
             trailPoints = trailPoints,
             geofenceZones = geofenceZones,
+            cellTowerLocation = cellTowerLocation,
             settings = settings,
             onSelectTileLayer = { selectedTile ->
                 viewModel.updateMapTileType(selectedTile)
+            },
+            onToggleCellTowerPin = { enabled ->
+                viewModel.toggleCellTowerPin(enabled)
             }
         )
 
@@ -372,6 +377,41 @@ fun MapScreen(
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (isHotspot) customColors.warning else colorScheme.tertiary
+                            )
+                        }
+                    }
+                }
+
+                // Cell Tower Pin Status Chip
+                if (settings.showCellTowerPin && cellTowerLocation != null) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color(0xFFD97706).copy(alpha = 0.12f),
+                        shadowElevation = 3.dp,
+                        border = BorderStroke(1.dp, Color(0xFFD97706).copy(alpha = 0.5f)),
+                        modifier = Modifier
+                            .clickable {
+                                viewModel.toggleCellTowerPin(!settings.showCellTowerPin)
+                            }
+                            .testTag("cell_tower_status_chip")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.CellTower,
+                                contentDescription = null,
+                                tint = Color(0xFFD97706),
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "📡 Tower: ±${cellTowerLocation?.rangeMeters?.toInt()}m",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFD97706)
                             )
                         }
                     }
