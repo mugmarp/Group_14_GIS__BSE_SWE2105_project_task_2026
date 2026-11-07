@@ -19,9 +19,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Balance
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Layers
@@ -93,6 +98,7 @@ fun MapScreen(
     var showStartDialog by remember { mutableStateOf(false) }
     var showProfileDialog by remember { mutableStateOf(false) }
     var sessionNameInput by remember { mutableStateOf("") }
+    var isHeaderExpanded by remember { mutableStateOf(true) }
 
 
     // Keep screen awake while recording if enabled in settings
@@ -188,27 +194,49 @@ fun MapScreen(
                                 }
                             }
 
-                            // ☰ Hamburger Menu on the RIGHT
-                            IconButton(
-                                onClick = onOpenMenu,
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
-                                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
-                                    .testTag("menu_btn")
-                            ) {
-                                Icon(
-                                    Icons.Default.Menu,
-                                    contentDescription = "Open Application Menu",
-                                    tint = colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
-                                )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                // Collapse / Expand Header Pill (Saves vertical space on small or landscape screens)
+                                IconButton(
+                                    onClick = { isHeaderExpanded = !isHeaderExpanded },
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
+                                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
+                                        .testTag("toggle_header_btn")
+                                ) {
+                                    Icon(
+                                        if (isHeaderExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                                        contentDescription = if (isHeaderExpanded) "Collapse Telemetry Header" else "Expand Telemetry Header",
+                                        tint = colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.width(6.dp))
+
+                                // ☰ Hamburger Menu on the RIGHT
+                                IconButton(
+                                    onClick = onOpenMenu,
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
+                                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
+                                        .testTag("menu_btn")
+                                ) {
+                                    Icon(
+                                        Icons.Default.Menu,
+                                        contentDescription = "Open Application Menu",
+                                        tint = colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                        if (isHeaderExpanded) {
+                            Spacer(modifier = Modifier.height(10.dp))
 
-                        // Vector Coordinates Bar (Respects CoordinateFormat: DD vs DMS)
+                            // Vector Coordinates Bar (Respects CoordinateFormat: DD vs DMS)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -296,16 +324,19 @@ fun MapScreen(
                                 )
                             }
                         }
+                        } // End of if (isHeaderExpanded)
                     }
                 }
             }
 
-            // Quick Floating Badges Row (Positioning Engine Profile Only - Top Layer Pill Discarded)
+            // Quick Floating Badges Row (Horizontally scrollable for small screens)
+            val badgesScrollState = rememberScrollState()
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(top = 8.dp),
-                horizontalArrangement = Arrangement.Start,
+                    .padding(top = 8.dp)
+                    .horizontalScroll(badgesScrollState),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Floating Positioning Profile Pill
@@ -353,7 +384,6 @@ fun MapScreen(
                 val activeZone = geofenceZones.firstOrNull { it.isInside }
                 if (activeZone != null) {
                     val isHotspot = activeZone.category == com.geotrace.model.GeofenceCategory.BODA_HOTSPOT
-                    Spacer(modifier = Modifier.width(8.dp))
                     Surface(
                         shape = RoundedCornerShape(20.dp),
                         color = if (isHotspot) customColors.warning.copy(alpha = 0.14f) else colorScheme.tertiary.copy(alpha = 0.14f),
@@ -384,7 +414,6 @@ fun MapScreen(
 
                 // Cell Tower Pin Status Chip
                 if (settings.showCellTowerPin && cellTowerLocation != null) {
-                    Spacer(modifier = Modifier.width(8.dp))
                     Surface(
                         shape = RoundedCornerShape(20.dp),
                         color = Color(0xFFD97706).copy(alpha = 0.12f),
@@ -553,7 +582,11 @@ fun MapScreen(
                 )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                val dialogScrollState = rememberScrollState()
+                Column(
+                    modifier = Modifier.verticalScroll(dialogScrollState),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     Text(
                         text = "Select positioning telemetry engine based on mission requirement and battery budget:",
                         fontSize = 12.sp,

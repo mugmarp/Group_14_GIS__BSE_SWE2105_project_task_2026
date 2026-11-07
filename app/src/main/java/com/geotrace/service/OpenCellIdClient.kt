@@ -132,9 +132,11 @@ object OpenCellIdClient {
         val cacheKey = "${mcc}_${mnc}_${cid}_$lac"
         memoryCache[cacheKey]?.let { return@withContext it }
 
-        // 1. Try Live OpenCellID API if custom key is provided
-        if (apiKey.isNotBlank()) {
-            val liveResult = queryOpenCellIdApi(apiKey, mcc, mnc, lac, cid, cellInfo.type)
+        val effectiveKey = apiKey.trim().ifBlank { com.geotrace.BuildConfig.OPENCELLID_API_KEY.trim() }
+
+        // 1. Try Live OpenCellID API if effective key is provided
+        if (effectiveKey.isNotBlank()) {
+            val liveResult = queryOpenCellIdApi(effectiveKey, mcc, mnc, lac, cid, cellInfo.type)
             if (liveResult != null) {
                 memoryCache[cacheKey] = liveResult
                 return@withContext liveResult

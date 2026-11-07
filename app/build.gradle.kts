@@ -16,6 +16,9 @@ android {
         targetSdk = 36
         versionCode = versionCodeOverride ?: 1
         versionName = versionNameOverride ?: "1.0"
+
+        val openCellIdKey = System.getenv("OPENCELLID_API_KEY") ?: ""
+        buildConfigField("String", "OPENCELLID_API_KEY", "\"$openCellIdKey\"")
     }
 
     signingConfigs {

@@ -388,8 +388,13 @@ fun SettingsScreen(
                         apiKeyInput = it
                         viewModel.updateOpenCellIdApiKey(it)
                     },
-                    label = { Text("OpenCellID API Key (Optional)", fontSize = 11.sp) },
-                    placeholder = { Text("Bundled Uganda offline cache active", fontSize = 11.sp) },
+                    label = { Text("OpenCellID API Key (Optional Override)", fontSize = 11.sp) },
+                    placeholder = { 
+                        Text(
+                            if (com.geotrace.BuildConfig.OPENCELLID_API_KEY.isNotBlank()) "CI/CD Secret Key Active (Auto)" else "Bundled Uganda offline cache active", 
+                            fontSize = 11.sp
+                        ) 
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, fontFamily = FontFamily.Monospace),

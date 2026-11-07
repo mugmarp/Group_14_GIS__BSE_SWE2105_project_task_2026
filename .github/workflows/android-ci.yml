@@ -93,6 +93,8 @@ jobs:
         run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
 
       - name: Assemble Debug APK
+        env:
+          OPENCELLID_API_KEY: ${{ secrets.OPENCELLID_API_KEY }}
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload Debug APK Artifact
@@ -126,6 +128,7 @@ jobs:
 
       - name: Assemble Release APK
         env:
+          OPENCELLID_API_KEY: ${{ secrets.OPENCELLID_API_KEY }}
           ORG_GRADLE_PROJECT_versionName: ${{ steps.version.outputs.VERSION_NAME }}
           ORG_GRADLE_PROJECT_versionCode: ${{ steps.version.outputs.VERSION_CODE }}
           ORG_GRADLE_PROJECT_signingStoreFile: ${{ env.STORE_FILE }}
