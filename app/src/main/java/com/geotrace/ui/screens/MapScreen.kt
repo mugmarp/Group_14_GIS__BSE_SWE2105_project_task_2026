@@ -94,6 +94,7 @@ fun MapScreen(
     val geofenceZones by viewModel.geofenceZones.collectAsState()
     val settings by viewModel.settings.collectAsState()
     val cellTowerLocation by viewModel.cellTowerLocation.collectAsState()
+    val allCellTowers by viewModel.allCellTowerLocations.collectAsState()
 
     var showStartDialog by remember { mutableStateOf(false) }
     var showProfileDialog by remember { mutableStateOf(false) }
@@ -119,6 +120,7 @@ fun MapScreen(
             trailPoints = trailPoints,
             geofenceZones = geofenceZones,
             cellTowerLocation = cellTowerLocation,
+            allCellTowers = allCellTowers,
             settings = settings,
             onSelectTileLayer = { selectedTile ->
                 viewModel.updateMapTileType(selectedTile)
@@ -183,13 +185,15 @@ fun MapScreen(
                                     Text(
                                         text = when {
                                              activeSession != null -> "RECORDING • ${activeSession?.name}"
+                                             trackingMode == TrackingMode.POWER_SAVER -> "CELLULAR ONLY • SECTOR TELEMETRY (MTN/AIRTEL)"
+                                             currentLocation?.provider == "cellular" -> "CELLULAR FIX • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
                                              currentLocation != null -> "GNSS LOCKED • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
                                              else -> "STANDBY • AWAITING GNSS SATELLITE FIX"
                                         },
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         letterSpacing = 0.04.sp,
-                                        color = accentLineColor
+                                        color = if (trackingMode == TrackingMode.POWER_SAVER) Color(0xFFD97706) else accentLineColor
                                     )
                                 }
                             }

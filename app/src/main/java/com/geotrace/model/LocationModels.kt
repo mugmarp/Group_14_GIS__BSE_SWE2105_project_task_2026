@@ -169,5 +169,7 @@ data class CellTowerLocation(
     val cellId: Long,
     val lac: Int,
     val isFromOfflineCache: Boolean = false,
-    val addressEstimate: String? = null
+    val addressEstimate: String? = null,
+    val isServing: Boolean = true,
+    val signalDbm: Int? = null
 )

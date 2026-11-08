@@ -68,6 +68,7 @@ fun MapViewComposable(
     trailPoints: List<LocationPoint>,
     geofenceZones: List<com.geotrace.model.GeofenceZone> = emptyList(),
     cellTowerLocation: com.geotrace.model.CellTowerLocation? = null,
+    allCellTowers: List<com.geotrace.model.CellTowerLocation> = emptyList(),
     settings: com.geotrace.model.TrackerSettings = com.geotrace.model.TrackerSettings(),
     onSelectTileLayer: ((com.geotrace.model.MapTileType) -> Unit)? = null,
     onToggleCellTowerPin: ((Boolean) -> Unit)? = null,
@@ -264,47 +265,82 @@ fun MapViewComposable(
                     map.overlays.add(zonePolygon)
                 }
 
-                // 4. Draw Serving Cell Tower Pin, Coverage Radius & Vector Ray (Option 2 requirement)
-                if (settings.showCellTowerPin && cellTowerLocation != null) {
-                    val towerGeoPoint = GeoPoint(cellTowerLocation.latitude, cellTowerLocation.longitude)
+                // 4. Draw Cell Towers (Option 2 requirement: Distinguish Active Serving Mast vs Neighbor/Idle Masts)
+                if (settings.showCellTowerPin) {
+                    val towersToDraw = if (allCellTowers.isNotEmpty()) allCellTowers else listOfNotNull(cellTowerLocation)
+                    val servingTower = cellTowerLocation ?: towersToDraw.firstOrNull { it.isServing }
 
-                    // Cell Tower Coverage / Uncertainty Radius Circle
-                    val towerCirclePoints = computeCircleGeoPoints(towerGeoPoint, cellTowerLocation.rangeMeters)
-                    val towerCoveragePolygon = Polygon(map).apply {
-                        points = towerCirclePoints
-                        fillPaint.color = android.graphics.Color.argb(35, 217, 119, 6) // Amber/Gold translucent
-                        outlinePaint.color = android.graphics.Color.argb(190, 217, 119, 6)
-                        outlinePaint.strokeWidth = 2.5f
-                        outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(12f, 10f), 0f)
-                        title = "📡 ${cellTowerLocation.operatorName} Base Station"
-                        snippet = "CID: ${cellTowerLocation.cellId} | Coverage Radius: ±${cellTowerLocation.rangeMeters.toInt()}m"
-                    }
-                    map.overlays.add(towerCoveragePolygon)
+                    // First pass: Draw Neighbor / Standby Towers (Muted Gray, Not in Use)
+                    for (tower in towersToDraw) {
+                        if (tower.cellId != servingTower?.cellId) {
+                            val neighborGeoPoint = GeoPoint(tower.latitude, tower.longitude)
 
-                    // Connecting Vector Ray (from GPS fix to Cell Tower)
-                    if (currentLocation != null) {
-                        val vectorRay = Polyline(map).apply {
-                            outlinePaint.color = android.graphics.Color.argb(220, 217, 119, 6)
-                            outlinePaint.strokeWidth = 3f
-                            outlinePaint.strokeCap = Paint.Cap.ROUND
-                            outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 10f), 0f)
-                            title = "GPS to Cell Tower Vector Distance"
-                            setPoints(listOf(
-                                GeoPoint(currentLocation.latitude, currentLocation.longitude),
-                                towerGeoPoint
-                            ))
+                            // Subtle dashed outline for neighbor footprint
+                            val neighborCirclePoints = computeCircleGeoPoints(neighborGeoPoint, tower.rangeMeters)
+                            val neighborPolygon = Polygon(map).apply {
+                                points = neighborCirclePoints
+                                fillPaint.color = android.graphics.Color.argb(12, 100, 116, 139) // Slate gray faint
+                                outlinePaint.color = android.graphics.Color.argb(120, 148, 163, 184)
+                                outlinePaint.strokeWidth = 1.5f
+                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(8f, 8f), 0f)
+                                title = "🗼 Neighbor/Idle Mast (${tower.operatorName})"
+                                snippet = "CID: ${tower.cellId} | Status: STANDBY (Available for Handover)"
+                            }
+                            map.overlays.add(neighborPolygon)
+
+                            // Muted neighbor marker
+                            val neighborMarker = Marker(map).apply {
+                                position = neighborGeoPoint
+                                title = "🗼 Idle/Neighbor Tower: ${tower.operatorName}"
+                                snippet = "CID: ${tower.cellId} | Standby Sector (Not In Use)"
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            }
+                            map.overlays.add(neighborMarker)
                         }
-                        map.overlays.add(vectorRay)
                     }
 
-                    // Cell Tower Marker
-                    val towerMarker = Marker(map).apply {
-                        position = towerGeoPoint
-                        title = "📡 Serving Cell Tower: ${cellTowerLocation.operatorName}"
-                        snippet = "${cellTowerLocation.addressEstimate ?: "Uganda Cellular Network"} | Range: ±${cellTowerLocation.rangeMeters.toInt()}m"
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                    // Second pass: Draw Active Serving Tower (Vibrant Amber/Gold, In Use)
+                    if (servingTower != null) {
+                        val towerGeoPoint = GeoPoint(servingTower.latitude, servingTower.longitude)
+
+                        // Serving Cell Tower Coverage / Uncertainty Radius Circle
+                        val towerCirclePoints = computeCircleGeoPoints(towerGeoPoint, servingTower.rangeMeters)
+                        val towerCoveragePolygon = Polygon(map).apply {
+                            points = towerCirclePoints
+                            fillPaint.color = android.graphics.Color.argb(40, 217, 119, 6) // Amber/Gold translucent
+                            outlinePaint.color = android.graphics.Color.argb(220, 217, 119, 6)
+                            outlinePaint.strokeWidth = 2.8f
+                            outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(12f, 10f), 0f)
+                            title = "📡 ACTIVE SERVING BASE STATION: ${servingTower.operatorName}"
+                            snippet = "CID: ${servingTower.cellId} | LAC: ${servingTower.lac} | Coverage: ±${servingTower.rangeMeters.toInt()}m"
+                        }
+                        map.overlays.add(towerCoveragePolygon)
+
+                        // Connecting Vector Ray (from Phone location to Active Serving Tower)
+                        if (currentLocation != null) {
+                            val vectorRay = Polyline(map).apply {
+                                outlinePaint.color = android.graphics.Color.argb(230, 217, 119, 6)
+                                outlinePaint.strokeWidth = 3.5f
+                                outlinePaint.strokeCap = Paint.Cap.ROUND
+                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 10f), 0f)
+                                title = "Active Radio Link (Phone ↔ Serving Tower)"
+                                setPoints(listOf(
+                                    GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                                    towerGeoPoint
+                                ))
+                            }
+                            map.overlays.add(vectorRay)
+                        }
+
+                        // Serving Cell Tower Marker
+                        val towerMarker = Marker(map).apply {
+                            position = towerGeoPoint
+                            title = "📡 ACTIVE SERVING MAST: ${servingTower.operatorName}"
+                            snippet = "${servingTower.addressEstimate ?: "Active Sector"} | CID: ${servingTower.cellId} | Range: ±${servingTower.rangeMeters.toInt()}m"
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        }
+                        map.overlays.add(towerMarker)
                     }
-                    map.overlays.add(towerMarker)
                 }
 
                 map.invalidate()

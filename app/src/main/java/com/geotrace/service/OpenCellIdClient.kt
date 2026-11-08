@@ -143,11 +143,15 @@ object OpenCellIdClient {
             }
         }
 
+        val isServing = cellInfo.isRegistered
+        val signalDbm = cellInfo.signalDbm
+
         // 2. Exact match in bundled Uganda offline towers
         val directMatch = ugandaOfflineTowers.values.firstOrNull { it.cellId == cid }
         if (directMatch != null) {
-            memoryCache[cacheKey] = directMatch
-            return@withContext directMatch
+            val resolved = directMatch.copy(isServing = isServing, signalDbm = signalDbm)
+            memoryCache[cacheKey] = resolved
+            return@withContext resolved
         }
 
         // 3. Proximity / Operator intelligent seed matching based on user coordinate proximity
@@ -178,7 +182,9 @@ object OpenCellIdClient {
                 cellId = cid,
                 lac = lac,
                 isFromOfflineCache = true,
-                addressEstimate = nearest.addressEstimate
+                addressEstimate = nearest.addressEstimate,
+                isServing = isServing,
+                signalDbm = signalDbm
             )
         } else {
             // Fallback to primary MUST Kihumuro tower
@@ -192,12 +198,61 @@ object OpenCellIdClient {
                 cellId = cid,
                 lac = lac,
                 isFromOfflineCache = true,
-                addressEstimate = defaultTower.addressEstimate
+                addressEstimate = defaultTower.addressEstimate,
+                isServing = isServing,
+                signalDbm = signalDbm
             )
         }
 
         memoryCache[cacheKey] = fallback
         return@withContext fallback
+    }
+
+    /**
+     * Resolves all visible cell towers (active serving tower + neighboring standby towers)
+     * and includes regional base stations for comprehensive RF environment visualization.
+     */
+    suspend fun resolveAllCellLocations(
+        towers: List<CellTowerInfo>,
+        apiKey: String = "",
+        userLatitude: Double? = null,
+        userLongitude: Double? = null
+    ): List<CellTowerLocation> = withContext(Dispatchers.IO) {
+        val resolvedList = mutableListOf<CellTowerLocation>()
+        val seenCids = mutableSetOf<Long>()
+
+        // 1. Resolve detected cell towers from device radio scanner
+        for (info in towers) {
+            val loc = resolveCellLocation(info, apiKey, userLatitude, userLongitude)
+            if (loc != null && !seenCids.contains(loc.cellId)) {
+                resolvedList.add(loc)
+                seenCids.add(loc.cellId)
+            }
+        }
+
+        // 2. Add local regional offline base stations as idle/neighbor masts if nearby
+        for ((_, offlineTower) in ugandaOfflineTowers) {
+            if (!seenCids.contains(offlineTower.cellId)) {
+                // Determine if nearby (within ~30km) or general area
+                val isNearby = if (userLatitude != null && userLongitude != null) {
+                    val dLat = Math.abs(offlineTower.latitude - userLatitude)
+                    val dLon = Math.abs(offlineTower.longitude - userLongitude)
+                    dLat < 0.35 && dLon < 0.35 // Within ~35km
+                } else true
+
+                if (isNearby) {
+                    resolvedList.add(
+                        offlineTower.copy(
+                            isServing = false,
+                            signalDbm = null
+                        )
+                    )
+                    seenCids.add(offlineTower.cellId)
+                }
+            }
+        }
+
+        resolvedList
     }
 
     private fun queryOpenCellIdApi(

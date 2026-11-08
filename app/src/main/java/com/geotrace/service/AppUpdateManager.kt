@@ -129,7 +129,11 @@ class AppUpdateManager(private val context: Context) {
                 _updateStatus.value = result
                 result
             } else {
-                val errMsg = "HTTP ${connection.responseCode}: ${connection.responseMessage}"
+                val errMsg = if (connection.responseCode == 403) {
+                    "GitHub API rate limit reached (60/hr). You can still download the release APK directly from GitHub."
+                } else {
+                    "HTTP ${connection.responseCode}: ${connection.responseMessage}"
+                }
                 connection.disconnect()
                 val errStatus = UpdateStatus.Error(errMsg)
                 _updateStatus.value = errStatus

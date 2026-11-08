@@ -45,6 +45,9 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private val _cellTowerLocation = MutableStateFlow<com.geotrace.model.CellTowerLocation?>(null)
     val cellTowerLocation: StateFlow<com.geotrace.model.CellTowerLocation?> = _cellTowerLocation.asStateFlow()
 
+    private val _allCellTowerLocations = MutableStateFlow<List<com.geotrace.model.CellTowerLocation>>(emptyList())
+    val allCellTowerLocations: StateFlow<List<com.geotrace.model.CellTowerLocation>> = _allCellTowerLocations.asStateFlow()
+
     private val _settings = MutableStateFlow(com.geotrace.model.TrackerSettings())
     val settings: StateFlow<com.geotrace.model.TrackerSettings> = _settings.asStateFlow()
 
@@ -62,8 +65,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private fun observeCellTowerLocation() {
         viewModelScope.launch {
             combine(cellTowers, currentLocation) { towers, loc ->
-                Pair(towers.firstOrNull { it.isRegistered } ?: towers.firstOrNull(), loc)
-            }.collect { (servingCell, loc) ->
+                Pair(towers, loc)
+            }.collect { (towers, loc) ->
+                val servingCell = towers.firstOrNull { it.isRegistered } ?: towers.firstOrNull()
+
                 if (servingCell != null) {
                     val location = com.geotrace.service.OpenCellIdClient.resolveCellLocation(
                         cellInfo = servingCell,
@@ -75,6 +80,33 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 } else {
                     _cellTowerLocation.value = null
                 }
+
+                // Resolve all visible towers (both serving and idle/neighbor towers)
+                val allResolved = com.geotrace.service.OpenCellIdClient.resolveAllCellLocations(
+                    towers = towers,
+                    apiKey = _settings.value.openCellIdApiKey,
+                    userLatitude = loc?.latitude,
+                    userLongitude = loc?.longitude
+                )
+                _allCellTowerLocations.value = allResolved
+
+                // In Cellular-Only mode: if GPS is unavailable or standing by, fall back to serving cell coordinates
+                if (trackingMode.value == TrackingMode.POWER_SAVER && (loc == null || loc.provider == "cellular")) {
+                    _cellTowerLocation.value?.let { towerLoc ->
+                        val fallbackPoint = LocationPoint(
+                            latitude = towerLoc.latitude,
+                            longitude = towerLoc.longitude,
+                            accuracy = towerLoc.rangeMeters.toFloat(),
+                            speed = 0f,
+                            altitude = 0.0,
+                            bearing = 0f,
+                            provider = "cellular",
+                            timestamp = System.currentTimeMillis(),
+                            sessionId = activeSession.value?.id ?: "cellular_standby"
+                        )
+                        repository.recordLocation(fallbackPoint)
+                    }
+                }
             }
         }
     }
@@ -82,14 +114,21 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     @android.annotation.SuppressLint("MissingPermission")
     fun startStandbyLocationUpdates() {
         requestLastKnownLocation()
-        if (standbyCallback != null) return
+        stopStandbyLocationUpdates()
+
+        val currentMode = trackingMode.value
+        val (priority, interval, minDistance) = when (currentMode) {
+            TrackingMode.HIGH_ACCURACY -> Triple(com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 2500L, 1.0f)
+            TrackingMode.BALANCED -> Triple(com.google.android.gms.location.Priority.PRIORITY_BALANCED_POWER_ACCURACY, 8000L, 10.0f)
+            TrackingMode.POWER_SAVER -> Triple(com.google.android.gms.location.Priority.PRIORITY_LOW_POWER, 20000L, 50.0f)
+        }
 
         val request = com.google.android.gms.location.LocationRequest.Builder(
-            com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY,
-            2500L
+            priority,
+            interval
         )
-            .setMinUpdateDistanceMeters(1.0f)
-            .setMinUpdateIntervalMillis(1500L)
+            .setMinUpdateDistanceMeters(minDistance)
+            .setMinUpdateIntervalMillis(interval / 2)
             .build()
 
         standbyCallback = object : com.google.android.gms.location.LocationCallback() {
@@ -104,7 +143,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                         speed = if (loc.hasSpeed()) loc.speed else 0f,
                         altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
                         bearing = if (loc.hasBearing()) loc.bearing else 0f,
-                        provider = loc.provider ?: "fused",
+                        provider = if (currentMode == TrackingMode.POWER_SAVER) "cellular" else (loc.provider ?: "fused"),
                         timestamp = loc.time,
                         sessionId = "standby"
                     )
@@ -190,6 +229,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             repository.setTrackingMode(mode)
             if (activeSession.value != null) {
                 LocationForegroundService.startService(getApplication(), mode)
+            } else {
+                startStandbyLocationUpdates()
             }
         }
     }
