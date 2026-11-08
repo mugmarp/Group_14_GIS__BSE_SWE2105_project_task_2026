@@ -20,3 +20,8 @@ Thumbs.db
 internal/
 
 *.hprof
+
+# AI Studio internal artifacts and caches
+.aistudio/
+.aistudio/artifacts/
+/.aistudio/artifacts/
