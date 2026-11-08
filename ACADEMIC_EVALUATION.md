@@ -102,4 +102,3 @@ GeoTrace adheres to modern Google Android Architecture standards:
 - **Faculty:** Faculty of Applied Sciences and Technology (FAST)
 - **University:** Mbarara University of Science & Technology (MUST)
 - **Academic Term:** 2026 Academic Year
-- **Group 14 Lead & Maintainer:** `mugmarp` (`https://github.com/mugmarp`)

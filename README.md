@@ -4,7 +4,7 @@
 **Course:** BSE SWE2105 (Geographic Information Systems)  
 **Academic Year:** 2026  
 **Institution:** Faculty of Applied Sciences and Technology (FAST), Mbarara University of Science and Technology (MUST)  
-**Selected Option:** **Option 2: Mobile Phone Tracking via GPS & Cellular Triangulation** (Accepted & Completed)  
+**Project:** Mobile Phone Tracking via GPS & Cellular Triangulation  
 **Package Namespace:** `com.geotrace`  
 **GitHub Organization / Repository:** `https://github.com/mugmarp/Group_14_GIS__BSE_SWE2105_project_task_2026`  
 
@@ -16,6 +16,18 @@
 > Design a web or mobile app that can track the location of people or objects in real-time. A group can select any of following capabilities for your implementation:
 > - **Option 1:** Track the location of a laptop computer based on its IP address. Research how IP locations are determined and discuss the potential accuracy/limitations.
 > - **Option 2:** Track the movement of a person carrying a mobile phone through GPS or cell tower triangulation. Discuss the pros and cons of each approach.
+
+### Quick Comparison: Option 1 vs. Option 2
+
+| Aspect | Option 1: IP Address Tracking | Option 2: Mobile Phone Tracking (GeoTrace) |
+| :--- | :--- | :--- |
+| **Real-Time Capability** | ❌ **Impossible** (IP leases update over hours/days; static) | ✅ **Native Continuous** (1 Hz real-time trajectory updates) |
+| **Typical Accuracy** | City to Regional level ($5\text{--}150\text{ km}$ error) | **$2\text{--}5\text{ m}$** (GNSS) / **$150\text{--}800\text{ m}$** (Cellular Mast) |
+| **Indoor Positioning** | ❌ No (tied to ISP router gateway node) | ✅ **Yes** (Continuous cellular base station signal lock) |
+| **Continuous Trail Tracking**| ❌ Impossible (No continuous motion vectors) | ✅ **Yes** (High-fidelity polyline with velocity coloring) |
+| **Technical & Engineering Depth** | Low (Single external HTTP GET IP API call) | **High** (Android GNSS sensors, RF Telephony, Deadband, M3 UI) |
+| **Uganda Field Relevance** | Negligible (Mobile ISPs route via distant Kampala CGNAT) | **High** (Addresses boda boda security, fleet safety & rural mobility) |
+| **Academic & Portfolio Value** | Low | **High** (Production-grade, battery-optimized Android GIS application) |
 
 ### Decision Rationale: Why Option 2 Was Chosen
 Following comprehensive feasibility research (see [`FEASIBILITY_ANALYSIS.md`](FEASIBILITY_ANALYSIS.md)), Group 14 formally selected and implemented **Option 2**:
@@ -146,11 +158,11 @@ The compiled APK files will be located at:
 
 ## 6. Group Members & Academic Contribution
 
-| Name | Student Number | Registration Number | GitHub Handle | Role / Core Contribution |
-| :--- | :--- | :--- | :--- | :--- |
-| **Mark Paul Vicram** | — | — | [`@mugmarp`](https://github.com/mugmarp) | Lead Architecture, Telemetry Engine, CI/CD Pipeline |
-| *[Group Member 2]* | — | — | — | Mobile UI, Map Overlays & Geofencing |
-| *[Group Member 3]* | — | — | — | OpenCellID Integration & Telephony Diagnostics |
-| *[Group Member 4]* | — | — | — | Field Testing, Data Analysis & Academic Protocol |
+| Name | Registration Number | GitHub Handle | Role / Core Contribution |
+| :--- | :--- | :--- | :--- |
+| **MUGENDAWALA MARK PAUL** | 2025/BSE/108/PS | [`@mugmarp`](https://github.com/mugmarp) | Architecture, Telemetry Engine, CI/CD Pipeline |
+| *[Group Member 2]* | — | — | Mobile UI, Map Overlays & Geofencing |
+| *[Group Member 3]* | — | — | OpenCellID Integration & Telephony Diagnostics |
+| *[Group Member 4]* | — | — | Field Testing, Data Analysis & Academic Protocol |
 
 **Repository URL:** `https://github.com/mugmarp/Group_14_GIS__BSE_SWE2105_project_task_2026`
