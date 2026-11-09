@@ -18,10 +18,10 @@ enum class TrackingMode(
     ),
     BALANCED(
         title = "Balanced Power (Fused)",
-        description = "Fused location prioritizing Wi-Fi & cellular networks with 10s updates. Great for urban tracking.",
-        intervalMs = 10000L,
-        minDistanceMeters = 15f,
-        expectedAccuracy = "10 – 30 meters",
+        description = "Fused location prioritizing Wi-Fi & cellular networks with 5s updates. Ideal for continuous testing and daily transit.",
+        intervalMs = 5000L,
+        minDistanceMeters = 10f,
+        expectedAccuracy = "5 – 15 meters",
         batteryImpact = "Moderate (~5-10 mA)"
     ),
     POWER_SAVER(

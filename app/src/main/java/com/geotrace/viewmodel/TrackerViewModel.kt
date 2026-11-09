@@ -119,7 +119,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         val currentMode = trackingMode.value
         val (priority, interval, minDistance) = when (currentMode) {
             TrackingMode.HIGH_ACCURACY -> Triple(com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 2500L, 1.0f)
-            TrackingMode.BALANCED -> Triple(com.google.android.gms.location.Priority.PRIORITY_BALANCED_POWER_ACCURACY, 8000L, 10.0f)
+            TrackingMode.BALANCED -> Triple(com.google.android.gms.location.Priority.PRIORITY_BALANCED_POWER_ACCURACY, 5000L, 10.0f)
             TrackingMode.POWER_SAVER -> Triple(com.google.android.gms.location.Priority.PRIORITY_LOW_POWER, 20000L, 50.0f)
         }
 
@@ -337,5 +337,12 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun updateOpenCellIdApiKey(apiKey: String) {
         _settings.value = _settings.value.copy(openCellIdApiKey = apiKey)
         refreshCellTowers()
+    }
+
+    fun toggleAutoBalancedTestMode(enabled: Boolean) {
+        _settings.value = _settings.value.copy(autoBalancedTestMode = enabled)
+        if (activeSession.value == null) {
+            setTrackingMode(if (enabled) TrackingMode.BALANCED else TrackingMode.HIGH_ACCURACY)
+        }
     }
 }

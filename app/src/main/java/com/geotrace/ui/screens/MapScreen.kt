@@ -612,11 +612,11 @@ fun MapScreen(
                     )
 
                     ProfileOptionCard(
-                        title = "Balanced Fused (10 sec)",
-                        subtitle = "Hybrid GNSS + Network duty cycling",
-                        accuracy = "±10 – 20m",
+                        title = "Balanced Fused (5 sec)",
+                        subtitle = "Hybrid GNSS + Network duty cycling (Testing default)",
+                        accuracy = "±5 – 15m",
                         power = "~8 mA",
-                        description = "Cycles hardware positioning receiver. Conserves battery during extended expeditions.",
+                        description = "Cycles positioning receiver every 5s. Ideal for testing and conserving battery while logging full trails.",
                         isSelected = trackingMode == TrackingMode.BALANCED,
                         color = colorScheme.secondary,
                         onClick = {

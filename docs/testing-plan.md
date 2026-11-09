@@ -49,3 +49,17 @@ Compile both release and debug installable packages:
 ```bash
 gradle assembleDebug assembleRelease
 ```
+
+---
+
+## 4. QA Testing Power Optimization (Auto-Balanced GPS)
+
+*Added: November 8–9, 2026 (Ref: `docs/issues-and-resolutions.md`)*
+
+To prevent rapid battery depletion and desk multipath jitter during prolonged QA testing:
+- **Debug Builds**: Default tracking profile is automatically set to **`TrackingMode.BALANCED`** (5-second update intervals, 10-meter displacement threshold, ~8 mA power draw).
+- **Settings Toggle**: Testers can switch between Auto-Balanced (5s) and High-Accuracy (1s GNSS) via the **Testing & Power Optimization** card in `SettingsScreen.kt`.
+- **Full Trail Integrity**: Balanced testing continues to log complete location points to SQLite, render real-time breadcrumbs on the map, and output identical GPX/KML/CSV exports.
+
+For full audit details on resolved issues and architecture decisions, see **[`docs/issues-and-resolutions.md`](issues-and-resolutions.md)**.
+

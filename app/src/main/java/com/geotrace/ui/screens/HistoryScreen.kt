@@ -225,7 +225,7 @@ fun HistoryScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        shareExportText(context, type, content)
+                        shareExportFile(context, type, content)
                         exportContent = null
                     },
                     colors = ButtonDefaults.buttonColors(
@@ -390,15 +390,44 @@ private fun MetricItem(label: String, value: String, color: Color) {
     }
 }
 
-private fun shareExportText(context: Context, type: String, content: String) {
-    val intent = Intent().apply {
-        action = Intent.ACTION_SEND
-        putExtra(Intent.EXTRA_TEXT, content)
-        putExtra(Intent.EXTRA_SUBJECT, "GeoTrace Export - $type")
-        putExtra(Intent.EXTRA_TITLE, "GeoTrace Export")
-        this.type = "text/plain"
+private fun shareExportFile(context: Context, type: String, content: String) {
+    try {
+        val (extension, mimeType) = when (type.uppercase()) {
+            "GPX" -> "gpx" to "application/gpx+xml"
+            "KML" -> "kml" to "application/vnd.google-earth.kml+xml"
+            "CSV" -> "csv" to "text/csv"
+            else -> "txt" to "text/plain"
+        }
+
+        val exportDir = java.io.File(context.cacheDir, "exports").apply { mkdirs() }
+        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val fileName = "geotrace_${type.lowercase()}_$timeStamp.$extension"
+        val exportFile = java.io.File(exportDir, fileName).apply {
+            writeText(content)
+        }
+
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            exportFile
+        )
+
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            this.type = mimeType
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, "GeoTrace $type Export - $fileName")
+            putExtra(Intent.EXTRA_TITLE, "GeoTrace $type Track ($fileName)")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val chooser = Intent.createChooser(intent, "Share $type Export").apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(chooser)
+    } catch (e: Exception) {
+        android.widget.Toast.makeText(
+            context,
+            "Failed to share $type file: ${e.localizedMessage ?: "Unknown error"}",
+            android.widget.Toast.LENGTH_SHORT
+        ).show()
     }
-    val chooser = Intent.createChooser(intent, "Share $type Export")
-    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    context.startActivity(chooser)
 }

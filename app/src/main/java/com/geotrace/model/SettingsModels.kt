@@ -26,5 +26,6 @@ data class TrackerSettings(
     val stationaryJitterThresholdMeters: Float = 1.5f,
     val keepScreenOn: Boolean = true,
     val showCellTowerPin: Boolean = true,
-    val openCellIdApiKey: String = ""
+    val openCellIdApiKey: String = "",
+    val autoBalancedTestMode: Boolean = com.geotrace.BuildConfig.DEBUG
 )

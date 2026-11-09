@@ -158,3 +158,13 @@ app/
 2. **Educational/Diagnostic:** `TelephonyManager.getAllCellInfo()` → extract MCC/MNC/LAC/CID → query OpenCellID API → display "Cell ID Lookup" position vs Fused position
 3. **No triangulation math** — OpenCellID server returns tower coordinates; we display serving cell's location
 4. **Report discusses:** "True triangulation vs Cell ID Lookup — legal/technical reality in Uganda"
+
+---
+
+### Multi-User Location Sharing & Web Tracking (Firebase Cloud Backbone)
+
+*Adopted: November 8–9, 2026*
+
+GeoTrace has officially selected **Firebase (Cloud Firestore + Firebase Authentication + Firebase Hosting)** for cloud multi-user location sharing and real-time Leaflet web dispatching. For full technical specifications on data models, zero-trust security rules, offline queueing, and the Leaflet web dispatcher, see [docs/multi-user-tracking.md](multi-user-tracking.md).
+
+For the complete technical audit and resolved issues log covering `FileProvider` export streaming, `WakeLock` background retention, SQLite indexing, and Auto-Balanced testing profiles, see [docs/issues-and-resolutions.md](issues-and-resolutions.md).

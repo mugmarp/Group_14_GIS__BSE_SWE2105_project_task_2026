@@ -15,7 +15,7 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
 
     companion object {
         const val DATABASE_NAME = "gis_tracker.db"
-        const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 2
 
         const val TABLE_POINTS = "location_points"
         const val TABLE_SESSIONS = "tracking_sessions"
@@ -59,7 +59,7 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
             """.trimIndent()
         )
 
-        db.execSQL("CREATE INDEX idx_points_session ON $TABLE_POINTS(session_id, timestamp)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_points_session ON $TABLE_POINTS(session_id, timestamp)")
 
         db.execSQL(
             """
@@ -92,10 +92,8 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_POINTS")
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_SESSIONS")
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_GEOFENCES")
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_ALERTS")
-        onCreate(db)
+        if (oldVersion < 2) {
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_points_session ON $TABLE_POINTS(session_id, timestamp)")
+        }
     }
 }

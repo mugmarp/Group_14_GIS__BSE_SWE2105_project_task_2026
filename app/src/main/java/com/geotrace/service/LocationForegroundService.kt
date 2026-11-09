@@ -12,6 +12,7 @@ import android.location.Location
 import android.os.Build
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.geotrace.LocationTrackerApp
 import com.geotrace.MainActivity
@@ -65,6 +66,7 @@ class LocationForegroundService : Service() {
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var cellManager: CellularDiagnosticManager
     private var locationCallback: LocationCallback? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -103,8 +105,37 @@ class LocationForegroundService : Service() {
             startForeground(NOTIFICATION_ID, initialNotification)
         }
 
+        acquireWakeLock()
         requestLocationUpdates(mode)
         startPeriodicCellDiagnostics()
+    }
+
+    private fun acquireWakeLock() {
+        try {
+            if (wakeLock == null) {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
+                wakeLock = powerManager?.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "geotrace:foreground_tracking_wakelock"
+                )?.apply {
+                    setReferenceCounted(false)
+                }
+            }
+            // Acquire with a 12-hour timeout safeguard against battery runaway
+            wakeLock?.acquire(12 * 60 * 60 * 1000L)
+        } catch (e: Exception) {
+            // Non-fatal if power manager denies wake lock
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+            }
+        } catch (e: Exception) {
+            // Safe release
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -224,6 +255,7 @@ class LocationForegroundService : Service() {
 
     private fun stopTrackingService() {
         locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
+        releaseWakeLock()
         serviceScope.launch {
             val repo = (application as LocationTrackerApp).repository
             repo.stopCurrentSession()
@@ -235,6 +267,7 @@ class LocationForegroundService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
+        releaseWakeLock()
         serviceScope.cancel()
     }
 

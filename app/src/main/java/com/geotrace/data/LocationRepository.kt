@@ -49,7 +49,9 @@ class LocationRepository(private val context: Context) {
     private val _cellTowers = MutableStateFlow<List<CellTowerInfo>>(emptyList())
     val cellTowers: StateFlow<List<CellTowerInfo>> = _cellTowers.asStateFlow()
 
-    private val _trackingMode = MutableStateFlow(TrackingMode.HIGH_ACCURACY)
+    private val _trackingMode = MutableStateFlow(
+        if (com.geotrace.BuildConfig.DEBUG) TrackingMode.BALANCED else TrackingMode.HIGH_ACCURACY
+    )
     val trackingMode: StateFlow<TrackingMode> = _trackingMode.asStateFlow()
 
     private val _filteredJitterMeters = MutableStateFlow(0.0)
