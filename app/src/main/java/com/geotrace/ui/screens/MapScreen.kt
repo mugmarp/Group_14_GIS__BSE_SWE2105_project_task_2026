@@ -17,6 +17,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.horizontalScroll
@@ -25,10 +31,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Balance
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
@@ -143,6 +149,7 @@ fun MapScreen(
                 shadowElevation = 3.dp,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .animateContentSize()
                     .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(22.dp))
                     .testTag("telemetry_hud_card")
             ) {
@@ -167,7 +174,10 @@ fun MapScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                modifier = Modifier.weight(1f, fill = false),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Box(
                                     modifier = Modifier
                                         .size(8.dp)
@@ -198,152 +208,176 @@ fun MapScreen(
                                 }
                             }
 
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                // Collapse / Expand Header Pill (Saves vertical space on small or landscape screens)
-                                IconButton(
-                                    onClick = { isHeaderExpanded = !isHeaderExpanded },
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
-                                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
-                                        .testTag("toggle_header_btn")
+                            // ☰ Hamburger Menu on the RIGHT
+                            IconButton(
+                                onClick = onOpenMenu,
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .background(customColors.surfaceContainerLow, RoundedCornerShape(12.dp))
+                                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                                    .testTag("menu_btn")
+                            ) {
+                                Icon(
+                                    Icons.Default.Menu,
+                                    contentDescription = "Open Application Menu",
+                                    tint = colorScheme.primary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+
+                        // Animated Collapsible Body
+                        AnimatedVisibility(
+                            visible = isHeaderExpanded,
+                            enter = fadeIn() + expandVertically(),
+                            exit = fadeOut() + shrinkVertically()
+                        ) {
+                            Column {
+                                Spacer(modifier = Modifier.height(10.dp))
+
+                                // Vector Coordinates Bar (Respects CoordinateFormat: DD vs DMS)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        if (isHeaderExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                                        contentDescription = if (isHeaderExpanded) "Collapse Telemetry Header" else "Expand Telemetry Header",
-                                        tint = colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(20.dp)
+                                    Text(
+                                        text = "VECTOR COORD:",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.04.sp,
+                                        color = colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = if (currentLocation != null) {
+                                            formatCoordinates(currentLocation!!.latitude, currentLocation!!.longitude, settings.coordinateFormat)
+                                        } else {
+                                            "--.-----°, --.-----°"
+                                        },
+                                        fontSize = 11.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = colorScheme.onSurface
                                     )
                                 }
 
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Spacer(modifier = Modifier.height(8.dp))
 
-                                // ☰ Hamburger Menu on the RIGHT
-                                IconButton(
-                                    onClick = onOpenMenu,
+                                // 4 Tabular Telemetry Scalar Metrics with Responsive Weighted Alignment
+                                val convertedSpeed = (currentLocation?.speed ?: 0f) * settings.speedUnit.multiplier
+                                Row(
                                     modifier = Modifier
-                                        .size(38.dp)
+                                        .fillMaxWidth()
                                         .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
-                                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
-                                        .testTag("menu_btn")
+                                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        Icons.Default.Menu,
-                                        contentDescription = "Open Application Menu",
-                                        tint = colorScheme.primary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        TelemetryMetric(
+                                            label = "SPEED",
+                                            value = String.format(Locale.US, "%.1f", convertedSpeed),
+                                            unit = settings.speedUnit.label,
+                                            valueColor = colorScheme.primary,
+                                            subtitle = currentLocation?.gaitLabel ?: "Stationary"
+                                        )
+                                    }
+                                    Box(modifier = Modifier.width(1.dp).height(32.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
+                                    Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
+                                        val pace = activeSession?.avgPaceMinPerKm?.takeIf { it != "--:--" }
+                                            ?: currentLocation?.paceMinPerKm?.takeIf { it != "--:--" }
+                                        TelemetryMetric(
+                                            label = "DISTANCE",
+                                            value = activeSession?.formattedDistance ?: "0 m",
+                                            unit = "",
+                                            valueColor = colorScheme.secondary,
+                                            subtitle = pace
+                                        )
+                                    }
+                                    Box(modifier = Modifier.width(1.dp).height(32.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
+                                    Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
+                                        TelemetryMetric(
+                                            label = "ACCURACY",
+                                            value = if (currentLocation != null) "±${currentLocation?.accuracy?.toInt()}m" else "--",
+                                            unit = "",
+                                            valueColor = if ((currentLocation?.accuracy ?: 99f) <= 10f) colorScheme.tertiary else customColors.warning,
+                                            subtitle = currentLocation?.provider?.uppercase()
+                                        )
+                                    }
+                                    Box(modifier = Modifier.width(1.dp).height(32.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
+                                    Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
+                                        TelemetryMetric(
+                                            label = "WAYPOINTS",
+                                            value = "${trailPoints.size}",
+                                            unit = "pts",
+                                            valueColor = colorScheme.onSurface,
+                                            subtitle = if (activeSession?.isRecording == true) "Recording" else "Standby"
+                                        )
+                                    }
+                                }
+
+                                if (activeSession != null) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "⏱️ ACTIVE SESSION: ${activeSession?.formattedDuration}",
+                                            fontSize = 11.sp,
+                                            color = colorScheme.onSurfaceVariant,
+                                            fontFamily = FontFamily.Monospace,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        Text(
+                                            text = "${activeSession?.name}",
+                                            fontSize = 11.sp,
+                                            color = colorScheme.primary,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
                         }
 
-                        if (isHeaderExpanded) {
-                            Spacer(modifier = Modifier.height(10.dp))
-
-                            // Vector Coordinates Bar (Respects CoordinateFormat: DD vs DMS)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "VECTOR COORD:",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.04.sp,
-                                color = colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = if (currentLocation != null) {
-                                    formatCoordinates(currentLocation!!.latitude, currentLocation!!.longitude, settings.coordinateFormat)
-                                } else {
-                                    "--.-----°, --.-----°"
-                                },
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.SemiBold,
-                                color = colorScheme.onSurface
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        // 4 Tabular Telemetry Scalar Metrics with Responsive Weighted Alignment
-                        val convertedSpeed = (currentLocation?.speed ?: 0f) * settings.speedUnit.multiplier
-                        Row(
+                        // Centered Sleek Collapsible Pull-Tab Handle
+                        Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
-                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
-                                .padding(horizontal = 8.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(top = if (isHeaderExpanded) 8.dp else 4.dp),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Box(modifier = Modifier.weight(1f)) {
-                                TelemetryMetric(
-                                    label = "SPEED",
-                                    value = String.format(Locale.US, "%.1f", convertedSpeed),
-                                    unit = settings.speedUnit.label,
-                                    valueColor = colorScheme.primary,
-                                    subtitle = currentLocation?.gaitLabel ?: "Stationary"
-                                )
-                            }
-                            Box(modifier = Modifier.width(1.dp).height(32.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
-                            Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
-                                val pace = activeSession?.avgPaceMinPerKm?.takeIf { it != "--:--" }
-                                    ?: currentLocation?.paceMinPerKm?.takeIf { it != "--:--" }
-                                TelemetryMetric(
-                                    label = "DISTANCE",
-                                    value = activeSession?.formattedDistance ?: "0 m",
-                                    unit = "",
-                                    valueColor = colorScheme.secondary,
-                                    subtitle = pace
-                                )
-                            }
-                            Box(modifier = Modifier.width(1.dp).height(32.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
-                            Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
-                                TelemetryMetric(
-                                    label = "ACCURACY",
-                                    value = if (currentLocation != null) "±${currentLocation?.accuracy?.toInt()}m" else "--",
-                                    unit = "",
-                                    valueColor = if ((currentLocation?.accuracy ?: 99f) <= 10f) colorScheme.tertiary else customColors.warning,
-                                    subtitle = currentLocation?.provider?.uppercase()
-                                )
-                            }
-                            Box(modifier = Modifier.width(1.dp).height(32.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
-                            Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
-                                TelemetryMetric(
-                                    label = "WAYPOINTS",
-                                    value = "${trailPoints.size}",
-                                    unit = "pts",
-                                    valueColor = colorScheme.onSurface,
-                                    subtitle = if (activeSession?.isRecording == true) "Recording" else "Standby"
-                                )
-                            }
-                        }
-
-                        if (activeSession != null) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = customColors.surfaceContainerLow,
+                                border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                                modifier = Modifier
+                                    .clickable { isHeaderExpanded = !isHeaderExpanded }
+                                    .testTag("toggle_header_btn")
                             ) {
-                                Text(
-                                    text = "⏱️ ACTIVE SESSION: ${activeSession?.formattedDuration}",
-                                    fontSize = 11.sp,
-                                    color = colorScheme.onSurfaceVariant,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    text = "${activeSession?.name}",
-                                    fontSize = 11.sp,
-                                    color = colorScheme.primary,
-                                    fontWeight = FontWeight.Bold
-                                )
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = if (isHeaderExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                        contentDescription = if (isHeaderExpanded) "Collapse Telemetry HUD" else "Expand Telemetry HUD",
+                                        tint = colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isHeaderExpanded) "HIDE HUD" else "SHOW HUD",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.06.sp,
+                                        color = colorScheme.primary
+                                    )
+                                }
                             }
                         }
-                        } // End of if (isHeaderExpanded)
                     }
                 }
             }

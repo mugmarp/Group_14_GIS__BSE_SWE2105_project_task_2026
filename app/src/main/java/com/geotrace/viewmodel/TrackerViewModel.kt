@@ -112,12 +112,11 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     @android.annotation.SuppressLint("MissingPermission")
-    fun startStandbyLocationUpdates() {
+    fun startStandbyLocationUpdates(targetMode: TrackingMode = trackingMode.value) {
         requestLastKnownLocation()
         stopStandbyLocationUpdates()
 
-        val currentMode = trackingMode.value
-        val (priority, interval, minDistance) = when (currentMode) {
+        val (priority, interval, minDistance) = when (targetMode) {
             TrackingMode.HIGH_ACCURACY -> Triple(com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 2500L, 1.0f)
             TrackingMode.BALANCED -> Triple(com.google.android.gms.location.Priority.PRIORITY_BALANCED_POWER_ACCURACY, 5000L, 10.0f)
             TrackingMode.POWER_SAVER -> Triple(com.google.android.gms.location.Priority.PRIORITY_LOW_POWER, 20000L, 50.0f)
@@ -143,7 +142,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                         speed = if (loc.hasSpeed()) loc.speed else 0f,
                         altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
                         bearing = if (loc.hasBearing()) loc.bearing else 0f,
-                        provider = if (currentMode == TrackingMode.POWER_SAVER) "cellular" else (loc.provider ?: "fused"),
+                        provider = if (targetMode == TrackingMode.POWER_SAVER) "cellular" else (loc.provider ?: "fused"),
                         timestamp = loc.time,
                         sessionId = "standby"
                     )
@@ -230,7 +229,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             if (activeSession.value != null) {
                 LocationForegroundService.startService(getApplication(), mode)
             } else {
-                startStandbyLocationUpdates()
+                startStandbyLocationUpdates(mode)
             }
         }
     }

@@ -78,8 +78,18 @@ class LocationRepository(private val context: Context) {
         }
     }
 
-    suspend fun setTrackingMode(mode: TrackingMode) {
+    suspend fun setTrackingMode(mode: TrackingMode) = withContext(Dispatchers.IO) {
         _trackingMode.value = mode
+        val session = _activeSession.value
+        if (session != null && session.isRecording) {
+            val updated = session.copy(trackingMode = mode)
+            _activeSession.value = updated
+            val cv = ContentValues().apply {
+                put("tracking_mode", mode.name)
+            }
+            dbHelper.writableDatabase.update(LocationDbHelper.TABLE_SESSIONS, cv, "id = ?", arrayOf(session.id))
+            loadSessions()
+        }
     }
 
     suspend fun startNewSession(name: String = "Track ${System.currentTimeMillis() % 10000}", mode: TrackingMode = _trackingMode.value): TrackingSession = withContext(Dispatchers.IO) {

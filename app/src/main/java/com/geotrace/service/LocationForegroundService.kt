@@ -67,6 +67,7 @@ class LocationForegroundService : Service() {
     private lateinit var cellManager: CellularDiagnosticManager
     private var locationCallback: LocationCallback? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var cellDiagnosticsJob: kotlinx.coroutines.Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -180,7 +181,7 @@ class LocationForegroundService : Service() {
             speed = if (loc.hasSpeed()) loc.speed else 0f,
             altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
             bearing = if (loc.hasBearing()) loc.bearing else 0f,
-            provider = loc.provider ?: "fused",
+            provider = if (mode == TrackingMode.POWER_SAVER) "cellular" else (loc.provider ?: "fused"),
             timestamp = loc.time,
             sessionId = activeSession?.id ?: "ad_hoc"
         )
@@ -201,7 +202,8 @@ class LocationForegroundService : Service() {
     }
 
     private fun startPeriodicCellDiagnostics() {
-        serviceScope.launch {
+        if (cellDiagnosticsJob?.isActive == true) return
+        cellDiagnosticsJob = serviceScope.launch {
             val repo = (application as LocationTrackerApp).repository
             while (isActive) {
                 val towers = cellManager.readCurrentCellTowers()
@@ -257,6 +259,8 @@ class LocationForegroundService : Service() {
 
     private fun stopTrackingService() {
         locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
+        cellDiagnosticsJob?.cancel()
+        cellDiagnosticsJob = null
         releaseWakeLock()
         serviceScope.launch {
             val repo = (application as LocationTrackerApp).repository
@@ -269,6 +273,8 @@ class LocationForegroundService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
+        cellDiagnosticsJob?.cancel()
+        cellDiagnosticsJob = null
         releaseWakeLock()
         serviceScope.cancel()
     }

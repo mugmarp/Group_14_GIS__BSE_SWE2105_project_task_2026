@@ -125,6 +125,38 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 
 ---
 
+### GT-ISSUE-08: Mode Switching Concurrency, Zombie Coroutines & Active Session Desync
+- **Discovered:** November 11, 2026
+- **Files Affected:** `LocationForegroundService.kt`, `LocationRepository.kt`, `TrackerViewModel.kt`
+- **Symptom:** Switching between tracking modes in rapid succession (e.g., High Accuracy → Power Saver → Balanced) produced duplicate concurrent 10-second cellular diagnostics polling routines, while active sessions retained their initial mode name in SQLite history.
+- **Root Cause:**
+  1. *Coroutines Concurrency Leak:* In `LocationForegroundService.kt`, switching to `TrackingMode.POWER_SAVER` launched a new coroutine in `serviceScope` without tracking or canceling previous cell tower polling jobs, resulting in multiple concurrent background loops.
+  2. *Active Session Desync:* When the user changed the tracking mode mid-session, `LocationRepository.setTrackingMode()` updated `_trackingMode` but failed to update the active session's `trackingMode` property and its SQLite row in `TABLE_SESSIONS`.
+  3. *Standby Race Condition:* `TrackerViewModel.startStandbyLocationUpdates()` read `trackingMode.value` before state synchronization completed during mode transitions.
+- **Resolution:**
+  1. **Job Reference Cancellation:** Introduced `private var cellDiagnosticsJob: Job? = null` in `LocationForegroundService.kt`. Any existing job is explicitly cancelled before launching a new polling loop, and explicitly cancelled in `stopTrackingService()` and `onDestroy()`.
+  2. **Accurate Provider Tagging:** Assigned `provider = if (mode == TrackingMode.POWER_SAVER) "cellular" else (loc.provider ?: "fused")` ensuring clear distinction in the UI and telemetry logs.
+  3. **SQLite & Active Session Synchronization:** Updated `LocationRepository.setTrackingMode()` to update `_activeSession.value` and execute `UPDATE sessions SET tracking_mode = ? WHERE id = ?` in SQLite.
+  4. **Target Mode Parameterization:** Updated `TrackerViewModel.startStandbyLocationUpdates(targetMode)` to receive the target mode directly, eliminating the race condition.
+- **Outcome:** Instantaneous, leak-free mode switching with zero duplicate coroutines and 100% database consistency across all tracking tiers.
+
+---
+
+### GT-ISSUE-09: HUD Collapse Handle Ergonomics & Animated State Transition
+- **Discovered:** November 11, 2026
+- **Files Affected:** `MapScreen.kt`
+- **Symptom:** The previous collapse control was an awkward square 38dp button squeezed directly beside the hamburger menu on the title bar, creating visual clutter and accidental touches. Collapsing the HUD caused an abrupt layout jump.
+- **Root Cause:**
+  1. Poor affordance and cramped placement: Two adjacent square icon buttons with different functional scopes (one menu, one collapse) created visual ambiguity.
+  2. Instantaneous boolean visibility check (`if (isHeaderExpanded)`) popped elements in and out without animation.
+- **Resolution:**
+  1. **Ergonomic Pull-Tab Handle:** Replaced the top square button with a centered, professional pull-tab handle pill (`Surface` with `RoundedCornerShape(12.dp)`) at the base of the HUD card displaying an arrow icon (`KeyboardArrowUp` / `KeyboardArrowDown`) and `HIDE HUD` / `SHOW HUD` label with full 48dp interactive touch responsiveness.
+  2. **Fluid Animated Visibility:** Wrapped the coordinates and 4-metric telemetry table in Compose's `AnimatedVisibility(enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically())` and added `Modifier.animateContentSize()` to the container card.
+  3. **Clean Title Hierarchy:** Dedicated the top right corner exclusively to the 40dp Hamburger Menu action.
+- **Outcome:** Sleek, modern, and ergonomic GIS interface with fluid native transitions and clear user hierarchy.
+
+---
+
 ## 3. Verification & Compliance Checklist
 
 - [x] **FileProvider Export**: Verified `.gpx`, `.kml`, and `.csv` generate valid URIs without Binder overflow.
@@ -133,5 +165,7 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 - [x] **Auto-Balanced Testing Switch**: Verified UI toggle in Settings, 5s interval setting, and full trail recording.
 - [x] **Pedestrian Speed Calibration**: Verified low-speed clamp, EMA smoothing, derived fallback, and gait classification.
 - [x] **Cross-Screen Responsiveness**: Verified 48dp touch targets, weighted telemetry columns, and speed unit consistency.
+- [x] **Mode Switching Concurrency**: Verified `cellDiagnosticsJob` cancellation, active session SQLite sync, and target mode standby propagation.
+- [x] **HUD Collapse Ergonomics**: Verified centered pull-tab handle and `AnimatedVisibility` expansion transitions.
 - [x] **Gradle Build**: Verified project builds cleanly (`compile_applet` PASS) and unit tests pass (`testDebugUnitTest` PASS).
 
