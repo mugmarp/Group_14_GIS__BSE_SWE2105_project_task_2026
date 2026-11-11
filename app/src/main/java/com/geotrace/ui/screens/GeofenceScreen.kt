@@ -195,7 +195,7 @@ fun GeofenceScreen(
                     IconButton(
                         onClick = onNavigateBack,
                         modifier = Modifier
-                            .size(42.dp)
+                            .size(48.dp)
                             .background(customColors.surfaceContainerLow, RoundedCornerShape(12.dp))
                             .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
                             .testTag("geofence_back_btn")
@@ -719,28 +719,28 @@ private fun GeofenceZoneCard(
                         IconButton(
                             onClick = onEdit,
                             modifier = Modifier
-                                .size(28.dp)
+                                .size(48.dp)
                                 .testTag("edit_geofence_${zone.id}")
                         ) {
                             Icon(
                                 Icons.Default.Edit,
                                 contentDescription = "Edit Safe Zone",
                                 tint = colorScheme.primary,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                         }
 
                         IconButton(
                             onClick = onDelete,
                             modifier = Modifier
-                                .size(28.dp)
+                                .size(48.dp)
                                 .testTag("delete_geofence_${zone.id}")
                         ) {
                             Icon(
                                 Icons.Default.Delete,
                                 contentDescription = "Delete",
                                 tint = colorScheme.error,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }

@@ -154,6 +154,21 @@ fun HistoryScreen(
                                 color = colorScheme.onSurfaceVariant,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
                             )
+                            if (onNavigateBack != null) {
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Button(
+                                    onClick = onNavigateBack,
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = colorScheme.primary,
+                                        contentColor = colorScheme.onPrimary
+                                    )
+                                ) {
+                                    Icon(Icons.Default.Route, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Open Live Map to Record", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
                     }
                 }
@@ -296,36 +311,68 @@ private fun SessionHistoryCard(
                             color = colorScheme.onSurface
                         )
                         val dateStr = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(session.startTime))
-                        Text(
-                            text = "$dateStr | ${session.trackingMode.name}",
-                            fontSize = 11.sp,
-                            color = colorScheme.onSurfaceVariant
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = dateStr,
+                                fontSize = 11.sp,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = colorScheme.primary.copy(alpha = 0.12f)
+                            ) {
+                                Text(
+                                    text = session.trackingMode.title.substringBefore(" ("),
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
                     }
 
-                    IconButton(onClick = onDelete) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete Session", tint = colorScheme.error, modifier = Modifier.size(18.dp))
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete Session", tint = colorScheme.error, modifier = Modifier.size(20.dp))
                     }
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Tabular Metrics Row (Recessed Well)
+                // Tabular Metrics Row (Responsive Weighted Recessed Well)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
                         .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    MetricItem("DISTANCE", session.formattedDistance, colorScheme.primary)
-                    Box(modifier = Modifier.width(1.dp).height(28.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
-                    MetricItem("DURATION", session.formattedDuration, colorScheme.secondary)
-                    Box(modifier = Modifier.width(1.dp).height(28.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
-                    MetricItem("AVG SPEED", "${String.format("%.1f", session.avgSpeedKmh)} km/h", colorScheme.onSurface)
-                    Box(modifier = Modifier.width(1.dp).height(28.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
-                    MetricItem("POINTS", "${session.pointCount}", colorScheme.tertiary)
+                    Box(modifier = Modifier.weight(1f)) {
+                        MetricItem("DISTANCE", session.formattedDistance, colorScheme.primary)
+                    }
+                    Box(modifier = Modifier.width(1.dp).height(30.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
+                    Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
+                        MetricItem("DURATION", session.formattedDuration, colorScheme.secondary)
+                    }
+                    Box(modifier = Modifier.width(1.dp).height(30.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
+                    Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
+                        MetricItem(
+                            label = "AVG SPEED",
+                            value = "${String.format(Locale.US, "%.1f", session.avgSpeedKmh)} km/h",
+                            color = colorScheme.onSurface,
+                            subtitle = session.avgPaceMinPerKm.takeIf { it != "--:--" }
+                        )
+                    }
+                    Box(modifier = Modifier.width(1.dp).height(30.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
+                    Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
+                        MetricItem("POINTS", "${session.pointCount}", colorScheme.tertiary)
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
@@ -340,7 +387,7 @@ private fun SessionHistoryCard(
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.primary),
                         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant),
-                        modifier = Modifier.weight(1f).height(36.dp).testTag("export_gpx_btn")
+                        modifier = Modifier.weight(1f).height(38.dp).testTag("export_gpx_btn")
                     ) {
                         Text("GPX", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
@@ -350,7 +397,7 @@ private fun SessionHistoryCard(
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.secondary),
                         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant),
-                        modifier = Modifier.weight(1f).height(36.dp).testTag("export_kml_btn")
+                        modifier = Modifier.weight(1f).height(38.dp).testTag("export_kml_btn")
                     ) {
                         Text("KML", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
@@ -360,7 +407,7 @@ private fun SessionHistoryCard(
                         shape = RoundedCornerShape(8.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = colorScheme.onSurfaceVariant),
                         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant),
-                        modifier = Modifier.weight(1f).height(36.dp).testTag("export_csv_btn")
+                        modifier = Modifier.weight(1f).height(38.dp).testTag("export_csv_btn")
                     ) {
                         Text("CSV", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
@@ -371,22 +418,34 @@ private fun SessionHistoryCard(
 }
 
 @Composable
-private fun MetricItem(label: String, value: String, color: Color) {
+private fun MetricItem(label: String, value: String, color: Color, subtitle: String? = null) {
     Column {
         Text(
             text = label,
             fontSize = 9.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.Bold,
-            letterSpacing = 0.04.sp
+            letterSpacing = 0.04.sp,
+            maxLines = 1
         )
         Text(
             text = value,
             fontSize = 12.sp,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
-            color = color
+            color = color,
+            maxLines = 1
         )
+        if (!subtitle.isNullOrBlank()) {
+            Text(
+                text = subtitle,
+                fontSize = 8.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
+        }
     }
 }
 

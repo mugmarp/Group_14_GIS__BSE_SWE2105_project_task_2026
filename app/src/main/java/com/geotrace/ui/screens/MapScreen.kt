@@ -268,43 +268,58 @@ fun MapScreen(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // 4 Tabular Telemetry Scalar Metrics
+                        // 4 Tabular Telemetry Scalar Metrics with Responsive Weighted Alignment
                         val convertedSpeed = (currentLocation?.speed ?: 0f) * settings.speedUnit.multiplier
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
                                 .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                                .padding(horizontal = 8.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            TelemetryMetric(
-                                label = "SPEED",
-                                value = String.format(Locale.US, "%.1f", convertedSpeed),
-                                unit = settings.speedUnit.label,
-                                valueColor = colorScheme.primary
-                            )
-                            Box(modifier = Modifier.width(1.dp).height(28.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
-                            TelemetryMetric(
-                                label = "DISTANCE",
-                                value = activeSession?.formattedDistance ?: "0 m",
-                                unit = "",
-                                valueColor = colorScheme.secondary
-                            )
-                            Box(modifier = Modifier.width(1.dp).height(28.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
-                            TelemetryMetric(
-                                label = "ACCURACY",
-                                value = if (currentLocation != null) "±${currentLocation?.accuracy?.toInt()}m" else "--",
-                                unit = "",
-                                valueColor = if ((currentLocation?.accuracy ?: 99f) <= 10f) colorScheme.tertiary else customColors.warning
-                            )
-                            Box(modifier = Modifier.width(1.dp).height(28.dp).background(colorScheme.outlineVariant.copy(alpha = 0.5f)))
-                            TelemetryMetric(
-                                label = "WAYPOINTS",
-                                value = "${trailPoints.size}",
-                                unit = "pts",
-                                valueColor = colorScheme.onSurface
-                            )
+                            Box(modifier = Modifier.weight(1f)) {
+                                TelemetryMetric(
+                                    label = "SPEED",
+                                    value = String.format(Locale.US, "%.1f", convertedSpeed),
+                                    unit = settings.speedUnit.label,
+                                    valueColor = colorScheme.primary,
+                                    subtitle = currentLocation?.gaitLabel ?: "Stationary"
+                                )
+                            }
+                            Box(modifier = Modifier.width(1.dp).height(32.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
+                            Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
+                                val pace = activeSession?.avgPaceMinPerKm?.takeIf { it != "--:--" }
+                                    ?: currentLocation?.paceMinPerKm?.takeIf { it != "--:--" }
+                                TelemetryMetric(
+                                    label = "DISTANCE",
+                                    value = activeSession?.formattedDistance ?: "0 m",
+                                    unit = "",
+                                    valueColor = colorScheme.secondary,
+                                    subtitle = pace
+                                )
+                            }
+                            Box(modifier = Modifier.width(1.dp).height(32.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
+                            Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
+                                TelemetryMetric(
+                                    label = "ACCURACY",
+                                    value = if (currentLocation != null) "±${currentLocation?.accuracy?.toInt()}m" else "--",
+                                    unit = "",
+                                    valueColor = if ((currentLocation?.accuracy ?: 99f) <= 10f) colorScheme.tertiary else customColors.warning,
+                                    subtitle = currentLocation?.provider?.uppercase()
+                                )
+                            }
+                            Box(modifier = Modifier.width(1.dp).height(32.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
+                            Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
+                                TelemetryMetric(
+                                    label = "WAYPOINTS",
+                                    value = "${trailPoints.size}",
+                                    unit = "pts",
+                                    valueColor = colorScheme.onSurface,
+                                    subtitle = if (activeSession?.isRecording == true) "Recording" else "Standby"
+                                )
+                            }
                         }
 
                         if (activeSession != null) {
@@ -822,7 +837,8 @@ private fun TelemetryMetric(
     label: String,
     value: String,
     unit: String,
-    valueColor: Color
+    valueColor: Color,
+    subtitle: String? = null
 ) {
     Column {
         Text(
@@ -830,24 +846,37 @@ private fun TelemetryMetric(
             fontSize = 9.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.04.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
         )
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 text = value,
-                fontSize = 15.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
                 color = valueColor,
-                fontFamily = FontFamily.Monospace
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1
             )
             if (unit.isNotBlank()) {
                 Spacer(modifier = Modifier.width(2.dp))
                 Text(
                     text = unit,
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    fontSize = 9.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1
                 )
             }
+        }
+        if (!subtitle.isNullOrBlank()) {
+            Text(
+                text = subtitle,
+                fontSize = 8.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            )
         }
     }
 }

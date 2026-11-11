@@ -125,6 +125,7 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
     val allSessions by viewModel.allSessions.collectAsState()
     val cellTowers by viewModel.cellTowers.collectAsState()
     val geofenceZones by viewModel.geofenceZones.collectAsState()
+    val settings by viewModel.settings.collectAsState()
 
     // Handle Back Press: Close menu bottom sheet if open, or return to Map screen
     if (showMenuSheet) {
@@ -380,8 +381,11 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                                     color = statusColor
                                 )
                                 if (currentLocation != null) {
+                                    val loc = currentLocation!!
+                                    val convertedSpeed = loc.speed * settings.speedUnit.multiplier
+                                    val gait = loc.gaitLabel
                                     Text(
-                                        text = "${String.format("%.4f", currentLocation?.latitude)}°, ${String.format("%.4f", currentLocation?.longitude)}° • Speed: ${String.format("%.1f", currentLocation?.speedKmh ?: 0f)} km/h",
+                                        text = "${String.format("%.4f", loc.latitude)}°, ${String.format("%.4f", loc.longitude)}° • Speed: ${String.format("%.1f", convertedSpeed)} ${settings.speedUnit.label} ($gait)",
                                         fontSize = 10.sp,
                                         fontFamily = FontFamily.Monospace,
                                         color = colorScheme.onSurfaceVariant

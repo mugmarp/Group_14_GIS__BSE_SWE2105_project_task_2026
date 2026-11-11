@@ -226,7 +226,8 @@ fun MapViewComposable(
                         position = GeoPoint(currentLocation.latitude, currentLocation.longitude)
                         rotation = currentLocation.bearing
                         title = "Current Position"
-                        snippet = "Speed: ${String.format("%.1f", currentLocation.speedKmh)} km/h | Acc: ±${currentLocation.accuracy.toInt()}m"
+                        val convertedSpeed = currentLocation.speed * settings.speedUnit.multiplier
+                        snippet = "Speed: ${String.format("%.1f", convertedSpeed)} ${settings.speedUnit.label} (${currentLocation.gaitLabel}) | Acc: ±${currentLocation.accuracy.toInt()}m"
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     }
                     map.overlays.add(userMarker)
@@ -478,7 +479,7 @@ fun MapViewComposable(
                 }
             }
 
-            // Recenter FAB (Strictly 12dp shape preserved)
+            // Recenter FAB (48dp standard touch target)
             FloatingActionButton(
                 onClick = {
                     if (currentLocation != null) {
@@ -490,17 +491,17 @@ fun MapViewComposable(
                     }
                 },
                 modifier = Modifier
-                    .size(44.dp)
+                    .size(48.dp)
                     .testTag("recenter_map_btn"),
                 shape = RoundedCornerShape(12.dp),
                 containerColor = colorScheme.primary,
                 contentColor = colorScheme.onPrimary,
                 elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp)
             ) {
-                Icon(Icons.Default.MyLocation, contentDescription = "Center on Location", modifier = Modifier.size(20.dp))
+                Icon(Icons.Default.MyLocation, contentDescription = "Center on Location", modifier = Modifier.size(22.dp))
             }
 
-            // Zoom In / Out Cluster (Strictly 12dp shape preserved)
+            // Zoom In / Out Cluster (48dp standard touch targets)
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = colorScheme.surface,
@@ -511,19 +512,19 @@ fun MapViewComposable(
                     IconButton(
                         onClick = { mapViewRef?.controller?.zoomIn() },
                         modifier = Modifier
-                            .size(42.dp)
+                            .size(48.dp)
                             .testTag("zoom_in_btn")
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = "Zoom In", tint = colorScheme.onSurface, modifier = Modifier.size(20.dp))
+                        Icon(Icons.Default.Add, contentDescription = "Zoom In", tint = colorScheme.onSurface, modifier = Modifier.size(22.dp))
                     }
-                    Box(modifier = Modifier.width(42.dp).height(1.dp).background(colorScheme.outlineVariant.copy(alpha = 0.6f)))
+                    Box(modifier = Modifier.width(48.dp).height(1.dp).background(colorScheme.outlineVariant.copy(alpha = 0.6f)))
                     IconButton(
                         onClick = { mapViewRef?.controller?.zoomOut() },
                         modifier = Modifier
-                            .size(42.dp)
+                            .size(48.dp)
                             .testTag("zoom_out_btn")
                     ) {
-                        Icon(Icons.Default.Remove, contentDescription = "Zoom Out", tint = colorScheme.onSurface, modifier = Modifier.size(20.dp))
+                        Icon(Icons.Default.Remove, contentDescription = "Zoom Out", tint = colorScheme.onSurface, modifier = Modifier.size(22.dp))
                     }
                 }
             }

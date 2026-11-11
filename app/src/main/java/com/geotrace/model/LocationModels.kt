@@ -47,6 +47,29 @@ data class LocationPoint(
     val sessionId: String
 ) {
     val speedKmh: Float get() = speed * 3.6f
+
+    val gaitLabel: String
+        get() {
+            val kmh = speedKmh
+            return when {
+                kmh < 0.8f -> "Stationary"
+                kmh < 2.5f -> "Slow Walk"
+                kmh < 5.4f -> "Walking"
+                kmh < 8.0f -> "Brisk Walk"
+                kmh < 18.0f -> "Running"
+                else -> "In Transit"
+            }
+        }
+
+    val paceMinPerKm: String
+        get() {
+            val kmh = speedKmh
+            if (kmh < 0.8f) return "--:--"
+            val secPerKm = (3600.0 / kmh).toLong()
+            val minutes = secPerKm / 60
+            val seconds = secPerKm % 60
+            return String.format(java.util.Locale.US, "%d:%02d /km", minutes, seconds)
+        }
 }
 
 data class TrackingSession(
@@ -85,6 +108,15 @@ data class TrackingSession(
             String.format("%.2f km", totalDistanceMeters / 1000.0)
         } else {
             String.format("%.0f m", totalDistanceMeters)
+        }
+
+    val avgPaceMinPerKm: String
+        get() {
+            if (avgSpeedKmh < 0.6) return "--:--"
+            val secPerKm = (3600.0 / avgSpeedKmh).toLong()
+            val minutes = secPerKm / 60
+            val seconds = secPerKm % 60
+            return String.format(java.util.Locale.US, "%d:%02d /km", minutes, seconds)
         }
 }
 

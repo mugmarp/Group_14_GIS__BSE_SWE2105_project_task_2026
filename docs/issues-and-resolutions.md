@@ -22,6 +22,8 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 | **GT-ISSUE-03** | Local Storage | **Medium** | Full table scans on `location_points` during map rendering and export generation | **Resolved** |
 | **GT-ISSUE-04** | Battery / QA | **Medium** | Rapid battery depletion and desk jitter during tester QA evaluations | **Resolved** |
 | **GT-DECISION-05**| Cloud / Telemetry | **Strategic**| Multi-User Location Sharing & Web Dispatcher Cloud Backend Selection | **Adopted (Firebase)**|
+| **GT-ISSUE-06** | Telemetry / Math | **High** | Erratic pedestrian speeds (~4 km/h when shuffling, 0 km/h in balanced mode) due to Doppler noise & deadband decoupling | **Resolved** |
+| **GT-ISSUE-07** | UI / Responsiveness | **Medium** | HUD metrics overcrowding, sub-48dp touch targets, and speed unit inconsistencies | **Resolved** |
 
 ---
 
@@ -92,10 +94,44 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 
 ---
 
+### GT-ISSUE-06: Erroneous & Jittery Pedestrian Speed Telemetry
+- **Discovered:** November 11, 2026
+- **Files Affected:** `LocationRepository.kt`, `LocationModels.kt`, `LocationForegroundService.kt`, `MapScreen.kt`
+- **Symptom:** Testers observed speeds jumping to ~4 km/h while shuffling or taking tiny indoor steps, while in Balanced Power mode (5s fused) speed stayed frozen at 0.0 km/h even when walking.
+- **Root Cause:**
+  1. *Doppler Noise Floor:* Android `Location.speed` is derived from satellite carrier-phase Doppler shift. Normal walking is physically $1.1 – 1.4\text{ m/s}$ ($4.0 – 5.0\text{ km/h}$). However, hand-swing oscillations and multipath position jitter ($1\text{m}$ in $1\text{s}$) produce artificial velocity spikes of $3.6 – 4.5\text{ km/h}$ even when stepping in place.
+  2. *Deadband Decoupling:* When stationary ($< 1.5\text{m}$), `LocationRepository` suppressed distance, but raw `point.speed` was left uncalibrated, showing `DISTANCE: 0 m` alongside `SPEED: 4.1 km/h`.
+  3. *Unfiltered Instantaneous Speed:* The HUD displayed raw instantaneous satellite speed with zero smoothing.
+  4. *Asymmetric Fallback:* Fused network provider in Balanced mode often returned `hasSpeed() == false`, leaving speed at `0.0`.
+- **Resolution:**
+  1. **Low-Speed Pedestrian Clamp:** When displacement is within the deadband ($< 1.5\text{m}$) or speed $< 0.6\text{ m/s}$ ($< 2.1\text{ km/h}$), speed is clamped to `0.0f`.
+  2. **Derived Speed Fallback:** When `hasSpeed()` is false and $\Delta d > 1.5\text{m}$, speed is derived from $\Delta d / \Delta t$.
+  3. **Exponential Moving Average (EMA):** Applied EMA smoothing ($\alpha = 0.35$) to eliminate instantaneous jumps while preserving rapid stops.
+  4. **Human Gait Classification & Pace Metric:** Added `gaitLabel` (`Stationary`, `Slow Walk`, `Walking`, `Brisk Walk`, `Running`, `In Transit`) and pace (`min/km`) to give immediate human context.
+- **Outcome:** Rock-solid pedestrian speed telemetry; 0.0 km/h when stationary, smooth 4.0–4.5 km/h when walking, and accurate pace display.
+
+---
+
+### GT-ISSUE-07: Cross-Screen UI/UX Responsiveness & Layout Flaws
+- **Discovered:** November 11, 2026
+- **Files Affected:** `MapScreen.kt`, `MapViewComposable.kt`, `HistoryScreen.kt`, `GeofenceScreen.kt`, `MainActivity.kt`
+- **Symptom:** HUD scalar metrics cramped and wrapping on narrow screens (<360dp); map controls and geofence action buttons had sub-48dp touch targets; speed units in popups hardcoded to km/h regardless of settings; empty history screen lacked a call-to-action button.
+- **Resolution:**
+  1. **Responsive Weighted HUD:** Replaced rigid spacing in `MapScreen.kt` with adaptive weighted layout (`Modifier.weight(1f)`) and subtitle support for gait and pace.
+  2. **Accessibility 48dp Touch Targets:** Enlarged Map recenter FAB, zoom buttons, and Geofence edit/delete buttons to standard 48dp minimum targets.
+  3. **Speed Unit Consistency:** Unified speed formatting across `MapViewComposable` marker popups and `MainActivity` menu using `settings.speedUnit` and gait subtitles.
+  4. **Actionable Empty States:** Added an interactive "Open Live Map to Record" button in `HistoryScreen.kt` for direct navigation when no tracks are saved.
+- **Outcome:** Clean, accessible, WCAG-compliant responsive layouts across all screen densities.
+
+---
+
 ## 3. Verification & Compliance Checklist
 
 - [x] **FileProvider Export**: Verified `.gpx`, `.kml`, and `.csv` generate valid URIs without Binder overflow.
 - [x] **WakeLock Execution**: Verified `PARTIAL_WAKE_LOCK` acquires cleanly and releases without leaks on service stop.
 - [x] **Database Migration**: Verified clean upgrade from v1 to v2 database schema with composite index.
 - [x] **Auto-Balanced Testing Switch**: Verified UI toggle in Settings, 5s interval setting, and full trail recording.
+- [x] **Pedestrian Speed Calibration**: Verified low-speed clamp, EMA smoothing, derived fallback, and gait classification.
+- [x] **Cross-Screen Responsiveness**: Verified 48dp touch targets, weighted telemetry columns, and speed unit consistency.
 - [x] **Gradle Build**: Verified project builds cleanly (`compile_applet` PASS) and unit tests pass (`testDebugUnitTest` PASS).
+

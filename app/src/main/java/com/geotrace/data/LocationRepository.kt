@@ -63,6 +63,9 @@ class LocationRepository(private val context: Context) {
     @Volatile
     var jitterThresholdMeters: Float = 1.5f
 
+    @Volatile
+    private var smoothedSpeedMps: Float = 0f
+
     init {
         loadInitialData()
     }
@@ -105,6 +108,7 @@ class LocationRepository(private val context: Context) {
 
         _activeSession.value = session
         _activeTrailPoints.value = emptyList()
+        smoothedSpeedMps = 0f
         loadSessions()
         session
     }
@@ -167,20 +171,74 @@ class LocationRepository(private val context: Context) {
 
         _activeSession.value = null
         _activeTrailPoints.value = emptyList()
+        smoothedSpeedMps = 0f
         loadSessions()
         updated
     }
 
-    suspend fun recordLocation(point: LocationPoint) = withContext(Dispatchers.IO) {
+    suspend fun recordLocation(rawPoint: LocationPoint) = withContext(Dispatchers.IO) {
         // Discard null island and NaN glitch coordinates
-        if ((point.latitude == 0.0 && point.longitude == 0.0) || point.latitude.isNaN() || point.longitude.isNaN()) {
+        if ((rawPoint.latitude == 0.0 && rawPoint.longitude == 0.0) || rawPoint.latitude.isNaN() || rawPoint.longitude.isNaN()) {
             return@withContext
         }
 
+        val session = _activeSession.value
+        val prevPoint = if (session != null && session.isRecording) {
+            _activeTrailPoints.value.lastOrNull()
+        } else {
+            _currentLocation.value
+        }
 
+        var additionalDistance = 0.0
+        var isStationary = false
+        var candidateSpeed = rawPoint.speed
+
+        if (prevPoint != null) {
+            val dist = calculateDistanceMeters(prevPoint.latitude, prevPoint.longitude, rawPoint.latitude, rawPoint.longitude)
+            val timeDiffSec = ((rawPoint.timestamp - prevPoint.timestamp) / 1000.0).coerceAtLeast(0.1)
+            val impliedSpeedMps = (dist / timeDiffSec).toFloat()
+
+            // Discard sudden GPS teleportation/multipath jump (> 5km or implied speed > 200 km/h)
+            if (dist > 5000.0 || impliedSpeedMps > 55.0f) {
+                additionalDistance = 0.0
+            } else if (jitterThresholdMeters > 0f && dist < jitterThresholdMeters) {
+                _filteredJitterMeters.value += dist
+                _filteredJitterCount.value += 1
+                additionalDistance = 0.0
+                isStationary = true
+            } else {
+                additionalDistance = dist
+            }
+
+            // Speed Calibration & Noise Filtering
+            if (isStationary) {
+                // When distance deadband filters this coordinate as stationary, speed must be 0
+                candidateSpeed = 0f
+            } else if (candidateSpeed <= 0.1f && timeDiffSec > 0.2 && additionalDistance > 0.0) {
+                // Fallback for Balanced/Cellular modes where hasSpeed() is false: derive from displacement / time
+                candidateSpeed = impliedSpeedMps.coerceIn(0f, 45f)
+            } else if (candidateSpeed < 0.6f) {
+                // Low-speed pedestrian noise floor clamp (< 0.6 m/s or < 2.1 km/h)
+                candidateSpeed = 0f
+            }
+        } else {
+            if (candidateSpeed < 0.6f) {
+                candidateSpeed = 0f
+            }
+        }
+
+        // Exponential Moving Average (EMA) smoothing for stable velocity display
+        smoothedSpeedMps = if (candidateSpeed <= 0f) {
+            0f // Instant stop
+        } else if (smoothedSpeedMps <= 0f) {
+            candidateSpeed
+        } else {
+            (0.35f * candidateSpeed) + (0.65f * smoothedSpeedMps)
+        }
+
+        val point = rawPoint.copy(speed = smoothedSpeedMps)
         _currentLocation.value = point
 
-        val session = _activeSession.value
         if (session != null && session.isRecording) {
             val db = dbHelper.writableDatabase
             val cv = ContentValues().apply {
@@ -196,32 +254,12 @@ class LocationRepository(private val context: Context) {
             }
             db.insert(LocationDbHelper.TABLE_POINTS, null, cv)
 
-            val prevPoint = _activeTrailPoints.value.lastOrNull()
             _activeTrailPoints.value = _activeTrailPoints.value + point
-
-            // Calculate incremental distance with multipath & teleportation jump rejection
-            val additionalDistance: Double = if (prevPoint != null) {
-                val dist = calculateDistanceMeters(prevPoint.latitude, prevPoint.longitude, point.latitude, point.longitude)
-                val timeDiffSec = ((point.timestamp - prevPoint.timestamp) / 1000.0).coerceAtLeast(0.1)
-                val impliedSpeedMps = dist / timeDiffSec
-                // Discard sudden GPS teleportation/multipath jump (> 5km or implied speed > 200 km/h)
-                if (dist > 5000.0 || impliedSpeedMps > 55.0) {
-                    0.0
-                } else if (jitterThresholdMeters > 0f && dist < jitterThresholdMeters) {
-                    _filteredJitterMeters.value += dist
-                    _filteredJitterCount.value += 1
-                    0.0 // Discard stationary jitter according to configurable sensitivity
-                } else {
-                    dist
-                }
-            } else {
-                0.0
-            }
 
             val newDistance = session.totalDistanceMeters + additionalDistance
             val newPointCount = session.pointCount + 1
             val currentSpeedKmh = point.speedKmh.toDouble()
-            val newMaxSpeed = maxOf(session.maxSpeedKmh, currentSpeedKmh)
+            val newMaxSpeed = if (additionalDistance > 0.0) maxOf(session.maxSpeedKmh, currentSpeedKmh) else session.maxSpeedKmh
 
             val elapsedSec = ((point.timestamp - session.startTime) / 1000.0).coerceAtLeast(1.0)
             val newAvgSpeed = (newDistance / elapsedSec) * 3.6

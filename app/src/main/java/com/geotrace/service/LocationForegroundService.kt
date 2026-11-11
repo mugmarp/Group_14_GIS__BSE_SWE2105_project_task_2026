@@ -188,10 +188,12 @@ class LocationForegroundService : Service() {
         serviceScope.launch {
             repo.recordLocation(point)
 
-            val speedKmh = point.speedKmh
+            val calibratedPoint = repo.currentLocation.value ?: point
+            val speedKmh = calibratedPoint.speedKmh
+            val gait = calibratedPoint.gaitLabel
             val distFormatted = activeSession?.formattedDistance ?: "0 m"
             val title = "Tracking: ${activeSession?.name ?: "Live Location"}"
-            val content = "Dist: $distFormatted | Speed: ${String.format("%.1f", speedKmh)} km/h | Acc: ±${loc.accuracy.toInt()}m"
+            val content = "Dist: $distFormatted | Speed: ${String.format("%.1f", speedKmh)} km/h ($gait) | Acc: ±${loc.accuracy.toInt()}m"
 
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.notify(NOTIFICATION_ID, buildNotification(title, content, mode))
