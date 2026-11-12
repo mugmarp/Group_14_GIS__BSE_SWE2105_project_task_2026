@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.google.services)
 }
 
 android {
@@ -89,4 +90,15 @@ dependencies {
     implementation(libs.play.services.location)
     implementation(libs.coil.compose)
     implementation(libs.osmdroid.android)
+
+    // Firebase & Authentication
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.firestore)
+    implementation(libs.firebase.auth)
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services)
+    implementation(libs.googleid)
+
+    // Phase 2: Nearby Connections P2P Mesh
+    implementation(libs.play.services.nearby)
 }

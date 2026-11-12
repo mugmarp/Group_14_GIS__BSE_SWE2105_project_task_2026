@@ -1,6 +1,8 @@
 package com.geotrace.ui.components
 
+import android.content.Context
 import android.graphics.Paint
+import java.util.Locale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -69,6 +71,8 @@ fun MapViewComposable(
     geofenceZones: List<com.geotrace.model.GeofenceZone> = emptyList(),
     cellTowerLocation: com.geotrace.model.CellTowerLocation? = null,
     allCellTowers: List<com.geotrace.model.CellTowerLocation> = emptyList(),
+    groupMembers: List<com.geotrace.model.MemberLocation> = emptyList(),
+    nearbyPeers: List<com.geotrace.model.P2PPeer> = emptyList(),
     settings: com.geotrace.model.TrackerSettings = com.geotrace.model.TrackerSettings(),
     onSelectTileLayer: ((com.geotrace.model.MapTileType) -> Unit)? = null,
     onToggleCellTowerPin: ((Boolean) -> Unit)? = null,
@@ -344,6 +348,51 @@ fun MapViewComposable(
                     }
                 }
 
+                // 5. Draw Multi-User Group Members (Family / Field Team)
+                for (member in groupMembers) {
+                    val memberGeoPoint = GeoPoint(member.latitude, member.longitude)
+                    val memberColor = try {
+                        android.graphics.Color.parseColor(member.avatarColor)
+                    } catch (e: Exception) {
+                        android.graphics.Color.parseColor("#2563EB")
+                    }
+
+                    // Accuracy Circle for member
+                    if (member.accuracy > 0f) {
+                        val memberAccCircle = computeCircleGeoPoints(memberGeoPoint, member.accuracy.toDouble())
+                        val memberPolygon = Polygon(map).apply {
+                            points = memberAccCircle
+                            fillPaint.color = android.graphics.Color.argb(25, android.graphics.Color.red(memberColor), android.graphics.Color.green(memberColor), android.graphics.Color.blue(memberColor))
+                            outlinePaint.color = android.graphics.Color.argb(160, android.graphics.Color.red(memberColor), android.graphics.Color.green(memberColor), android.graphics.Color.blue(memberColor))
+                            outlinePaint.strokeWidth = 1.5f
+                        }
+                        map.overlays.add(memberPolygon)
+                    }
+
+                    // Custom avatar pin
+                    val memberMarker = Marker(map).apply {
+                        position = memberGeoPoint
+                        title = "👤 ${member.displayName} (${member.gait})"
+                        snippet = "Speed: ${String.format(Locale.US, "%.1f", member.speed * 3.6f)} km/h | Battery: ${member.batteryPercent}% (${member.trackingMode})"
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        icon = createMemberAvatarDrawable(context, member.displayName, memberColor)
+                    }
+                    map.overlays.add(memberMarker)
+                }
+
+                // 6. Draw P2P Wilderness Peers (Phase 2 Nearby Connections)
+                for (peer in nearbyPeers) {
+                    val peerGeoPoint = GeoPoint(peer.latitude, peer.longitude)
+                    val peerMarker = Marker(map).apply {
+                        position = peerGeoPoint
+                        title = "📶 P2P Peer: ${peer.displayName}"
+                        snippet = "Speed: ${String.format(Locale.US, "%.1f", peer.speed * 3.6f)} km/h | Battery: ${peer.batteryPercent}% (Direct BLE/Wi-Fi)"
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        icon = createP2PPeerDrawable(context, peer.displayName)
+                    }
+                    map.overlays.add(peerMarker)
+                }
+
                 map.invalidate()
             },
             modifier = Modifier.fillMaxSize()
@@ -552,3 +601,40 @@ private fun computeCircleGeoPoints(center: GeoPoint, radiusMeters: Double, point
     }
     return points
 }
+
+private fun createMemberAvatarDrawable(context: Context, name: String, colorInt: Int): android.graphics.drawable.Drawable {
+    val size = 96
+    val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+
+    val strokePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 6f
+    }
+    val fillPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = colorInt
+        style = android.graphics.Paint.Style.FILL
+    }
+    val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        textSize = 34f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        textAlign = android.graphics.Paint.Align.CENTER
+    }
+
+    val radius = (size / 2f) - 6f
+    canvas.drawCircle(size / 2f, size / 2f, radius, fillPaint)
+    canvas.drawCircle(size / 2f, size / 2f, radius, strokePaint)
+
+    val initials = name.trim().take(2).uppercase().ifBlank { "M" }
+    val yPos = (size / 2f) - ((textPaint.descent() + textPaint.ascent()) / 2)
+    canvas.drawText(initials, size / 2f, yPos, textPaint)
+
+    return android.graphics.drawable.BitmapDrawable(context.resources, bitmap)
+}
+
+private fun createP2PPeerDrawable(context: Context, name: String): android.graphics.drawable.Drawable {
+    return createMemberAvatarDrawable(context, name, android.graphics.Color.parseColor("#059669"))
+}
+

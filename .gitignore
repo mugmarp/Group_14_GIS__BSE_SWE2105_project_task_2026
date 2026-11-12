@@ -25,3 +25,7 @@ internal/
 .aistudio/
 .aistudio/artifacts/
 /.aistudio/artifacts/
+
+# Ephemeral Firebase logs
+*-debug.log
+

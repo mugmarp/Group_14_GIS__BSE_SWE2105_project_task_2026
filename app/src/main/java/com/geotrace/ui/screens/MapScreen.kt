@@ -35,6 +35,7 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
@@ -77,6 +78,7 @@ import com.geotrace.model.MapTileType
 import com.geotrace.model.TrackingMode
 import com.geotrace.ui.components.MapViewComposable
 import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.viewmodel.GroupViewModel
 import com.geotrace.viewmodel.TrackerViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -86,7 +88,9 @@ import java.util.Locale
 @Composable
 fun MapScreen(
     viewModel: TrackerViewModel,
+    groupViewModel: GroupViewModel? = null,
     onOpenMenu: () -> Unit,
+    onNavigateToGroups: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -101,6 +105,12 @@ fun MapScreen(
     val settings by viewModel.settings.collectAsState()
     val cellTowerLocation by viewModel.cellTowerLocation.collectAsState()
     val allCellTowers by viewModel.allCellTowerLocations.collectAsState()
+
+    val activeGroup by (groupViewModel?.activeGroup ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
+    val groupMembers by (groupViewModel?.groupMembers ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsState()
+    val nearbyPeers by (groupViewModel?.nearbyPeers ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsState()
+    val isGhostMode by (groupViewModel?.isGhostMode ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
+    val isP2PEnabled by (groupViewModel?.isP2PEnabled ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
 
     var showStartDialog by remember { mutableStateOf(false) }
     var showProfileDialog by remember { mutableStateOf(false) }
@@ -127,6 +137,8 @@ fun MapScreen(
             geofenceZones = geofenceZones,
             cellTowerLocation = cellTowerLocation,
             allCellTowers = allCellTowers,
+            groupMembers = groupMembers,
+            nearbyPeers = nearbyPeers,
             settings = settings,
             onSelectTileLayer = { selectedTile ->
                 viewModel.updateMapTileType(selectedTile)
@@ -433,6 +445,44 @@ fun MapScreen(
                     }
                 }
 
+                // Floating Group / Circle Tracking Pill
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = if (activeGroup != null) colorScheme.primaryContainer.copy(alpha = 0.5f) else colorScheme.surface,
+                    shadowElevation = 3.dp,
+                    border = BorderStroke(1.dp, if (activeGroup != null) colorScheme.primary else colorScheme.outlineVariant),
+                    modifier = Modifier
+                        .clickable { onNavigateToGroups?.invoke() }
+                        .testTag("floating_group_pill")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Group,
+                            contentDescription = "Circles",
+                            tint = if (activeGroup != null) colorScheme.primary else colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (activeGroup != null) "${activeGroup!!.name} (${groupMembers.size})" else "Circles",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface
+                        )
+                        if (isGhostMode) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("👻", fontSize = 10.sp)
+                        }
+                        if (isP2PEnabled) {
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("📶", fontSize = 10.sp)
+                        }
+                    }
+                }
+
                 // Live Geofence Zone Proximity Chip (Active Perimeter Alert)
                 val activeZone = geofenceZones.firstOrNull { it.isInside }
                 if (activeZone != null) {
@@ -495,6 +545,76 @@ fun MapScreen(
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFFD97706)
                             )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Bottom Member Carousel (Situational Awareness for Active Circle)
+        if (activeGroup != null && groupMembers.isNotEmpty()) {
+            val memberScrollState = rememberScrollState()
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(bottom = if (activeSession == null) 66.dp else 12.dp, start = 14.dp, end = 14.dp)
+                    .fillMaxWidth()
+                    .horizontalScroll(memberScrollState),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                for (member in groupMembers) {
+                    val dist = if (currentLocation != null) member.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude) else null
+                    val distStr = when {
+                        dist == null -> "--"
+                        dist < 1000 -> "${dist.toInt()}m"
+                        else -> String.format(Locale.US, "%.1fkm", dist / 1000f)
+                    }
+                    val memColor = try { Color(android.graphics.Color.parseColor(member.avatarColor)) } catch(e: Exception) { colorScheme.primary }
+
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = colorScheme.surface,
+                        shadowElevation = 4.dp,
+                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                        modifier = Modifier
+                            .clickable {
+                                onNavigateToGroups?.invoke()
+                            }
+                            .testTag("carousel_member_${member.userId}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(memColor),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = member.displayName.take(2).uppercase(),
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = member.displayName,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "$distStr • ${member.batteryPercent}% 🔋",
+                                    fontSize = 10.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
                     }
                 }

@@ -1,0 +1,54 @@
+{
+  "entities": {
+    "Group": {
+      "title": "Group",
+      "description": "Family or team circle for multi-device location sharing.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Display name of the group/circle." },
+        "inviteCode": { "type": "string", "description": "Unique 6-character invitation code (e.g. FAM-7K2)." },
+        "createdBy": { "type": "string", "description": "User ID of the group creator." },
+        "memberIds": {
+          "type": "array",
+          "description": "List of user IDs who are authorized members of this group.",
+          "items": { "type": "string" }
+        },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp." }
+      },
+      "required": ["name", "inviteCode", "createdBy", "memberIds", "createdAt"]
+    },
+    "MemberLocation": {
+      "title": "MemberLocation",
+      "description": "Live real-time location and telemetry broadcast for a group member.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "User ID of the member." },
+        "displayName": { "type": "string", "description": "Display name or callsign." },
+        "avatarColor": { "type": "string", "description": "Hex color code for map pin representation." },
+        "latitude": { "type": "number", "description": "WGS84 Latitude coordinate." },
+        "longitude": { "type": "number", "description": "WGS84 Longitude coordinate." },
+        "accuracy": { "type": "number", "description": "Accuracy radius in meters." },
+        "speed": { "type": "number", "description": "Instantaneous or smoothed speed in m/s." },
+        "bearing": { "type": "number", "description": "Heading in degrees (0-360)." },
+        "altitude": { "type": "number", "description": "Altitude in meters above sea level." },
+        "gait": { "type": "string", "description": "Movement classification (Stationary, Walking, In Transit)." },
+        "batteryPercent": { "type": "integer", "description": "Device battery percentage (0-100)." },
+        "isCharging": { "type": "boolean", "description": "Whether device is currently charging." },
+        "trackingMode": { "type": "string", "description": "Active tracking mode (HIGH_ACCURACY, BALANCED, POWER_SAVER)." },
+        "isSharingEnabled": { "type": "boolean", "description": "Whether location broadcasting is active or paused (Ghost Mode)." },
+        "lastUpdated": { "type": "string", "format": "date-time", "description": "Timestamp of the last telemetry update." }
+      },
+      "required": ["userId", "displayName", "latitude", "longitude", "lastUpdated"]
+    }
+  },
+  "firestore": {
+    "/groups/{groupId}": {
+      "schema": { "$ref": "#/entities/Group" },
+      "description": "Stores group circles and authorized member rosters."
+    },
+    "/groups/{groupId}/live_locations/{userId}": {
+      "schema": { "$ref": "#/entities/MemberLocation" },
+      "description": "Stores real-time member locations scoped to group members."
+    }
+  }
+}

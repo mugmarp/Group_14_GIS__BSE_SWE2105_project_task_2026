@@ -33,6 +33,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.School
@@ -74,18 +75,21 @@ import androidx.core.content.ContextCompat
 import androidx.compose.material.icons.filled.NotificationsActive
 import com.geotrace.ui.screens.CellularDiagnosticScreen
 import com.geotrace.ui.screens.GeofenceScreen
+import com.geotrace.ui.screens.GroupScreen
 import com.geotrace.ui.screens.HistoryScreen
 import com.geotrace.ui.screens.MapScreen
 import com.geotrace.ui.screens.ResearchAnalysisScreen
 import com.geotrace.ui.screens.SettingsScreen
 import com.geotrace.ui.theme.GISTrackerTheme
 import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.viewmodel.GroupViewModel
 import com.geotrace.viewmodel.TrackerViewModel
 import kotlinx.coroutines.launch
 
 enum class Screen(val title: String, val testTag: String) {
     MAP("Live Map & Telemetry", "nav_map"),
     CELLULAR("Cellular Signal Hub", "nav_cellular"),
+    GROUPS("Family & Circle Tracking", "nav_groups"),
     GEOFENCE("Safe Zones & Geofencing", "nav_geofence"),
     HISTORY("Saved Trails & Exports", "nav_history"),
     RESEARCH("SWE2105 Research Analysis", "nav_research"),
@@ -95,6 +99,7 @@ enum class Screen(val title: String, val testTag: String) {
 class MainActivity : ComponentActivity() {
 
     private val viewModel: TrackerViewModel by viewModels()
+    private val groupViewModel: GroupViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -102,7 +107,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             GISTrackerTheme {
-                MainAppScreen(viewModel = viewModel)
+                MainAppScreen(viewModel = viewModel, groupViewModel = groupViewModel)
             }
         }
     }
@@ -110,7 +115,10 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainAppScreen(viewModel: TrackerViewModel) {
+fun MainAppScreen(
+    viewModel: TrackerViewModel,
+    groupViewModel: GroupViewModel
+) {
     val context = LocalContext.current
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
@@ -126,6 +134,7 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
     val cellTowers by viewModel.cellTowers.collectAsState()
     val geofenceZones by viewModel.geofenceZones.collectAsState()
     val settings by viewModel.settings.collectAsState()
+    val activeGroup by groupViewModel.activeGroup.collectAsState()
 
     // Handle Back Press: Close menu bottom sheet if open, or return to Map screen
     if (showMenuSheet) {
@@ -189,9 +198,9 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
-        // Streamlined 2-Pillar Bottom Bar with Top-Only Corner Radius
+        // Streamlined 3-Pillar Bottom Bar with Top-Only Corner Radius
         bottomBar = {
-            if (currentScreen == Screen.MAP || currentScreen == Screen.CELLULAR) {
+            if (currentScreen == Screen.MAP || currentScreen == Screen.CELLULAR || currentScreen == Screen.GROUPS) {
                 Surface(
                     shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
                     color = colorScheme.surface,
@@ -238,6 +247,21 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                                 unselectedTextColor = colorScheme.onSurfaceVariant
                             )
                         )
+
+                        NavigationBarItem(
+                            selected = currentScreen == Screen.GROUPS,
+                            onClick = { currentScreen = Screen.GROUPS },
+                            icon = { Icon(Icons.Default.Group, contentDescription = "Family Circles", modifier = Modifier.size(20.dp)) },
+                            label = { Text("Circles", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.02.sp) },
+                            modifier = Modifier.testTag("nav_bottom_groups"),
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = colorScheme.onPrimary,
+                                selectedTextColor = colorScheme.primary,
+                                indicatorColor = colorScheme.primary,
+                                unselectedIconColor = colorScheme.onSurfaceVariant,
+                                unselectedTextColor = colorScheme.onSurfaceVariant
+                            )
+                        )
                     }
                 }
             }
@@ -251,11 +275,15 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
             when (currentScreen) {
                 Screen.MAP -> MapScreen(
                     viewModel = viewModel,
+                    groupViewModel = groupViewModel,
                     onOpenMenu = {
                         scope.launch {
                             showMenuSheet = true
                             sheetState.show()
                         }
+                    },
+                    onNavigateToGroups = {
+                        currentScreen = Screen.GROUPS
                     }
                 )
                 Screen.CELLULAR -> CellularDiagnosticScreen(
@@ -267,6 +295,10 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                             sheetState.show()
                         }
                     }
+                )
+                Screen.GROUPS -> GroupScreen(
+                    groupViewModel = groupViewModel,
+                    currentLocation = currentLocation
                 )
                 Screen.GEOFENCE -> GeofenceScreen(
                     viewModel = viewModel,
@@ -396,6 +428,25 @@ fun MainAppScreen(viewModel: TrackerViewModel) {
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
+
+                    // Card 0: Family & Circle Tracking (Cloud & P2P Mesh)
+                    MenuNavigationCard(
+                        title = "Family & Circle Tracking",
+                        subtitle = "Multi-device real-time sync, battery telemetry & P2P mesh",
+                        badgeText = if (activeGroup != null) activeGroup!!.name else "Setup",
+                        badgeColor = if (activeGroup != null) colorScheme.tertiary else colorScheme.primary,
+                        icon = { Icon(Icons.Default.Group, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(22.dp)) },
+                        onClick = {
+                            scope.launch {
+                                sheetState.hide()
+                                showMenuSheet = false
+                                currentScreen = Screen.GROUPS
+                            }
+                        },
+                        modifier = Modifier.testTag("menu_nav_groups")
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     // Card 1: Saved Trails & Exports
                     MenuNavigationCard(

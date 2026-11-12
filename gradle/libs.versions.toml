@@ -9,6 +9,11 @@ composeIcons = "1.7.0"
 playServicesLocation = "21.3.0"
 coil = "2.7.0"
 osmdroid = "6.1.18"
+googleServices = "4.4.2"
+firebaseBom = "33.10.0"
+credentials = "1.3.0"
+googleid = "1.1.1"
+playServicesNearby = "19.3.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -26,7 +31,19 @@ play-services-location = { group = "com.google.android.gms", name = "play-servic
 coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
 osmdroid-android = { group = "org.osmdroid", name = "osmdroid-android", version.ref = "osmdroid" }
 
+# Firebase & Authentication
+firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
+firebase-firestore = { group = "com.google.firebase", name = "firebase-firestore" }
+firebase-auth = { group = "com.google.firebase", name = "firebase-auth" }
+androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
+androidx-credentials-play-services = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
+googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
+
+# Phase 2: Offline P2P Mesh
+play-services-nearby = { group = "com.google.android.gms", name = "play-services-nearby", version.ref = "playServicesNearby" }
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }

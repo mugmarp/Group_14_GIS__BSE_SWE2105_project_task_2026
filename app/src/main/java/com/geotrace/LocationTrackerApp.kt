@@ -13,6 +13,9 @@ class LocationTrackerApp : Application() {
     lateinit var cellManager: CellularDiagnosticManager
         private set
 
+    lateinit var groupRepository: com.geotrace.data.GroupRepository
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -22,6 +25,7 @@ class LocationTrackerApp : Application() {
 
         repository = LocationRepository(this)
         cellManager = CellularDiagnosticManager(this)
+        groupRepository = com.geotrace.data.GroupRepository(this)
 
         // Read real hardware cell towers if present
         val initialTowers = cellManager.readCurrentCellTowers()
