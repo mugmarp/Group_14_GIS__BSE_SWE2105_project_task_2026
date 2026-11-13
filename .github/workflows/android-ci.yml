@@ -67,40 +67,39 @@ jobs:
         run: |
           if [ -n "$GOOGLE_SERVICES_BASE64" ]; then
             echo "Decoding google-services.json from GitHub Secret..."
-            echo "$GOOGLE_SERVICES_BASE64" | base64 -d > app/google-services.json
+            printf '%s' "$GOOGLE_SERVICES_BASE64" | tr -d '[:space:]' | base64 -d > app/google-services.json
           elif [ -f app/google-services.json ]; then
             echo "Found existing local app/google-services.json"
           else
             echo "Generating fallback google-services.json for CI compile check..."
-            cat << 'EOF' > app/google-services.json
-{
-  "project_info": {
-    "project_id": "geotrace-ci-mock",
-    "project_number": "1039367946793"
-  },
-  "client": [
-    {
-      "client_info": {
-        "mobilesdk_app_id": "1:1039367946793:android:6b7859d13c2d7c69c71238",
-        "android_client_info": {
-          "package_name": "com.geotrace"
-        }
-      },
-      "oauth_client": [
-        {
-          "client_id": "1039367946793-cimockwebclientid.apps.googleusercontent.com",
-          "client_type": 3
-        }
-      ],
-      "api_key": [
-        {
-          "current_key": "AIzaSyCiMockPlaceholderKey000000000000"
-        }
-      ]
-    }
-  ]
-}
-EOF
+            printf '%s\n' \
+              '{' \
+              '  "project_info": {' \
+              '    "project_id": "geotrace-ci-mock",' \
+              '    "project_number": "1039367946793"' \
+              '  },' \
+              '  "client": [' \
+              '    {' \
+              '      "client_info": {' \
+              '        "mobilesdk_app_id": "1:1039367946793:android:6b7859d13c2d7c69c71238",' \
+              '        "android_client_info": {' \
+              '          "package_name": "com.geotrace"' \
+              '        }' \
+              '      },' \
+              '      "oauth_client": [' \
+              '        {' \
+              '          "client_id": "1039367946793-cimockwebclientid.apps.googleusercontent.com",' \
+              '          "client_type": 3' \
+              '        }' \
+              '      ],' \
+              '      "api_key": [' \
+              '        {' \
+              '          "current_key": "AIzaSyCiMockPlaceholderKey000000000000"' \
+              '        }' \
+              '      ]' \
+              '    }' \
+              '  ]' \
+              '}' > app/google-services.json
           fi
 
       - name: Resolve Version Code and Name
@@ -155,7 +154,7 @@ EOF
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
             echo "Decoding release keystore from GitHub Secret..."
-            echo "$KEYSTORE_BASE64" | base64 -d > release.keystore
+            printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > release.keystore
             echo "STORE_FILE=release.keystore" >> $GITHUB_ENV
             echo "STORE_PASSWORD=${{ secrets.SIGNING_STORE_PASSWORD }}" >> $GITHUB_ENV
             echo "KEY_ALIAS=${{ secrets.SIGNING_KEY_ALIAS }}" >> $GITHUB_ENV
