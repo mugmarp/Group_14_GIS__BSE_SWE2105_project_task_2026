@@ -58,10 +58,32 @@ fun SettingsScreen(
 ) {
     BackHandler { onNavigateBack() }
 
+    val context = androidx.compose.ui.platform.LocalContext.current
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
     val settings by viewModel.settings.collectAsState()
     val activeSession by viewModel.activeSession.collectAsState()
+    val geofenceApiStatus by viewModel.geofenceApiStatus.collectAsState()
+
+    val settingsBgPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        viewModel.resyncGeofencingApi()
+    }
+
+    val settingsGeoPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        viewModel.toggleGeofenceNotifications(true)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            settingsBgPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        }
+    }
 
     LazyColumn(
         modifier = modifier
@@ -257,6 +279,50 @@ fun SettingsScreen(
                     subtitle = "Automatically re-center map when new coordinates arrive",
                     checked = settings.followUserLocation,
                     onCheckedChange = { viewModel.toggleFollowUser(it) }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Toggle 3: Geofence Entry/Exit Notification Alerts (Off by default)
+                SettingToggleRow(
+                    title = "Geofence Perimeter Alerts",
+                    subtitle = geofenceApiStatus.statusMessage,
+                    checked = settings.geofenceNotificationEnabled,
+                    onCheckedChange = { enable ->
+                        if (!enable) {
+                            viewModel.toggleGeofenceNotifications(false)
+                        } else {
+                            val needed = mutableListOf<String>()
+                            if (androidx.core.content.ContextCompat.checkSelfPermission(
+                                    context,
+                                    android.Manifest.permission.ACCESS_FINE_LOCATION
+                                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                            ) {
+                                needed.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                            }
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+                                androidx.core.content.ContextCompat.checkSelfPermission(
+                                    context,
+                                    android.Manifest.permission.POST_NOTIFICATIONS
+                                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                            ) {
+                                needed.add(android.Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                            if (needed.isNotEmpty()) {
+                                settingsGeoPermissionLauncher.launch(needed.toTypedArray())
+                            } else {
+                                viewModel.toggleGeofenceNotifications(true)
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+                                    androidx.core.content.ContextCompat.checkSelfPermission(
+                                        context,
+                                        android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    settingsBgPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                }
+                            }
+                        }
+                    }
                 )
             }
         }

@@ -168,7 +168,10 @@ enum class GeofenceCategory(val label: String, val iconEmoji: String, val defaul
     HOME("Home Residence", "🏡", "#006948"),
     WORK("Workplace", "🏢", "#0051D5"),
     BODA_HOTSPOT("Boda Boda Hotspot", "🏍️", "#D97706"),
-    CUSTOM("Custom Zone", "📍", "#006194")
+    CUSTOM("Custom Zone", "📍", "#006194");
+
+    val isAcademicZone: Boolean
+        get() = this == CAMPUS || this == LIBRARY || this == HOSTEL || this == SCHOOL
 }
 
 data class GeofenceZone(

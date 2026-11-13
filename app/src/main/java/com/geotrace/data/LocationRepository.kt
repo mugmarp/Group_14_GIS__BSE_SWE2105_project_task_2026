@@ -60,11 +60,25 @@ class LocationRepository(private val context: Context) {
     private val _filteredJitterCount = MutableStateFlow(0)
     val filteredJitterCount: StateFlow<Int> = _filteredJitterCount.asStateFlow()
 
+    private val prefs = context.getSharedPreferences("geotrace_prefs", Context.MODE_PRIVATE)
+
+    @Volatile
+    var geofenceNotificationsEnabled: Boolean = prefs.getBoolean("geofence_notifications_enabled", false)
+        private set
+
+    fun setGeofenceNotificationsEnabled(enabled: Boolean) {
+        geofenceNotificationsEnabled = enabled
+        prefs.edit().putBoolean("geofence_notifications_enabled", enabled).apply()
+    }
+
     @Volatile
     var jitterThresholdMeters: Float = 1.5f
 
     @Volatile
     private var smoothedSpeedMps: Float = 0f
+
+    private val transitionCooldownLock = Any()
+    private val lastNotifiedTransitionMs = mutableMapOf<String, Pair<Boolean, Long>>()
 
     init {
         loadInitialData()
@@ -550,11 +564,79 @@ class LocationRepository(private val context: Context) {
         loadGeofences()
     }
 
+    suspend fun handleApiGeofenceTransition(zoneId: String, isNowInside: Boolean) = withContext(Dispatchers.IO) {
+        if (!geofenceNotificationsEnabled) return@withContext
+        if (_geofenceZones.value.isEmpty()) {
+            loadGeofences()
+        }
+        val zone = _geofenceZones.value.firstOrNull { it.id == zoneId || it.name == zoneId } ?: return@withContext
+        val now = System.currentTimeMillis()
+        if (shouldSuppressDuplicateTransition(zone.id, isNowInside, now)) return@withContext
+
+        val db = dbHelper.writableDatabase
+        val eventType = if (isNowInside) "ENTERED" else "EXITED"
+        val shouldAlert = (isNowInside && zone.alertOnEntry) || (!isNowInside && zone.alertOnExit)
+
+        val updatedZones = _geofenceZones.value.map { current ->
+            if (current.id == zone.id) {
+                current.copy(isInside = isNowInside, lastTransitionTime = now)
+            } else {
+                current
+            }
+        }
+        val zoneCv = ContentValues().apply {
+            put("is_inside", if (isNowInside) 1 else 0)
+            put("last_transition", now)
+        }
+        db.update(LocationDbHelper.TABLE_GEOFENCES, zoneCv, "id = ?", arrayOf(zone.id))
+        _geofenceZones.value = updatedZones
+
+        if (shouldAlert) {
+            val alert = GeofenceAlert(
+                id = UUID.randomUUID().toString(),
+                zoneName = zone.name,
+                eventType = eventType,
+                timestamp = now
+            )
+            val alertCv = ContentValues().apply {
+                put("id", alert.id)
+                put("zone_name", alert.zoneName)
+                put("event_type", alert.eventType)
+                put("timestamp", alert.timestamp)
+            }
+            db.insert(LocationDbHelper.TABLE_ALERTS, null, alertCv)
+            loadAlerts()
+
+            val verb = if (isNowInside) "Entered" else "Exited"
+            val notifTitle = "${zone.category.iconEmoji} ${zone.category.label}: $verb"
+            val notifContent = "You have $verb ${zone.name}"
+            com.geotrace.service.GeofenceBroadcastReceiver.sendNotification(
+                context = context,
+                title = notifTitle,
+                content = notifContent,
+                notificationId = zone.id.hashCode() + (if (isNowInside) 1 else 2)
+            )
+        }
+    }
+
+    private fun shouldSuppressDuplicateTransition(zoneId: String, isNowInside: Boolean, nowMs: Long): Boolean {
+        synchronized(transitionCooldownLock) {
+            val prev = lastNotifiedTransitionMs[zoneId]
+            if (prev != null && prev.first == isNowInside && (nowMs - prev.second) < 15_000L) {
+                return true
+            }
+            lastNotifiedTransitionMs[zoneId] = Pair(isNowInside, nowMs)
+            return false
+        }
+    }
+
     private suspend fun checkGeofences(lat: Double, lon: Double) = withContext(Dispatchers.IO) {
         val zones = _geofenceZones.value
         val updatedZones = mutableListOf<GeofenceZone>()
         val newAlerts = mutableListOf<GeofenceAlert>()
+        var hasTransitions = false
         val db = dbHelper.writableDatabase
+        val now = System.currentTimeMillis()
 
         // 15m exit hysteresis margin to eliminate boundary flapping caused by GPS multipath noise
         val hysteresisBufferMeters = 15.0
@@ -568,17 +650,18 @@ class LocationRepository(private val context: Context) {
             }
 
             if (isNowInside != z.isInside) {
+                hasTransitions = true
                 val eventType = if (isNowInside) "ENTERED" else "EXITED"
                 val shouldAlert = (isNowInside && z.alertOnEntry) || (!isNowInside && z.alertOnExit)
-                val alert = if (shouldAlert) {
-                    GeofenceAlert(
+                val notDuplicate = !shouldSuppressDuplicateTransition(z.id, isNowInside, now)
+
+                if (shouldAlert && notDuplicate) {
+                    val alert = GeofenceAlert(
                         id = UUID.randomUUID().toString(),
                         zoneName = z.name,
-                        eventType = eventType
+                        eventType = eventType,
+                        timestamp = now
                     )
-                } else null
-
-                if (alert != null) {
                     newAlerts.add(alert)
                     val alertCv = ContentValues().apply {
                         put("id", alert.id)
@@ -587,9 +670,21 @@ class LocationRepository(private val context: Context) {
                         put("timestamp", alert.timestamp)
                     }
                     db.insert(LocationDbHelper.TABLE_ALERTS, null, alertCv)
+
+                    if (geofenceNotificationsEnabled) {
+                        val verb = if (eventType == "ENTERED") "Entered" else "Exited"
+                        val notifTitle = "${z.category.iconEmoji} ${z.category.label}: $verb"
+                        val notifContent = "You have $verb ${z.name}"
+                        com.geotrace.service.GeofenceBroadcastReceiver.sendNotification(
+                            context = context,
+                            title = notifTitle,
+                            content = notifContent,
+                            notificationId = z.id.hashCode() + (if (isNowInside) 1 else 2)
+                        )
+                    }
                 }
 
-                val updatedZone = z.copy(isInside = isNowInside, lastTransitionTime = System.currentTimeMillis())
+                val updatedZone = z.copy(isInside = isNowInside, lastTransitionTime = now)
                 updatedZones.add(updatedZone)
 
                 val zoneCv = ContentValues().apply {
@@ -602,8 +697,10 @@ class LocationRepository(private val context: Context) {
             }
         }
 
-        if (newAlerts.isNotEmpty()) {
+        if (hasTransitions) {
             _geofenceZones.value = updatedZones
+        }
+        if (newAlerts.isNotEmpty()) {
             loadAlerts()
         }
     }

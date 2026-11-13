@@ -78,8 +78,45 @@ data class P2PPeer(
     val latitude: Double,
     val longitude: Double,
     val speed: Float = 0f,
+    val bearing: Float = 0f,
     val batteryPercent: Int = 100,
     val distanceMeters: Float = 0f,
     val bearingDegrees: Float = 0f,
     val lastSeenTimestamp: Long = System.currentTimeMillis()
+) {
+    fun distanceToMeters(userLat: Double, userLng: Double): Float {
+        val results = FloatArray(1)
+        android.location.Location.distanceBetween(
+            userLat, userLng,
+            this.latitude, this.longitude,
+            results
+        )
+        return results[0]
+    }
+
+    fun bearingFrom(userLat: Double, userLng: Double): Float {
+        val userLoc = android.location.Location("user").apply {
+            latitude = userLat
+            longitude = userLng
+        }
+        val peerLoc = android.location.Location("peer").apply {
+            latitude = this@P2PPeer.latitude
+            longitude = this@P2PPeer.longitude
+        }
+        return userLoc.bearingTo(peerLoc)
+    }
+}
+
+/**
+ * Live diagnostic telemetry for the off-grid Nearby Connections discovery and connection pipeline.
+ */
+data class P2PMeshState(
+    val isActive: Boolean = false,
+    val isAdvertising: Boolean = false,
+    val isDiscovering: Boolean = false,
+    val discoveredCount: Int = 0,
+    val connectedCount: Int = 0,
+    val discoveredNames: List<String> = emptyList(),
+    val statusText: String = "Off-grid P2P scanner idle",
+    val errorText: String? = null
 )

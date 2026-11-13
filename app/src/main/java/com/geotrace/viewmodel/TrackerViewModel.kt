@@ -48,8 +48,15 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private val _allCellTowerLocations = MutableStateFlow<List<com.geotrace.model.CellTowerLocation>>(emptyList())
     val allCellTowerLocations: StateFlow<List<com.geotrace.model.CellTowerLocation>> = _allCellTowerLocations.asStateFlow()
 
-    private val _settings = MutableStateFlow(com.geotrace.model.TrackerSettings())
+    private val _settings = MutableStateFlow(
+        com.geotrace.model.TrackerSettings(
+            geofenceNotificationEnabled = repository.geofenceNotificationsEnabled
+        )
+    )
     val settings: StateFlow<com.geotrace.model.TrackerSettings> = _settings.asStateFlow()
+
+    val geofenceManager = com.geotrace.service.GeofenceManager(application)
+    val geofenceApiStatus: StateFlow<com.geotrace.service.GeofenceApiStatus> = geofenceManager.apiStatus
 
     val appUpdateManager = com.geotrace.service.AppUpdateManager(application)
     val updateStatus = appUpdateManager.updateStatus
@@ -60,6 +67,21 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     init {
         startStandbyLocationUpdates()
         observeCellTowerLocation()
+        observeGeofencingSync()
+    }
+
+    private fun observeGeofencingSync() {
+        viewModelScope.launch {
+            combine(geofenceZones, settings) { zones, currentSettings ->
+                Pair(zones, currentSettings.geofenceNotificationEnabled)
+            }.collect { (zones, enabled) ->
+                if (enabled) {
+                    geofenceManager.syncGeofences(zones, true)
+                } else {
+                    geofenceManager.syncGeofences(emptyList(), false)
+                }
+            }
+        }
     }
 
     private fun observeCellTowerLocation() {
@@ -343,5 +365,31 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         if (activeSession.value == null) {
             setTrackingMode(if (enabled) TrackingMode.BALANCED else TrackingMode.HIGH_ACCURACY)
         }
+    }
+
+    fun toggleGeofenceNotifications(enabled: Boolean) {
+        repository.setGeofenceNotificationsEnabled(enabled)
+        _settings.value = _settings.value.copy(geofenceNotificationEnabled = enabled)
+        geofenceManager.syncGeofences(geofenceZones.value, enabled)
+    }
+
+    fun resyncGeofencingApi() {
+        val enabled = _settings.value.geofenceNotificationEnabled
+        geofenceManager.syncGeofences(geofenceZones.value, enabled)
+    }
+
+    fun sendTestAcademicNotification() {
+        if (!_settings.value.geofenceNotificationEnabled) return
+        val academicZone = geofenceZones.value.firstOrNull { it.category.isAcademicZone }
+            ?: geofenceZones.value.firstOrNull()
+        val zoneName = academicZone?.name ?: "MUST Kihumuro Campus (FAST)"
+        val emoji = academicZone?.category?.iconEmoji ?: "🎓"
+        val label = academicZone?.category?.label ?: "University Campus"
+        com.geotrace.service.GeofenceBroadcastReceiver.sendNotification(
+            context = getApplication(),
+            title = "$emoji $label: Entered (Test Alert)",
+            content = "Geofencing API alert active for $zoneName",
+            notificationId = 2999
+        )
     }
 }

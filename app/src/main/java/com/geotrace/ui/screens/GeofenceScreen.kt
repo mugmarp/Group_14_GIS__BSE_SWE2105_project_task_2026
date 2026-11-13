@@ -97,15 +97,75 @@ fun GeofenceScreen(
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
 
+    val context = androidx.compose.ui.platform.LocalContext.current
     val zones by viewModel.geofenceZones.collectAsState()
     val currentLocation by viewModel.currentLocation.collectAsState()
     val recentAlerts by viewModel.recentAlerts.collectAsState()
     val filteredJitterMeters by viewModel.filteredJitterMeters.collectAsState()
     val filteredJitterCount by viewModel.filteredJitterCount.collectAsState()
+    val settings by viewModel.settings.collectAsState()
+    val geofenceApiStatus by viewModel.geofenceApiStatus.collectAsState()
 
     var showAddDialog by remember { mutableStateOf(false) }
     var editingZone by remember { mutableStateOf<GeofenceZone?>(null) }
     var preloadedPreset by remember { mutableStateOf<ZonePreset?>(null) }
+
+    val backgroundPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        viewModel.resyncGeofencingApi()
+    }
+
+    val notificationAndLocationLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        viewModel.toggleGeofenceNotifications(true)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            backgroundPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        }
+    }
+
+    val handleNotificationToggle: (Boolean) -> Unit = { enable ->
+        if (!enable) {
+            viewModel.toggleGeofenceNotifications(false)
+        } else {
+            val needed = mutableListOf<String>()
+            if (androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.ACCESS_FINE_LOCATION
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                needed.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.POST_NOTIFICATIONS
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                needed.add(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+
+            if (needed.isNotEmpty()) {
+                notificationAndLocationLauncher.launch(needed.toTypedArray())
+            } else {
+                viewModel.toggleGeofenceNotifications(true)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+                    androidx.core.content.ContextCompat.checkSelfPermission(
+                        context,
+                        android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    backgroundPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                }
+            }
+        }
+    }
 
     val presets = remember {
         listOf(
@@ -244,6 +304,157 @@ fun GeofenceScreen(
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Add Zone", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                    }
+                }
+            }
+
+            // Real-Time Play Services Geofencing API Notification Trigger Toggle (Off by Default)
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("geofence_notification_card"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp,
+                        if (settings.geofenceNotificationEnabled) colorScheme.primary.copy(alpha = 0.6f) else colorScheme.outline.copy(alpha = 0.35f)
+                    )
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .background(
+                                            if (settings.geofenceNotificationEnabled) colorScheme.primary.copy(alpha = 0.15f) else customColors.surfaceContainerLow,
+                                            CircleShape
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Default.NotificationsActive,
+                                        contentDescription = null,
+                                        tint = if (settings.geofenceNotificationEnabled) colorScheme.primary else colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "Academic Perimeter Alerts",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.onSurface
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            shape = RoundedCornerShape(4.dp),
+                                            color = if (settings.geofenceNotificationEnabled) {
+                                                if (geofenceApiStatus.isRegisteredWithPlayServices) colorScheme.tertiary.copy(alpha = 0.15f)
+                                                else colorScheme.primary.copy(alpha = 0.15f)
+                                            } else customColors.surfaceContainerLow
+                                        ) {
+                                            Text(
+                                                text = when {
+                                                    !settings.geofenceNotificationEnabled -> "OFF BY DEFAULT"
+                                                    geofenceApiStatus.isRegisteredWithPlayServices -> "API ACTIVE"
+                                                    else -> "IN-APP ACTIVE"
+                                                },
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = when {
+                                                    !settings.geofenceNotificationEnabled -> colorScheme.onSurfaceVariant
+                                                    geofenceApiStatus.isRegisteredWithPlayServices -> colorScheme.tertiary
+                                                    else -> colorScheme.primary
+                                                },
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = geofenceApiStatus.statusMessage,
+                                        fontSize = 11.sp,
+                                        color = colorScheme.onSurfaceVariant,
+                                        lineHeight = 15.sp
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(8.dp))
+
+                            androidx.compose.material3.Switch(
+                                checked = settings.geofenceNotificationEnabled,
+                                onCheckedChange = { handleNotificationToggle(it) },
+                                colors = androidx.compose.material3.SwitchDefaults.colors(checkedThumbColor = colorScheme.primary),
+                                modifier = Modifier.testTag("geofence_notification_toggle")
+                            )
+                        }
+
+                        if (settings.geofenceNotificationEnabled) {
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            if (geofenceApiStatus.errorMessage != null) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = customColors.warning.copy(alpha = 0.12f),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, customColors.warning.copy(alpha = 0.4f)),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.padding(10.dp)) {
+                                        Text(
+                                            text = geofenceApiStatus.errorMessage ?: "",
+                                            fontSize = 11.sp,
+                                            color = customColors.warning,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                        if (geofenceApiStatus.needsBackgroundPermission && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                            Spacer(modifier = Modifier.height(6.dp))
+                                            OutlinedButton(
+                                                onClick = {
+                                                    backgroundPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                                },
+                                                shape = RoundedCornerShape(8.dp),
+                                                modifier = Modifier.height(34.dp)
+                                            ) {
+                                                Text("Allow Background Location", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val academicTotal = zones.count { it.category.isAcademicZone }
+                                Text(
+                                    text = "GeofencingClient: $academicTotal academic / ${zones.size} total zones",
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                                TextButton(
+                                    onClick = { viewModel.sendTestAcademicNotification() },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.height(32.dp).testTag("test_geofence_alert_btn")
+                                ) {
+                                    Text("Test Alert", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
                     }
                 }
             }

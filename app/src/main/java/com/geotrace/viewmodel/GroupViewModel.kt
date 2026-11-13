@@ -12,6 +12,7 @@ import com.geotrace.LocationTrackerApp
 import com.geotrace.model.Group
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.MemberLocation
+import com.geotrace.model.P2PMeshState
 import com.geotrace.model.P2PPeer
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
@@ -62,6 +63,8 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val nearbyPeers: StateFlow<List<P2PPeer>> = repository.nearbyPeers
+    val p2pMeshState: StateFlow<P2PMeshState> = repository.p2pMeshState
+    val offlineCallsign: StateFlow<String> = repository.offlineCallsign
 
     private val _isGhostMode = MutableStateFlow(false)
     val isGhostMode: StateFlow<Boolean> = _isGhostMode.asStateFlow()
@@ -80,10 +83,41 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
     private var broadcastJob: Job? = null
     private var lastBroadcastTimestamp = 0L
+    private var lastP2PLocationPushMs = 0L
 
     init {
         auth.addAuthStateListener(authListener)
+        repository.onPeerConnectedCallback = { _ ->
+            // Push immediate telemetry as soon as a Nearby peer connects
+            triggerImmediateBroadcast()
+        }
         startBroadcastSyncLoop()
+        observeLocationForP2P()
+        viewModelScope.launch {
+            userGroups.collect { groups ->
+                if (_activeGroup.value == null && groups.isNotEmpty()) {
+                    _activeGroup.value = groups.first()
+                    triggerImmediateBroadcast()
+                }
+            }
+        }
+    }
+
+    private fun observeLocationForP2P() {
+        viewModelScope.launch {
+            locationRepository.currentLocation.collect { loc ->
+                if (loc != null && _isP2PEnabled.value && !_isGhostMode.value) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastP2PLocationPushMs >= 4_000L) {
+                        lastP2PLocationPushMs = now
+                        val context = getApplication<Application>()
+                        val (batteryLevel, _) = getBatteryInfo(context)
+                        val displayName = repository.getCurrentUserDisplayName()
+                        repository.broadcastP2PLocationDirect(loc, displayName, batteryLevel)
+                    }
+                }
+            }
+        }
     }
 
     override fun onCleared() {
@@ -174,15 +208,31 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         triggerImmediateBroadcast()
     }
 
+    fun updateOfflineCallsign(callsign: String) {
+        val cleaned = callsign.trim().take(24)
+        if (cleaned.isBlank()) {
+            _errorMessage.value = "Callsign cannot be empty."
+            return
+        }
+        repository.setOfflineCallsign(cleaned)
+        _statusMessage.value = "Offline callsign set to '$cleaned'"
+        triggerImmediateBroadcast()
+    }
+
     fun toggleP2PMesh() {
         val newEnabled = !_isP2PEnabled.value
         _isP2PEnabled.value = newEnabled
         if (newEnabled) {
             repository.startP2PMesh(repository.getCurrentUserDisplayName())
-            _statusMessage.value = "P2P Wilderness Mesh ON: Discovering nearby devices"
+            _statusMessage.value = if (_isGhostMode.value) {
+                "P2P Mesh ON (Ghost Mode active: receiving only, coordinates hidden)"
+            } else {
+                "Off-Grid P2P Mesh ON: Discovering nearby devices"
+            }
+            triggerImmediateBroadcast()
         } else {
             repository.stopP2PMesh()
-            _statusMessage.value = "P2P Wilderness Mesh OFF"
+            _statusMessage.value = "Off-Grid P2P Mesh OFF"
         }
     }
 
@@ -204,7 +254,8 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                 val intervalMs = if (isMoving) 10_000L else 30_000L
 
                 val group = _activeGroup.value
-                if (group != null && loc != null) {
+                val p2pActive = _isP2PEnabled.value
+                if (loc != null && (group != null || p2pActive)) {
                     performBroadcast(group, loc)
                 }
 
@@ -214,14 +265,17 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun triggerImmediateBroadcast() {
-        val group = _activeGroup.value ?: return
         val loc = locationRepository.currentLocation.value ?: return
-        viewModelScope.launch {
-            performBroadcast(group, loc)
+        val group = _activeGroup.value
+        val p2pActive = _isP2PEnabled.value
+        if (group != null || p2pActive) {
+            viewModelScope.launch {
+                performBroadcast(group, loc)
+            }
         }
     }
 
-    private suspend fun performBroadcast(group: Group, loc: LocationPoint) {
+    private suspend fun performBroadcast(group: Group?, loc: LocationPoint) {
         val context = getApplication<Application>()
         val (batteryLevel, isCharging) = getBatteryInfo(context)
         val mode = locationRepository.trackingMode.value.name
@@ -231,16 +285,21 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         val colorPalette = listOf("#2563EB", "#059669", "#D97706", "#DC2626", "#7C3AED", "#DB2777", "#0891B2")
         val avatarColor = colorPalette[Math.abs((auth.currentUser?.uid ?: "").hashCode()) % colorPalette.size]
 
-        repository.publishLocation(
-            groupId = group.id,
-            location = loc,
-            displayName = displayName,
-            avatarColor = avatarColor,
-            batteryPercent = batteryLevel,
-            isCharging = isCharging,
-            trackingMode = mode,
-            isSharingEnabled = !_isGhostMode.value
-        )
+        if (group != null) {
+            repository.publishLocation(
+                groupId = group.id,
+                location = loc,
+                displayName = displayName,
+                avatarColor = avatarColor,
+                batteryPercent = batteryLevel,
+                isCharging = isCharging,
+                trackingMode = mode,
+                isSharingEnabled = !_isGhostMode.value
+            )
+        } else if (_isP2PEnabled.value && !_isGhostMode.value) {
+            repository.broadcastP2PLocationDirect(loc, displayName, batteryLevel)
+            lastP2PLocationPushMs = System.currentTimeMillis()
+        }
         lastBroadcastTimestamp = System.currentTimeMillis()
     }
 

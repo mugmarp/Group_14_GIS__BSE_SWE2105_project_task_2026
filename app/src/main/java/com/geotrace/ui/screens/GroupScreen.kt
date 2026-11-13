@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.GroupAdd
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -114,6 +116,8 @@ fun GroupScreen(
     val activeGroup by groupViewModel.activeGroup.collectAsState()
     val groupMembers by groupViewModel.groupMembers.collectAsState()
     val nearbyPeers by groupViewModel.nearbyPeers.collectAsState()
+    val p2pMeshState by groupViewModel.p2pMeshState.collectAsState()
+    val offlineCallsign by groupViewModel.offlineCallsign.collectAsState()
     val isGhostMode by groupViewModel.isGhostMode.collectAsState()
     val isP2PEnabled by groupViewModel.isP2PEnabled.collectAsState()
     val isActionLoading by groupViewModel.isActionLoading.collectAsState()
@@ -122,9 +126,61 @@ fun GroupScreen(
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var showJoinDialog by remember { mutableStateOf(false) }
+    var showCallsignDialog by remember { mutableStateOf(false) }
     var newGroupName by remember { mutableStateOf("") }
     var inviteCodeInput by remember { mutableStateOf("") }
+    var callsignInput by remember(offlineCallsign) { mutableStateOf(offlineCallsign) }
     var isAuthSigningIn by remember { mutableStateOf(false) }
+
+    // Nearby Connections + Location runtime permissions launcher (Android 8 - 15)
+    val nearbyPermissionsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val allGranted = grants.values.all { it }
+        if (allGranted) {
+            groupViewModel.toggleP2PMesh()
+        } else {
+            Toast.makeText(
+                context,
+                "Location, Bluetooth & Nearby permissions are required for off-grid P2P discovery.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    val requestP2PMeshWithPermissions = {
+        if (!isP2PEnabled) {
+            val permissionsNeeded = mutableListOf<String>()
+            // Required on Android 10-12 for Nearby Connections discovery and across all versions for GPS coordinate exchange
+            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                permissionsNeeded.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_SCAN) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    permissionsNeeded.add(android.Manifest.permission.BLUETOOTH_SCAN)
+                }
+                if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_ADVERTISE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    permissionsNeeded.add(android.Manifest.permission.BLUETOOTH_ADVERTISE)
+                }
+                if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    permissionsNeeded.add(android.Manifest.permission.BLUETOOTH_CONNECT)
+                }
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.NEARBY_WIFI_DEVICES) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    permissionsNeeded.add(android.Manifest.permission.NEARBY_WIFI_DEVICES)
+                }
+            }
+
+            if (permissionsNeeded.isNotEmpty()) {
+                nearbyPermissionsLauncher.launch(permissionsNeeded.toTypedArray())
+            } else {
+                groupViewModel.toggleP2PMesh()
+            }
+        } else {
+            groupViewModel.toggleP2PMesh()
+        }
+    }
 
     // Toast feedback
     statusMessage?.let { msg ->
@@ -147,16 +203,266 @@ fun GroupScreen(
         item {
             Column(modifier = Modifier.padding(vertical = 4.dp)) {
                 Text(
-                    text = "Family & Group Circles",
+                    text = "Family Circles & Off-Grid Finder",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = colorScheme.onBackground
                 )
                 Text(
-                    text = "Real-time location sharing, battery telemetry & off-grid P2P mesh",
+                    text = "Real-time cloud sync when online & zero-internet P2P device radar when off-grid",
                     fontSize = 12.sp,
                     color = colorScheme.onSurfaceVariant
                 )
+            }
+        }
+
+        // Top-Level Offline P2P Device Finder Card (Works WITHOUT Sign-In or Internet)
+        item {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                border = BorderStroke(
+                    1.dp,
+                    if (isP2PEnabled) successColor.copy(alpha = 0.7f) else colorScheme.outlineVariant
+                ),
+                modifier = Modifier.fillMaxWidth().testTag("p2p_mesh_card")
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        if (isP2PEnabled) successColor.copy(alpha = 0.14f)
+                                        else customColors.surfaceContainerLow
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.WifiTethering,
+                                    contentDescription = "Off-Grid P2P Mesh",
+                                    tint = if (isP2PEnabled) successColor else colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Off-Grid P2P Device Finder",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = if (isP2PEnabled) p2pMeshState.statusText else "No internet required • BLE & Wi-Fi Direct (50-200m)",
+                                    fontSize = 11.sp,
+                                    color = if (p2pMeshState.errorText != null) colorScheme.error else colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = isP2PEnabled,
+                            onCheckedChange = { requestP2PMeshWithPermissions() },
+                            colors = SwitchDefaults.colors(checkedThumbColor = successColor),
+                            modifier = Modifier.testTag("p2p_mesh_switch")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Offline Callsign / Device Identity Row
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = customColors.surfaceContainerLow,
+                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "DEVICE CALLSIGN (BROADCASTED OFFLINE)",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 0.04.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = currentUser?.displayName?.takeIf { it.isNotBlank() } ?: offlineCallsign,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                            }
+                            if (currentUser == null) {
+                                TextButton(
+                                    onClick = {
+                                        callsignInput = offlineCallsign
+                                        showCallsignDialog = true
+                                    },
+                                    modifier = Modifier.testTag("edit_callsign_btn")
+                                ) {
+                                    Icon(
+                                        Icons.Default.Edit,
+                                        contentDescription = "Edit Callsign",
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("Rename", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+
+                    // Diagnostics Pills when P2P active
+                    if (isP2PEnabled) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (p2pMeshState.isAdvertising) successColor.copy(alpha = 0.12f) else colorScheme.surfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = if (p2pMeshState.isAdvertising) "Radio: Advertising" else "Radio: Starting",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (p2pMeshState.isAdvertising) successColor else colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = colorScheme.primary.copy(alpha = 0.1f),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text(
+                                    text = "Links: ${p2pMeshState.connectedCount}/${p2pMeshState.discoveredCount} • Peers: ${nearbyPeers.size}",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                )
+                            }
+                        }
+
+                        if (p2pMeshState.errorText != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = colorScheme.errorContainer,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = colorScheme.error,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = p2pMeshState.errorText!!,
+                                        fontSize = 11.sp,
+                                        color = colorScheme.onErrorContainer
+                                    )
+                                }
+                            }
+                        }
+
+                        // Allow Ghost Mode privacy control offline even if no cloud group exists
+                        if (activeGroup == null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        if (isGhostMode) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = null,
+                                        tint = if (isGhostMode) Color(0xFFD97706) else colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = if (isGhostMode) "Ghost Mode ON (Receive Only)" else "Share My GPS with P2P Peers",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = colorScheme.onSurface
+                                    )
+                                }
+                                Switch(
+                                    checked = isGhostMode,
+                                    onCheckedChange = { groupViewModel.toggleGhostMode() },
+                                    colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFD97706)),
+                                    modifier = Modifier.testTag("offline_ghost_mode_switch")
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Top-Level Nearby P2P Peers Section (Always visible when P2P active — NO sign-in required!)
+        if (isP2PEnabled) {
+            item {
+                Text(
+                    text = "NEARBY P2P PEERS VIA BLUETOOTH / WI-FI (${nearbyPeers.size})",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.05.sp,
+                    color = successColor,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+
+            if (nearbyPeers.isEmpty()) {
+                item {
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        val hintText = if (p2pMeshState.discoveredCount > 0) {
+                            "Detected ${p2pMeshState.discoveredNames.joinToString(", ")}. Handshaking Nearby P2P channel to exchange GPS coordinates..."
+                        } else {
+                            "Scanning for nearby devices with GeoTrace P2P Finder ON (50-200m). Both phones need Bluetooth + Location enabled."
+                        }
+                        Text(
+                            text = hintText,
+                            fontSize = 12.sp,
+                            color = colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
+                }
+            } else {
+                items(nearbyPeers) { peer ->
+                    P2PPeerCard(peer = peer, userLocation = currentLocation)
+                }
             }
         }
 
@@ -468,44 +774,6 @@ fun GroupScreen(
                                     modifier = Modifier.testTag("ghost_mode_switch")
                                 )
                             }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            // Wilderness P2P Mesh Toggle (Nearby Connections)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        Icons.Default.WifiTethering,
-                                        contentDescription = null,
-                                        tint = if (isP2PEnabled) successColor else colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text(
-                                            text = "Off-Grid P2P Mesh (Nearby)",
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = colorScheme.onSurface
-                                        )
-                                        Text(
-                                            text = if (isP2PEnabled) "Scanning Bluetooth & Wi-Fi Aware peers (50-200m)" else "Enable for no-internet wilderness tracking",
-                                            fontSize = 11.sp,
-                                            color = colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                Switch(
-                                    checked = isP2PEnabled,
-                                    onCheckedChange = { groupViewModel.toggleP2PMesh() },
-                                    colors = SwitchDefaults.colors(checkedThumbColor = successColor),
-                                    modifier = Modifier.testTag("p2p_mesh_switch")
-                                )
-                            }
                         } else {
                             Text(
                                 text = "Join or create a circle to start tracking your family or field team.",
@@ -589,42 +857,6 @@ fun GroupScreen(
                             userLocation = currentLocation,
                             isSelf = member.userId == currentUser?.uid
                         )
-                    }
-                }
-            }
-
-            // P2P Wilderness Peers Section (Phase 2)
-            if (isP2PEnabled) {
-                item {
-                    Text(
-                        text = "NEARBY P2P PEERS VIA BLUETOOTH / WI-FI (${nearbyPeers.size})",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.05.sp,
-                        color = successColor,
-                        modifier = Modifier.padding(top = 8.dp)
-                    )
-                }
-
-                if (nearbyPeers.isEmpty()) {
-                    item {
-                        Card(
-                            shape = RoundedCornerShape(14.dp),
-                            colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-                            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "Searching for nearby devices running GeoTrace within 50-200m...",
-                                fontSize = 12.sp,
-                                color = colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(16.dp)
-                            )
-                        }
-                    }
-                } else {
-                    items(nearbyPeers) { peer ->
-                        P2PPeerCard(peer = peer, userLocation = currentLocation)
                     }
                 }
             }
@@ -791,6 +1023,49 @@ fun GroupScreen(
             }
         )
     }
+
+    // Edit Offline Callsign Dialog
+    if (showCallsignDialog) {
+        AlertDialog(
+            onDismissRequest = { showCallsignDialog = false },
+            title = { Text("Offline P2P Callsign", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text(
+                        "Set a recognizable device name broadcasted over Bluetooth/Wi-Fi when searching off-grid.",
+                        fontSize = 12.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = callsignInput,
+                        onValueChange = { callsignInput = it.take(24) },
+                        label = { Text("Device Callsign") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth().testTag("callsign_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (callsignInput.isNotBlank()) {
+                            groupViewModel.updateOfflineCallsign(callsignInput)
+                            showCallsignDialog = false
+                        }
+                    },
+                    modifier = Modifier.testTag("confirm_callsign_btn")
+                ) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCallsignDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -904,17 +1179,22 @@ fun P2PPeerCard(
     val colorScheme = MaterialTheme.colorScheme
     val successColor = colorScheme.tertiary
 
-    val distanceMeters = if (userLocation != null) {
-        val results = FloatArray(1)
-        android.location.Location.distanceBetween(
-            userLocation.latitude, userLocation.longitude,
-            peer.latitude, peer.longitude,
-            results
-        )
-        results[0]
-    } else 0f
+    val distanceText = if (userLocation != null) {
+        val distanceMeters = peer.distanceToMeters(userLocation.latitude, userLocation.longitude)
+        val bearingDeg = peer.bearingFrom(userLocation.latitude, userLocation.longitude)
+        val compass = toCompassCardinal(bearingDeg)
+        val distPart = if (distanceMeters < 1000) "${distanceMeters.toInt()}m" else String.format(Locale.US, "%.1f km", distanceMeters / 1000f)
+        "$distPart $compass"
+    } else {
+        "GPS pending"
+    }
 
-    val distanceText = if (distanceMeters < 1000) "${distanceMeters.toInt()}m" else String.format(Locale.US, "%.1f km", distanceMeters / 1000f)
+    val ageSec = ((System.currentTimeMillis() - peer.lastSeenTimestamp).coerceAtLeast(0L) / 1000L)
+    val ageText = when {
+        ageSec < 5 -> "Live"
+        ageSec < 60 -> "${ageSec}s ago"
+        else -> "${ageSec / 60}m ago"
+    }
 
     Card(
         shape = RoundedCornerShape(14.dp),
@@ -951,12 +1231,12 @@ fun P2PPeerCard(
                     color = colorScheme.onSurface
                 )
                 Text(
-                    text = "P2P Distance: $distanceText • Speed: ${String.format(Locale.US, "%.1f", peer.speed * 3.6f)} km/h",
+                    text = "$distanceText • ${String.format(Locale.US, "%.1f", peer.speed * 3.6f)} km/h",
                     fontSize = 11.sp,
                     color = colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = "Battery: ${peer.batteryPercent}% • Direct BLE/Wi-Fi",
+                    text = "Battery: ${peer.batteryPercent}% • Direct BLE/Wi-Fi • $ageText",
                     fontSize = 10.sp,
                     color = successColor,
                     fontFamily = FontFamily.Monospace
@@ -964,6 +1244,13 @@ fun P2PPeerCard(
             }
         }
     }
+}
+
+private fun toCompassCardinal(bearingDegrees: Float): String {
+    val normalized = ((bearingDegrees % 360f) + 360f) % 360f
+    val dirs = arrayOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+    val idx = ((normalized + 22.5f) / 45f).toInt() % 8
+    return dirs[idx]
 }
 
 // Credential Manager Google Sign-In Implementation

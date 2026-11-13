@@ -445,12 +445,24 @@ fun MapScreen(
                     }
                 }
 
-                // Floating Group / Circle Tracking Pill
+                // Floating Group / Circle & Off-Grid P2P Tracking Pill
+                val meshOrGroupActive = activeGroup != null || isP2PEnabled
                 Surface(
                     shape = RoundedCornerShape(20.dp),
-                    color = if (activeGroup != null) colorScheme.primaryContainer.copy(alpha = 0.5f) else colorScheme.surface,
+                    color = when {
+                        activeGroup != null -> colorScheme.primaryContainer.copy(alpha = 0.5f)
+                        isP2PEnabled -> colorScheme.tertiaryContainer.copy(alpha = 0.55f)
+                        else -> colorScheme.surface
+                    },
                     shadowElevation = 3.dp,
-                    border = BorderStroke(1.dp, if (activeGroup != null) colorScheme.primary else colorScheme.outlineVariant),
+                    border = BorderStroke(
+                        1.dp,
+                        when {
+                            activeGroup != null -> colorScheme.primary
+                            isP2PEnabled -> colorScheme.tertiary
+                            else -> colorScheme.outlineVariant
+                        }
+                    ),
                     modifier = Modifier
                         .clickable { onNavigateToGroups?.invoke() }
                         .testTag("floating_group_pill")
@@ -461,16 +473,26 @@ fun MapScreen(
                     ) {
                         Icon(
                             Icons.Default.Group,
-                            contentDescription = "Circles",
-                            tint = if (activeGroup != null) colorScheme.primary else colorScheme.onSurfaceVariant,
+                            contentDescription = "Circles and Offline P2P Mesh",
+                            tint = when {
+                                activeGroup != null -> colorScheme.primary
+                                isP2PEnabled -> colorScheme.tertiary
+                                else -> colorScheme.onSurfaceVariant
+                            },
                             modifier = Modifier.size(15.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
+                        val pillLabel = when {
+                            activeGroup != null && isP2PEnabled -> "${activeGroup!!.name} (${groupMembers.size}) • P2P (${nearbyPeers.size})"
+                            activeGroup != null -> "${activeGroup!!.name} (${groupMembers.size})"
+                            isP2PEnabled -> "P2P Mesh (${nearbyPeers.size})"
+                            else -> "Circles / P2P"
+                        }
                         Text(
-                            text = if (activeGroup != null) "${activeGroup!!.name} (${groupMembers.size})" else "Circles",
+                            text = pillLabel,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            color = colorScheme.onSurface
+                            color = if (meshOrGroupActive) colorScheme.onSurface else colorScheme.onSurface
                         )
                         if (isGhostMode) {
                             Spacer(modifier = Modifier.width(4.dp))
@@ -551,37 +573,97 @@ fun MapScreen(
             }
         }
 
-        // Bottom Member Carousel (Situational Awareness for Active Circle)
-        if (activeGroup != null && groupMembers.isNotEmpty()) {
+        // Bottom Member & Offline P2P Peer Carousel (Situational Awareness)
+        if ((activeGroup != null && groupMembers.isNotEmpty()) || nearbyPeers.isNotEmpty()) {
             val memberScrollState = rememberScrollState()
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(bottom = if (activeSession == null) 66.dp else 12.dp, start = 14.dp, end = 14.dp)
+                    .padding(bottom = if (activeSession == null) 68.dp else 72.dp, start = 14.dp, end = 14.dp)
                     .fillMaxWidth()
                     .horizontalScroll(memberScrollState),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                for (member in groupMembers) {
-                    val dist = if (currentLocation != null) member.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude) else null
-                    val distStr = when {
-                        dist == null -> "--"
-                        dist < 1000 -> "${dist.toInt()}m"
-                        else -> String.format(Locale.US, "%.1fkm", dist / 1000f)
+                if (activeGroup != null) {
+                    for (member in groupMembers) {
+                        val dist = if (currentLocation != null) member.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude) else null
+                        val distStr = when {
+                            dist == null -> "--"
+                            dist < 1000 -> "${dist.toInt()}m"
+                            else -> String.format(Locale.US, "%.1fkm", dist / 1000f)
+                        }
+                        val memColor = try { Color(android.graphics.Color.parseColor(member.avatarColor)) } catch(e: Exception) { colorScheme.primary }
+
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = colorScheme.surface,
+                            shadowElevation = 4.dp,
+                            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                            modifier = Modifier
+                                .clickable {
+                                    onNavigateToGroups?.invoke()
+                                }
+                                .testTag("carousel_member_${member.userId}")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(28.dp)
+                                        .clip(CircleShape)
+                                        .background(memColor),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    val initials = member.displayName.trim().take(2).uppercase().ifBlank { "M" }
+                                    Text(
+                                        text = initials,
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(
+                                        text = member.displayName,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "$distStr • ${member.batteryPercent}% 🔋",
+                                        fontSize = 10.sp,
+                                        color = colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
                     }
-                    val memColor = try { Color(android.graphics.Color.parseColor(member.avatarColor)) } catch(e: Exception) { colorScheme.primary }
+                }
+
+                for (peer in nearbyPeers) {
+                    val distText = if (currentLocation != null) {
+                        val d = peer.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude)
+                        val bearing = peer.bearingFrom(currentLocation!!.latitude, currentLocation!!.longitude)
+                        val dirs = arrayOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+                        val compass = dirs[(((((bearing % 360f) + 360f) % 360f) + 22.5f) / 45f).toInt() % 8]
+                        val distPart = if (d < 1000) "${d.toInt()}m" else String.format(Locale.US, "%.1fkm", d / 1000f)
+                        "$distPart $compass"
+                    } else {
+                        "Nearby"
+                    }
 
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = colorScheme.surface,
                         shadowElevation = 4.dp,
-                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                        border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.7f)),
                         modifier = Modifier
-                            .clickable {
-                                onNavigateToGroups?.invoke()
-                            }
-                            .testTag("carousel_member_${member.userId}")
+                            .clickable { onNavigateToGroups?.invoke() }
+                            .testTag("carousel_p2p_${peer.endpointId}")
                     ) {
                         Row(
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -591,11 +673,11 @@ fun MapScreen(
                                 modifier = Modifier
                                     .size(28.dp)
                                     .clip(CircleShape)
-                                    .background(memColor),
+                                    .background(colorScheme.tertiary),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = member.displayName.take(2).uppercase(),
+                                    text = peer.displayName.trim().take(2).uppercase().ifBlank { "P2" },
                                     color = Color.White,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold
@@ -603,14 +685,29 @@ fun MapScreen(
                             }
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = peer.displayName,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = colorScheme.onSurface
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Surface(
+                                        shape = RoundedCornerShape(4.dp),
+                                        color = colorScheme.tertiary.copy(alpha = 0.14f)
+                                    ) {
+                                        Text(
+                                            text = "P2P",
+                                            fontSize = 8.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.tertiary,
+                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                        )
+                                    }
+                                }
                                 Text(
-                                    text = member.displayName,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "$distStr • ${member.batteryPercent}% 🔋",
+                                    text = "$distText • ${peer.batteryPercent}% 📶",
                                     fontSize = 10.sp,
                                     color = colorScheme.onSurfaceVariant
                                 )
