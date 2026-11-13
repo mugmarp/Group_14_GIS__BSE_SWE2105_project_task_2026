@@ -28,18 +28,23 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NearMe
+import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.AlertDialog
@@ -48,8 +53,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -73,6 +80,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.credentials.ClearCredentialStateRequest
@@ -81,10 +89,12 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.geotrace.R
+import com.geotrace.model.BlePeerProximity
 import com.geotrace.model.Group
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.MemberLocation
 import com.geotrace.model.P2PPeer
+import com.geotrace.model.PersonalDevice
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.GroupViewModel
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -115,8 +125,13 @@ fun GroupScreen(
     val userGroups by groupViewModel.userGroups.collectAsState()
     val activeGroup by groupViewModel.activeGroup.collectAsState()
     val groupMembers by groupViewModel.groupMembers.collectAsState()
+    val personalDevices by groupViewModel.personalDevices.collectAsState()
     val nearbyPeers by groupViewModel.nearbyPeers.collectAsState()
     val p2pMeshState by groupViewModel.p2pMeshState.collectAsState()
+    val blePeers by groupViewModel.blePeers.collectAsState()
+    val isBleRadarActive by groupViewModel.isBleRadarActive.collectAsState()
+    val bleStatusText by groupViewModel.bleStatusText.collectAsState()
+    val isBackgroundBeaconEnabled by groupViewModel.isBackgroundBeaconEnabled.collectAsState()
     val offlineCallsign by groupViewModel.offlineCallsign.collectAsState()
     val isGhostMode by groupViewModel.isGhostMode.collectAsState()
     val isP2PEnabled by groupViewModel.isP2PEnabled.collectAsState()
@@ -131,54 +146,108 @@ fun GroupScreen(
     var inviteCodeInput by remember { mutableStateOf("") }
     var callsignInput by remember(offlineCallsign) { mutableStateOf(offlineCallsign) }
     var isAuthSigningIn by remember { mutableStateOf(false) }
+    var pendingPermissionAction by remember { mutableStateOf<String?>(null) }
 
-    // Nearby Connections + Location runtime permissions launcher (Android 8 - 15)
-    val nearbyPermissionsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+    // Unified Nearby Connections, BLE & Background Beacon runtime permissions launcher (Android 8 - 15)
+    val radioPermissionsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
-        val allGranted = grants.values.all { it }
-        if (allGranted) {
-            groupViewModel.toggleP2PMesh()
+        val action = pendingPermissionAction
+        pendingPermissionAction = null
+        val coreGranted = grants.entries
+            .filter { it.key != android.Manifest.permission.POST_NOTIFICATIONS }
+            .all { it.value }
+        if (coreGranted) {
+            when (action) {
+                "P2P_MESH" -> groupViewModel.toggleP2PMesh()
+                "BLE_RADAR" -> groupViewModel.toggleBleRadar()
+                "BG_BEACON" -> groupViewModel.toggleBackgroundBeacon(true)
+            }
         } else {
             Toast.makeText(
                 context,
-                "Location, Bluetooth & Nearby permissions are required for off-grid P2P discovery.",
+                "Location & Bluetooth permissions are required for device finder & beacon features.",
                 Toast.LENGTH_LONG
             ).show()
         }
     }
 
+    fun collectMissingPermissions(includeNearbyWifi: Boolean, includeNotifications: Boolean): List<String> {
+        val needed = mutableListOf<String>()
+        if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            needed.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_SCAN) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                needed.add(android.Manifest.permission.BLUETOOTH_SCAN)
+            }
+            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_ADVERTISE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                needed.add(android.Manifest.permission.BLUETOOTH_ADVERTISE)
+            }
+            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                needed.add(android.Manifest.permission.BLUETOOTH_CONNECT)
+            }
+        }
+        if (includeNearbyWifi && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.NEARBY_WIFI_DEVICES) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                needed.add(android.Manifest.permission.NEARBY_WIFI_DEVICES)
+            }
+        }
+        if (includeNotifications && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                needed.add(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        return needed
+    }
+
     val requestP2PMeshWithPermissions = {
         if (!isP2PEnabled) {
-            val permissionsNeeded = mutableListOf<String>()
-            // Required on Android 10-12 for Nearby Connections discovery and across all versions for GPS coordinate exchange
-            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                permissionsNeeded.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
-            }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_SCAN) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    permissionsNeeded.add(android.Manifest.permission.BLUETOOTH_SCAN)
-                }
-                if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_ADVERTISE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    permissionsNeeded.add(android.Manifest.permission.BLUETOOTH_ADVERTISE)
-                }
-                if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    permissionsNeeded.add(android.Manifest.permission.BLUETOOTH_CONNECT)
-                }
-            }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.NEARBY_WIFI_DEVICES) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                    permissionsNeeded.add(android.Manifest.permission.NEARBY_WIFI_DEVICES)
-                }
-            }
-
-            if (permissionsNeeded.isNotEmpty()) {
-                nearbyPermissionsLauncher.launch(permissionsNeeded.toTypedArray())
+            val missing = collectMissingPermissions(includeNearbyWifi = true, includeNotifications = false)
+            if (missing.isNotEmpty()) {
+                pendingPermissionAction = "P2P_MESH"
+                radioPermissionsLauncher.launch(missing.toTypedArray())
             } else {
                 groupViewModel.toggleP2PMesh()
             }
         } else {
             groupViewModel.toggleP2PMesh()
+        }
+    }
+
+    val requestBleRadarWithPermissions = {
+        if (!isBleRadarActive) {
+            val missing = collectMissingPermissions(includeNearbyWifi = false, includeNotifications = false)
+            if (missing.isNotEmpty()) {
+                pendingPermissionAction = "BLE_RADAR"
+                radioPermissionsLauncher.launch(missing.toTypedArray())
+            } else {
+                groupViewModel.toggleBleRadar()
+            }
+        } else {
+            groupViewModel.toggleBleRadar()
+        }
+    }
+
+    val requestBeaconWithPermissions: (Boolean) -> Unit = { enable ->
+        if (enable) {
+            val needed = mutableListOf<String>()
+            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                needed.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+                androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                needed.add(android.Manifest.permission.POST_NOTIFICATIONS)
+            }
+            if (needed.isNotEmpty()) {
+                pendingPermissionAction = "BG_BEACON"
+                radioPermissionsLauncher.launch(needed.toTypedArray())
+            } else {
+                groupViewModel.toggleBackgroundBeacon(true)
+            }
+        } else {
+            groupViewModel.toggleBackgroundBeacon(false)
         }
     }
 
@@ -203,13 +272,13 @@ fun GroupScreen(
         item {
             Column(modifier = Modifier.padding(vertical = 4.dp)) {
                 Text(
-                    text = "Family Circles & Off-Grid Finder",
+                    text = "Devices & Tracking Groups",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = colorScheme.onBackground
                 )
                 Text(
-                    text = "Real-time cloud sync when online & zero-internet P2P device radar when off-grid",
+                    text = "Locate your own phones & tablets, sync shared groups online, or find nearby devices offline",
                     fontSize = 12.sp,
                     color = colorScheme.onSurfaceVariant
                 )
@@ -280,7 +349,7 @@ fun GroupScreen(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Offline Callsign / Device Identity Row
+                    // Offline Callsign / Device Identity Row (Editable offline & when signed in)
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = customColors.surfaceContainerLow,
@@ -294,35 +363,33 @@ fun GroupScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "DEVICE CALLSIGN (BROADCASTED OFFLINE)",
+                                    text = "THIS DEVICE NAME • BLE #${groupViewModel.bleTag}",
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     letterSpacing = 0.04.sp,
                                     color = colorScheme.onSurfaceVariant
                                 )
                                 Text(
-                                    text = currentUser?.displayName?.takeIf { it.isNotBlank() } ?: offlineCallsign,
+                                    text = offlineCallsign,
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = colorScheme.onSurface
                                 )
                             }
-                            if (currentUser == null) {
-                                TextButton(
-                                    onClick = {
-                                        callsignInput = offlineCallsign
-                                        showCallsignDialog = true
-                                    },
-                                    modifier = Modifier.testTag("edit_callsign_btn")
-                                ) {
-                                    Icon(
-                                        Icons.Default.Edit,
-                                        contentDescription = "Edit Callsign",
-                                        modifier = Modifier.size(15.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text("Rename", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                }
+                            TextButton(
+                                onClick = {
+                                    callsignInput = offlineCallsign
+                                    showCallsignDialog = true
+                                },
+                                modifier = Modifier.testTag("edit_callsign_btn")
+                            ) {
+                                Icon(
+                                    Icons.Default.Edit,
+                                    contentDescription = "Edit Device Name",
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Rename", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -461,7 +528,139 @@ fun GroupScreen(
                 }
             } else {
                 items(nearbyPeers) { peer ->
-                    P2PPeerCard(peer = peer, userLocation = currentLocation)
+                    P2PPeerCard(
+                        peer = peer,
+                        userLocation = currentLocation,
+                        onRingPeer = { groupViewModel.ringP2PPeer(peer.endpointId, peer.displayName) }
+                    )
+                }
+            }
+        }
+
+        // Indoor Home BLE RSSI Proximity Radar (Warmer / Colder) & Background Beacon Card
+        item {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                border = BorderStroke(
+                    1.dp,
+                    if (isBleRadarActive) colorScheme.primary.copy(alpha = 0.6f) else colorScheme.outlineVariant
+                ),
+                modifier = Modifier.fillMaxWidth().testTag("ble_radar_card")
+            ) {
+                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(CircleShape)
+                                    .background(colorScheme.primary.copy(alpha = 0.12f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.BluetoothSearching,
+                                    contentDescription = "Indoor BLE Proximity Radar",
+                                    tint = colorScheme.primary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Indoor BLE Radar (Warmer / Colder)",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = bleStatusText,
+                                    fontSize = 11.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = isBleRadarActive,
+                            onCheckedChange = { requestBleRadarWithPermissions() },
+                            colors = SwitchDefaults.colors(checkedThumbColor = colorScheme.primary),
+                            modifier = Modifier.testTag("ble_radar_switch")
+                        )
+                    }
+
+                    if (isBleRadarActive) {
+                        if (blePeers.isEmpty()) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = customColors.surfaceContainerLow,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = "Walk room to room with BLE Radar enabled on both devices to measure RSSI warmth (<1m to 15m).",
+                                    fontSize = 11.sp,
+                                    color = colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(10.dp)
+                                )
+                            }
+                        } else {
+                            blePeers.forEach { blePeer ->
+                                BleProximityPeerRow(peer = blePeer)
+                            }
+                        }
+                    }
+
+                    // Background Device Beacon toggle for stationary spare phones/tablets at home
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = customColors.surfaceContainerLow,
+                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Icon(
+                                    Icons.Default.Sensors,
+                                    contentDescription = "Background Beacon",
+                                    tint = if (isBackgroundBeaconEnabled) successColor else colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = "Background Device Beacon",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = if (isBackgroundBeaconEnabled) {
+                                            "Active • Keeps this device discoverable & ringable if left at home"
+                                        } else {
+                                            "Keep spare phone/tablet findable & remotely ringable in background"
+                                        },
+                                        fontSize = 11.sp,
+                                        color = colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = isBackgroundBeaconEnabled,
+                                onCheckedChange = { enabled -> requestBeaconWithPermissions(enabled) },
+                                colors = SwitchDefaults.colors(checkedThumbColor = successColor),
+                                modifier = Modifier.testTag("bg_beacon_switch")
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -483,7 +682,7 @@ fun GroupScreen(
                             modifier = Modifier
                                 .size(48.dp)
                                 .clip(CircleShape)
-                                .background(colorScheme.primaryContainer),
+                                .background(colorScheme.primary.copy(alpha = 0.12f)),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -495,16 +694,16 @@ fun GroupScreen(
                         }
                         Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "Cloud Multi-User Sync Required",
+                            text = "Cloud Multi-Device Sync Required",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurface
                         )
                         Text(
-                            text = "Sign in securely with Google to create family circles, share your live coordinates, and see your team on the map.",
+                            text = "Sign in securely with Google to track all your phones and tablets on one map, ring misplaced devices remotely, and share tracking groups.",
                             fontSize = 12.sp,
                             color = colorScheme.onSurfaceVariant,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            textAlign = TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                         )
                         Spacer(modifier = Modifier.height(12.dp))
@@ -614,6 +813,57 @@ fun GroupScreen(
         }
 
         if (currentUser != null) {
+            val otherPersonalDevices = personalDevices.filter { it.deviceId != groupViewModel.currentDeviceId }
+
+            // My Other Devices Section (Same Google Account across phones/tablets)
+            item {
+                Text(
+                    text = "MY OTHER DEVICES (${otherPersonalDevices.size})",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.05.sp,
+                    color = Color(0xFF7C3AED),
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
+
+            if (otherPersonalDevices.isEmpty()) {
+                item {
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Devices,
+                                contentDescription = "Linked Devices",
+                                tint = Color(0xFF7C3AED),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = "Sign into GeoTrace with the same Google account on another phone or tablet to track it here and ring it remotely when misplaced.",
+                                fontSize = 12.sp,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            } else {
+                items(otherPersonalDevices, key = { it.deviceId.ifBlank { it.id } }) { device ->
+                    PersonalDeviceCard(
+                        device = device,
+                        userLocation = currentLocation,
+                        onRingClick = { groupViewModel.ringPersonalDevice(device) }
+                    )
+                }
+            }
+
             // Active Group Card
             item {
                 Card(
@@ -637,7 +887,7 @@ fun GroupScreen(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = if (activeGroup != null) "ACTIVE TRACKING CIRCLE" else "STANDBY (NO CIRCLE SELECTED)",
+                                    text = if (activeGroup != null) "ACTIVE TRACKING GROUP" else "STANDBY (NO GROUP SELECTED)",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     letterSpacing = 0.05.sp,
@@ -680,7 +930,7 @@ fun GroupScreen(
                                 ) {
                                     Column {
                                         Text(
-                                            text = "INVITATION CODE",
+                                            text = "GROUP INVITE CODE",
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Bold,
                                             letterSpacing = 0.04.sp,
@@ -718,7 +968,7 @@ fun GroupScreen(
                                                     action = android.content.Intent.ACTION_SEND
                                                     putExtra(
                                                         android.content.Intent.EXTRA_TEXT,
-                                                        "Join my GeoTrace Tracking Circle '${activeGroup!!.name}' with Invite Code: ${activeGroup!!.inviteCode}"
+                                                        "Join my GeoTrace Tracking Group '${activeGroup!!.name}' with Invite Code: ${activeGroup!!.inviteCode}"
                                                     )
                                                     type = "text/plain"
                                                 }
@@ -761,7 +1011,7 @@ fun GroupScreen(
                                             color = colorScheme.onSurface
                                         )
                                         Text(
-                                            text = if (isGhostMode) "Location paused; members see last known point" else "Actively streaming live coordinates",
+                                            text = if (isGhostMode) "Location paused; group sees last known point" else "Actively streaming live coordinates",
                                             fontSize = 11.sp,
                                             color = colorScheme.onSurfaceVariant
                                         )
@@ -776,7 +1026,7 @@ fun GroupScreen(
                             }
                         } else {
                             Text(
-                                text = "Join or create a circle to start tracking your family or field team.",
+                                text = "Join or create a group to coordinate shared devices, teammates, or household members.",
                                 fontSize = 13.sp,
                                 color = colorScheme.onSurfaceVariant
                             )
@@ -785,7 +1035,7 @@ fun GroupScreen(
                 }
             }
 
-            // Action Buttons: Create New Circle & Join with Code
+            // Action Buttons: Create New Group & Join with Code
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -798,11 +1048,11 @@ fun GroupScreen(
                         modifier = Modifier
                             .weight(1f)
                             .height(48.dp)
-                            .testTag("create_circle_btn")
+                            .testTag("create_group_btn")
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("New Circle", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        Text("New Group", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     }
 
                     OutlinedButton(
@@ -812,7 +1062,7 @@ fun GroupScreen(
                         modifier = Modifier
                             .weight(1f)
                             .height(48.dp)
-                            .testTag("join_circle_btn")
+                            .testTag("join_group_btn")
                     ) {
                         Icon(Icons.Default.GroupAdd, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
@@ -821,11 +1071,11 @@ fun GroupScreen(
                 }
             }
 
-            // Live Members in Active Circle
+            // Live Devices / Members in Active Group
             if (activeGroup != null) {
                 item {
                     Text(
-                        text = "MEMBERS IN THIS CIRCLE (${groupMembers.size})",
+                        text = "DEVICES IN THIS GROUP (${groupMembers.size})",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 0.05.sp,
@@ -843,7 +1093,7 @@ fun GroupScreen(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text(
-                                text = "Awaiting member location broadcasts. Share the invite code '${activeGroup!!.inviteCode}' with other devices.",
+                                text = "Awaiting device location broadcasts. Share the invite code '${activeGroup!!.inviteCode}' with other devices.",
                                 fontSize = 12.sp,
                                 color = colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(16.dp)
@@ -851,20 +1101,22 @@ fun GroupScreen(
                         }
                     }
                 } else {
-                    items(groupMembers) { member ->
+                    items(groupMembers, key = { it.id.ifBlank { "${it.userId}_${it.deviceId}" } }) { member ->
+                        val isSelfDevice = member.userId == currentUser?.uid &&
+                            (member.deviceId.isBlank() || member.deviceId == groupViewModel.currentDeviceId)
                         MemberCard(
                             member = member,
                             userLocation = currentLocation,
-                            isSelf = member.userId == currentUser?.uid
+                            isSelf = isSelfDevice
                         )
                     }
                 }
             }
 
-            // My Saved Circles List
+            // My Saved Groups List
             item {
                 Text(
-                    text = "MY CIRCLES (${userGroups.size})",
+                    text = "YOUR TRACKING GROUPS (${userGroups.size})",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 0.05.sp,
@@ -940,11 +1192,11 @@ fun GroupScreen(
     if (showCreateDialog) {
         AlertDialog(
             onDismissRequest = { showCreateDialog = false },
-            title = { Text("Create Family / Team Circle", fontWeight = FontWeight.Bold) },
+            title = { Text("Create Tracking Group", fontWeight = FontWeight.Bold) },
             text = {
                 Column {
                     Text(
-                        "Give your circle a recognizable name. A unique 6-character invitation code will be generated.",
+                        "Give your tracking group a recognizable name. A unique 6-character invitation code will be generated.",
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant
                     )
@@ -952,9 +1204,9 @@ fun GroupScreen(
                     OutlinedTextField(
                         value = newGroupName,
                         onValueChange = { newGroupName = it },
-                        label = { Text("Circle Name (e.g. Vicram Family)") },
+                        label = { Text("Group Name (e.g. Field Ops or Home Devices)") },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("circle_name_input")
+                        modifier = Modifier.fillMaxWidth().testTag("group_name_input")
                     )
                 }
             },
@@ -967,7 +1219,7 @@ fun GroupScreen(
                             newGroupName = ""
                         }
                     },
-                    modifier = Modifier.testTag("confirm_create_circle_btn")
+                    modifier = Modifier.testTag("confirm_create_group_btn")
                 ) {
                     Text("Create")
                 }
@@ -984,11 +1236,11 @@ fun GroupScreen(
     if (showJoinDialog) {
         AlertDialog(
             onDismissRequest = { showJoinDialog = false },
-            title = { Text("Join Circle with Code", fontWeight = FontWeight.Bold) },
+            title = { Text("Join Group with Code", fontWeight = FontWeight.Bold) },
             text = {
                 Column {
                     Text(
-                        "Enter the 6-character code provided by the circle creator (e.g. FAM-7K2).",
+                        "Enter the 6-character code provided by the group creator (e.g. GRP-7K2).",
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant
                     )
@@ -1011,7 +1263,7 @@ fun GroupScreen(
                             inviteCodeInput = ""
                         }
                     },
-                    modifier = Modifier.testTag("confirm_join_circle_btn")
+                    modifier = Modifier.testTag("confirm_join_group_btn")
                 ) {
                     Text("Join")
                 }
@@ -1024,15 +1276,15 @@ fun GroupScreen(
         )
     }
 
-    // Edit Offline Callsign Dialog
+    // Edit Device Name / Callsign Dialog
     if (showCallsignDialog) {
         AlertDialog(
             onDismissRequest = { showCallsignDialog = false },
-            title = { Text("Offline P2P Callsign", fontWeight = FontWeight.Bold) },
+            title = { Text("Rename This Device", fontWeight = FontWeight.Bold) },
             text = {
                 Column {
                     Text(
-                        "Set a recognizable device name broadcasted over Bluetooth/Wi-Fi when searching off-grid.",
+                        "Set a recognizable device label shown in your My Devices fleet, shared groups, and off-grid P2P/BLE radar.",
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant
                     )
@@ -1040,7 +1292,7 @@ fun GroupScreen(
                     OutlinedTextField(
                         value = callsignInput,
                         onValueChange = { callsignInput = it.take(24) },
-                        label = { Text("Device Callsign") },
+                        label = { Text("Device Name (e.g. Spare Pixel or Study Tablet)") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth().testTag("callsign_input")
                     )
@@ -1098,7 +1350,7 @@ fun MemberCard(
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
-        modifier = Modifier.fillMaxWidth().testTag("member_card_${member.userId}")
+        modifier = Modifier.fillMaxWidth().testTag("member_card_${member.id.ifBlank { member.userId }}")
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -1133,10 +1385,17 @@ fun MemberCard(
                     if (isSelf) {
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "(YOU)",
+                            text = "(THIS DEVICE)",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.primary
+                        )
+                    } else if (member.deviceModel.isNotBlank()) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = member.deviceModel,
+                            fontSize = 10.sp,
+                            color = colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -1172,9 +1431,164 @@ fun MemberCard(
 }
 
 @Composable
+fun PersonalDeviceCard(
+    device: PersonalDevice,
+    userLocation: LocationPoint?,
+    onRingClick: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val accentViolet = Color(0xFF7C3AED)
+    val successColor = colorScheme.tertiary
+
+    val distanceText = if (userLocation != null && (device.latitude != 0.0 || device.longitude != 0.0)) {
+        val distanceMeters = device.distanceToMeters(userLocation.latitude, userLocation.longitude)
+        val bearingDeg = device.bearingFrom(userLocation.latitude, userLocation.longitude)
+        val compass = toCompassCardinal(bearingDeg)
+        val distPart = if (distanceMeters < 1000) "${distanceMeters.toInt()} m" else String.format(Locale.US, "%.1f km", distanceMeters / 1000.0)
+        "$distPart $compass"
+    } else {
+        "Position syncing..."
+    }
+
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+        border = BorderStroke(1.dp, accentViolet.copy(alpha = 0.45f)),
+        modifier = Modifier.fillMaxWidth().testTag("personal_device_card_${device.deviceId}")
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(accentViolet.copy(alpha = 0.14f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Devices,
+                    contentDescription = "Linked Device",
+                    tint = accentViolet,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = device.deviceName.ifBlank { device.deviceModel.ifBlank { "GeoTrace Device" } },
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colorScheme.onSurface
+                )
+                Text(
+                    text = "${device.deviceModel} • $distanceText",
+                    fontSize = 11.sp,
+                    color = colorScheme.onSurfaceVariant
+                )
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                    Icon(
+                        Icons.Default.BatteryChargingFull,
+                        contentDescription = "Battery",
+                        tint = if (device.batteryPercent > 20) successColor else Color(0xFFDC2626),
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "${device.batteryPercent}% • ${device.trackingMode} • BLE #${device.bleTag}",
+                        fontSize = 10.sp,
+                        color = colorScheme.onSurfaceVariant,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            FilledTonalButton(
+                onClick = onRingClick,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .height(48.dp)
+                    .testTag("ring_device_${device.deviceId}")
+            ) {
+                Icon(
+                    Icons.Default.VolumeUp,
+                    contentDescription = "Ring Device",
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Ring", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+fun BleProximityPeerRow(peer: BlePeerProximity) {
+    val colorScheme = MaterialTheme.colorScheme
+    val warmthColor = when {
+        peer.smoothedRssi >= -54f -> Color(0xFF059669)
+        peer.smoothedRssi >= -68f -> colorScheme.primary
+        peer.smoothedRssi >= -82f -> Color(0xFFD97706)
+        else -> colorScheme.onSurfaceVariant
+    }
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = warmthColor.copy(alpha = 0.08f),
+        border = BorderStroke(1.dp, warmthColor.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth().testTag("ble_peer_${peer.bleTag}")
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "${peer.displayName} (#${peer.bleTag})",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colorScheme.onSurface
+                )
+                Text(
+                    text = "${peer.rssi} dBm",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    color = warmthColor
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            LinearProgressIndicator(
+                progress = { peer.proximityProgress },
+                color = warmthColor,
+                trackColor = colorScheme.surfaceVariant,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = peer.proximityBucket,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = warmthColor
+            )
+        }
+    }
+}
+
+@Composable
 fun P2PPeerCard(
     peer: P2PPeer,
-    userLocation: LocationPoint?
+    userLocation: LocationPoint?,
+    onRingPeer: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val successColor = colorScheme.tertiary
@@ -1241,6 +1655,24 @@ fun P2PPeerCard(
                     color = successColor,
                     fontFamily = FontFamily.Monospace
                 )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            FilledTonalButton(
+                onClick = onRingPeer,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .height(48.dp)
+                    .testTag("ring_p2p_${peer.endpointId}")
+            ) {
+                Icon(
+                    Icons.Default.NotificationsActive,
+                    contentDescription = "Ring Peer Device",
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Ring", fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
     }

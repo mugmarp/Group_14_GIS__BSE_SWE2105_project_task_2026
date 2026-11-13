@@ -50,6 +50,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     private val _settings = MutableStateFlow(
         com.geotrace.model.TrackerSettings(
+            openCellIdApiKey = repository.getSavedOpenCellIdApiKey(),
+            autoBalancedTestMode = repository.trackingMode.value == TrackingMode.BALANCED,
             geofenceNotificationEnabled = repository.geofenceNotificationsEnabled
         )
     )
@@ -63,9 +65,13 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     private val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(application)
     private var standbyCallback: com.google.android.gms.location.LocationCallback? = null
+    private var standbyCellJob: Job? = null
+    private var lastCellularFallbackKey: String? = null
+    private var lastCellularFallbackTimeMs: Long = 0L
 
     init {
         startStandbyLocationUpdates()
+        startStandbyCellPolling()
         observeCellTowerLocation()
         observeGeofencingSync()
     }
@@ -84,17 +90,33 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private fun startStandbyCellPolling() {
+        standbyCellJob?.cancel()
+        standbyCellJob = viewModelScope.launch {
+            while (isActive) {
+                if (activeSession.value == null) {
+                    val towers = cellManager.readCurrentCellTowers()
+                    repository.updateCellTowers(towers)
+                }
+                val delayMs = if (trackingMode.value == TrackingMode.POWER_SAVER) 10_000L else 25_000L
+                delay(delayMs)
+            }
+        }
+    }
+
     private fun observeCellTowerLocation() {
         viewModelScope.launch {
-            combine(cellTowers, currentLocation) { towers, loc ->
-                Pair(towers, loc)
-            }.collect { (towers, loc) ->
+            combine(cellTowers, trackingMode) { towers, mode ->
+                Pair(towers, mode)
+            }.collect { (towers, mode) ->
+                val loc = currentLocation.value
                 val servingCell = towers.firstOrNull { it.isRegistered } ?: towers.firstOrNull()
+                val apiKey = _settings.value.openCellIdApiKey
 
                 if (servingCell != null) {
                     val location = com.geotrace.service.OpenCellIdClient.resolveCellLocation(
                         cellInfo = servingCell,
-                        apiKey = _settings.value.openCellIdApiKey,
+                        apiKey = apiKey,
                         userLatitude = loc?.latitude,
                         userLongitude = loc?.longitude
                     )
@@ -103,30 +125,38 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     _cellTowerLocation.value = null
                 }
 
-                // Resolve all visible towers (both serving and idle/neighbor towers)
+                // Resolve all visible towers detected by TelephonyManager
                 val allResolved = com.geotrace.service.OpenCellIdClient.resolveAllCellLocations(
                     towers = towers,
-                    apiKey = _settings.value.openCellIdApiKey,
+                    apiKey = apiKey,
                     userLatitude = loc?.latitude,
                     userLongitude = loc?.longitude
                 )
                 _allCellTowerLocations.value = allResolved
 
-                // In Cellular-Only mode: if GPS is unavailable or standing by, fall back to serving cell coordinates
-                if (trackingMode.value == TrackingMode.POWER_SAVER && (loc == null || loc.provider == "cellular")) {
+                // In Cell-Only mode: fall back to OpenCellID-resolved serving tower only when needed
+                if (mode == TrackingMode.POWER_SAVER) {
                     _cellTowerLocation.value?.let { towerLoc ->
-                        val fallbackPoint = LocationPoint(
-                            latitude = towerLoc.latitude,
-                            longitude = towerLoc.longitude,
-                            accuracy = towerLoc.rangeMeters.toFloat(),
-                            speed = 0f,
-                            altitude = 0.0,
-                            bearing = 0f,
-                            provider = "cellular",
-                            timestamp = System.currentTimeMillis(),
-                            sessionId = activeSession.value?.id ?: "cellular_standby"
-                        )
-                        repository.recordLocation(fallbackPoint)
+                        val now = System.currentTimeMillis()
+                        val towerKey = "${towerLoc.cellId}_${towerLoc.lac}"
+                        val isCurrentStale = loc == null || (now - loc.timestamp > 25_000L)
+                        val changedTower = lastCellularFallbackKey != towerKey
+                        if ((isCurrentStale || changedTower) && (now - lastCellularFallbackTimeMs >= 10_000L || changedTower)) {
+                            lastCellularFallbackKey = towerKey
+                            lastCellularFallbackTimeMs = now
+                            val fallbackPoint = LocationPoint(
+                                latitude = towerLoc.latitude,
+                                longitude = towerLoc.longitude,
+                                accuracy = towerLoc.rangeMeters.toFloat(),
+                                speed = 0f,
+                                altitude = 0.0,
+                                bearing = 0f,
+                                provider = "cellular",
+                                timestamp = now,
+                                sessionId = activeSession.value?.id ?: "cellular_standby"
+                            )
+                            repository.recordLocation(fallbackPoint)
+                        }
                     }
                 }
             }
@@ -164,7 +194,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                         speed = if (loc.hasSpeed()) loc.speed else 0f,
                         altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
                         bearing = if (loc.hasBearing()) loc.bearing else 0f,
-                        provider = if (targetMode == TrackingMode.POWER_SAVER) "cellular" else (loc.provider ?: "fused"),
+                        provider = loc.provider ?: "fused",
                         timestamp = loc.time,
                         sessionId = "standby"
                     )
@@ -243,13 +273,15 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     override fun onCleared() {
         super.onCleared()
         stopStandbyLocationUpdates()
+        standbyCellJob?.cancel()
     }
 
     fun setTrackingMode(mode: TrackingMode) {
         viewModelScope.launch {
             repository.setTrackingMode(mode)
+            _settings.value = _settings.value.copy(autoBalancedTestMode = (mode == TrackingMode.BALANCED))
             if (activeSession.value != null) {
-                LocationForegroundService.startService(getApplication(), mode)
+                LocationForegroundService.updateMode(getApplication(), mode)
             } else {
                 startStandbyLocationUpdates(mode)
             }
@@ -356,15 +388,14 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun updateOpenCellIdApiKey(apiKey: String) {
+        repository.saveOpenCellIdApiKey(apiKey)
         _settings.value = _settings.value.copy(openCellIdApiKey = apiKey)
         refreshCellTowers()
     }
 
     fun toggleAutoBalancedTestMode(enabled: Boolean) {
         _settings.value = _settings.value.copy(autoBalancedTestMode = enabled)
-        if (activeSession.value == null) {
-            setTrackingMode(if (enabled) TrackingMode.BALANCED else TrackingMode.HIGH_ACCURACY)
-        }
+        setTrackingMode(if (enabled) TrackingMode.BALANCED else TrackingMode.HIGH_ACCURACY)
     }
 
     fun toggleGeofenceNotifications(enabled: Boolean) {

@@ -134,3 +134,69 @@ test("Non-member Charlie cannot read group live locations", async () => {
     bobDb.collection("groups").doc("grp_1").collection("live_locations").doc(ALICE_UID).get()
   );
 });
+
+test("Same user can publish multiple distinct deviceId docs in a group without overwriting", async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().collection("groups").doc("grp_multi").set({
+      name: "Device Fleet",
+      inviteCode: "DEV-01",
+      createdBy: ALICE_UID,
+      memberIds: [ALICE_UID]
+    });
+  });
+
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  await assertSucceeds(
+    aliceDb.collection("groups").doc("grp_multi").collection("live_locations").doc(`${ALICE_UID}_phone1`).set({
+      userId: ALICE_UID,
+      deviceId: "phone1",
+      displayName: "Pixel 8",
+      latitude: 0.34,
+      longitude: 32.58,
+      lastUpdated: new Date().toISOString()
+    })
+  );
+  await assertSucceeds(
+    aliceDb.collection("groups").doc("grp_multi").collection("live_locations").doc(`${ALICE_UID}_tablet1`).set({
+      userId: ALICE_UID,
+      deviceId: "tablet1",
+      displayName: "Galaxy Tab",
+      latitude: 0.35,
+      longitude: 32.59,
+      lastUpdated: new Date().toISOString()
+    })
+  );
+});
+
+test("Personal devices collection allows owner R/W/ring and blocks other users", async () => {
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("devices").doc("dev_phone").set({
+      userId: ALICE_UID,
+      deviceId: "dev_phone",
+      deviceName: "Work Phone",
+      latitude: 0.33,
+      longitude: 32.57,
+      ringRequestedAt: 0,
+      lastUpdated: new Date().toISOString()
+    })
+  );
+
+  await assertSucceeds(
+    aliceDb.collection("users").doc(ALICE_UID).collection("devices").doc("dev_phone").update({
+      ringRequestedAt: Date.now(),
+      ringRequestedBy: "Tablet"
+    })
+  );
+
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("devices").doc("dev_phone").get()
+  );
+  await assertFails(
+    bobDb.collection("users").doc(ALICE_UID).collection("devices").doc("dev_phone").update({
+      ringRequestedAt: Date.now()
+    })
+  );
+});

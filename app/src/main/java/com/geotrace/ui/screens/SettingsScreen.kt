@@ -480,8 +480,8 @@ fun SettingsScreen(
                 accentColor = colorScheme.secondary
             ) {
                 SettingToggleRow(
-                    title = "Live Uganda Cell Tower Pinning",
-                    subtitle = "Plot serving base station coordinates, estimated coverage radius & distance ray on map (MTN 641-10 & Airtel 641-22)",
+                    title = "Cell Tower Pinning on Map",
+                    subtitle = "Plot live OpenCellID-resolved serving tower coordinates & coverage range when an API key is configured",
                     checked = settings.showCellTowerPin,
                     onCheckedChange = { viewModel.toggleCellTowerPin(it) }
                 )
@@ -494,12 +494,12 @@ fun SettingsScreen(
                         apiKeyInput = it
                         viewModel.updateOpenCellIdApiKey(it)
                     },
-                    label = { Text("OpenCellID API Key (Optional Override)", fontSize = 11.sp) },
-                    placeholder = { 
+                    label = { Text("OpenCellID API Key (Required for Live Pin)", fontSize = 11.sp) },
+                    placeholder = {
                         Text(
-                            if (com.geotrace.BuildConfig.OPENCELLID_API_KEY.isNotBlank()) "CI/CD Secret Key Active (Auto)" else "Bundled Uganda offline cache active", 
+                            if (com.geotrace.BuildConfig.OPENCELLID_API_KEY.isNotBlank()) "CI/CD Secret Key Active (Auto)" else "Enter OpenCellID API key to resolve mast coordinates",
                             fontSize = 11.sp
-                        ) 
+                        )
                     },
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp),
@@ -509,7 +509,7 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "A pre-seeded offline Uganda database is bundled covering MUST Kihumuro (FAST Block, Kihumuro Hill), MUST Town Campus, and Mbarara Central. Live queries execute automatically when an API key is provided.",
+                    text = "GeoTrace reads genuine radio IDs (CID, LAC/TAC, MCC, MNC, dBm) from device hardware TelephonyManager. Configure an OpenCellID API key to plot resolved physical tower coordinates on the map.",
                     fontSize = 10.sp,
                     color = colorScheme.onSurfaceVariant,
                     lineHeight = 14.sp

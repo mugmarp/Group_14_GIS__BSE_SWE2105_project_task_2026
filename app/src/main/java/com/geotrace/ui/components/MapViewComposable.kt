@@ -72,6 +72,8 @@ fun MapViewComposable(
     cellTowerLocation: com.geotrace.model.CellTowerLocation? = null,
     allCellTowers: List<com.geotrace.model.CellTowerLocation> = emptyList(),
     groupMembers: List<com.geotrace.model.MemberLocation> = emptyList(),
+    personalDevices: List<com.geotrace.model.PersonalDevice> = emptyList(),
+    currentDeviceId: String = "",
     nearbyPeers: List<com.geotrace.model.P2PPeer> = emptyList(),
     settings: com.geotrace.model.TrackerSettings = com.geotrace.model.TrackerSettings(),
     onSelectTileLayer: ((com.geotrace.model.MapTileType) -> Unit)? = null,
@@ -348,8 +350,9 @@ fun MapViewComposable(
                     }
                 }
 
-                // 5. Draw Multi-User Group Members (Family / Field Team)
+                // 5. Draw Tracking Group Devices (excluding self device to avoid overlapping User pin)
                 for (member in groupMembers) {
+                    if (currentDeviceId.isNotBlank() && member.deviceId == currentDeviceId) continue
                     val memberGeoPoint = GeoPoint(member.latitude, member.longitude)
                     val memberColor = try {
                         android.graphics.Color.parseColor(member.avatarColor)
@@ -378,6 +381,22 @@ fun MapViewComposable(
                         icon = createMemberAvatarDrawable(context, member.displayName, memberColor)
                     }
                     map.overlays.add(memberMarker)
+                }
+
+                // 5b. Draw Personal Multi-Device Fleet (other phones/tablets on same account)
+                val violetColor = android.graphics.Color.parseColor("#7C3AED")
+                for (device in personalDevices) {
+                    if (device.deviceId == currentDeviceId || device.id == currentDeviceId) continue
+                    if (device.latitude == 0.0 && device.longitude == 0.0) continue
+                    val devPoint = GeoPoint(device.latitude, device.longitude)
+                    val devMarker = Marker(map).apply {
+                        position = devPoint
+                        title = "📱 My Device: ${device.deviceName}"
+                        snippet = "${device.deviceModel} | Battery: ${device.batteryPercent}% (${device.trackingMode})"
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                        icon = createMemberAvatarDrawable(context, device.deviceName, violetColor)
+                    }
+                    map.overlays.add(devMarker)
                 }
 
                 // 6. Draw P2P Wilderness Peers (Phase 2 Nearby Connections)
@@ -500,7 +519,7 @@ fun MapViewComposable(
                                             color = if (settings.showCellTowerPin) colorScheme.primary else colorScheme.onSurface
                                         )
                                         Text(
-                                            text = "OpenCellID Uganda Pin & Ray",
+                                            text = "OpenCellID Mast Pin & Ray",
                                             fontSize = 9.sp,
                                             color = colorScheme.onSurfaceVariant
                                         )

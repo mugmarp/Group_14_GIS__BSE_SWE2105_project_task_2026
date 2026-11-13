@@ -5,15 +5,19 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
-import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.geotrace.LocationTrackerApp
+import com.geotrace.model.BlePeerProximity
 import com.geotrace.model.Group
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.MemberLocation
 import com.geotrace.model.P2PMeshState
 import com.geotrace.model.P2PPeer
+import com.geotrace.model.PersonalDevice
+import com.geotrace.service.BleProximityFinder
+import com.geotrace.service.FindDeviceAlarmManager
+import com.geotrace.service.LocationForegroundService
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -30,13 +34,15 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-private const val TAG = "GroupViewModel"
-
 class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = (application as LocationTrackerApp).groupRepository
     private val locationRepository = (application as LocationTrackerApp).repository
     private val auth: FirebaseAuth = Firebase.auth
+    private val bleProximityFinder = BleProximityFinder(application)
+
+    val currentDeviceId: String = repository.currentDeviceId
+    val bleTag: String = repository.bleTag
 
     private val _currentUser = MutableStateFlow<FirebaseUser?>(auth.currentUser)
     val currentUser: StateFlow<FirebaseUser?> = _currentUser.asStateFlow()
@@ -45,8 +51,19 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         _currentUser.value = fbAuth.currentUser
     }
 
-    val userGroups: StateFlow<List<Group>> = repository.observeUserGroups()
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val userGroups: StateFlow<List<Group>> = _currentUser
+        .flatMapLatest { user ->
+            if (user != null) repository.observeUserGroups() else flowOf(emptyList())
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val personalDevices: StateFlow<List<PersonalDevice>> = _currentUser
+        .flatMapLatest { user ->
+            if (user != null) repository.observePersonalDevices() else flowOf(emptyList())
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _activeGroup = MutableStateFlow<Group?>(null)
     val activeGroup: StateFlow<Group?> = _activeGroup.asStateFlow()
@@ -66,6 +83,14 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     val p2pMeshState: StateFlow<P2PMeshState> = repository.p2pMeshState
     val offlineCallsign: StateFlow<String> = repository.offlineCallsign
 
+    val blePeers: StateFlow<List<BlePeerProximity>> = bleProximityFinder.blePeers
+    val isBleRadarActive: StateFlow<Boolean> = bleProximityFinder.isRadarActive
+    val bleStatusText: StateFlow<String> = bleProximityFinder.bleStatusText
+
+    val isRingingAlarm: StateFlow<Boolean> = FindDeviceAlarmManager.isRinging
+    val ringCallerName: StateFlow<String?> = FindDeviceAlarmManager.ringCallerName
+    val isBackgroundBeaconEnabled: StateFlow<Boolean> = locationRepository.backgroundBeaconEnabled
+
     private val _isGhostMode = MutableStateFlow(false)
     val isGhostMode: StateFlow<Boolean> = _isGhostMode.asStateFlow()
 
@@ -82,13 +107,11 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
     private var broadcastJob: Job? = null
-    private var lastBroadcastTimestamp = 0L
     private var lastP2PLocationPushMs = 0L
 
     init {
         auth.addAuthStateListener(authListener)
         repository.onPeerConnectedCallback = { _ ->
-            // Push immediate telemetry as soon as a Nearby peer connects
             triggerImmediateBroadcast()
         }
         startBroadcastSyncLoop()
@@ -127,13 +150,13 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         if (_isP2PEnabled.value) {
             repository.stopP2PMesh()
         }
+        bleProximityFinder.stop()
     }
 
     fun selectGroup(group: Group?) {
         _activeGroup.value = group
         if (group != null) {
-            _statusMessage.value = "Active Circle: ${group.name}"
-            // Immediately broadcast first fix
+            _statusMessage.value = "Active Group: ${group.name}"
             triggerImmediateBroadcast()
         }
     }
@@ -148,8 +171,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isActionLoading.value = true
             _errorMessage.value = null
-            val displayName = repository.getCurrentUserDisplayName()
-            val result = repository.createGroup(trimmed, displayName)
+            val result = repository.createGroup(trimmed)
             _isActionLoading.value = false
 
             result.onSuccess { created ->
@@ -165,7 +187,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     fun joinGroupByCode(code: String) {
         val trimmed = code.trim().uppercase()
         if (trimmed.length < 4) {
-            _errorMessage.value = "Please enter a valid invite code (e.g. FAM-7K2)."
+            _errorMessage.value = "Please enter a valid group code."
             return
         }
 
@@ -211,11 +233,15 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     fun updateOfflineCallsign(callsign: String) {
         val cleaned = callsign.trim().take(24)
         if (cleaned.isBlank()) {
-            _errorMessage.value = "Callsign cannot be empty."
+            _errorMessage.value = "Device name cannot be empty."
             return
         }
         repository.setOfflineCallsign(cleaned)
-        _statusMessage.value = "Offline callsign set to '$cleaned'"
+        if (bleProximityFinder.isRadarActive.value) {
+            bleProximityFinder.stop()
+            bleProximityFinder.start(bleTag, cleaned)
+        }
+        _statusMessage.value = "Device name updated to '$cleaned'"
         triggerImmediateBroadcast()
     }
 
@@ -223,17 +249,62 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         val newEnabled = !_isP2PEnabled.value
         _isP2PEnabled.value = newEnabled
         if (newEnabled) {
-            repository.startP2PMesh(repository.getCurrentUserDisplayName())
+            val myName = repository.getCurrentUserDisplayName()
+            repository.startP2PMesh(myName)
+            bleProximityFinder.start(bleTag, myName)
             _statusMessage.value = if (_isGhostMode.value) {
-                "P2P Mesh ON (Ghost Mode active: receiving only, coordinates hidden)"
+                "Off-Grid P2P & BLE Radar ON (Ghost Mode: coordinates hidden)"
             } else {
-                "Off-Grid P2P Mesh ON: Discovering nearby devices"
+                "Off-Grid P2P & Indoor BLE Radar ON"
             }
             triggerImmediateBroadcast()
         } else {
             repository.stopP2PMesh()
-            _statusMessage.value = "Off-Grid P2P Mesh OFF"
+            bleProximityFinder.stop()
+            _statusMessage.value = "Off-Grid P2P & BLE Radar OFF"
         }
+    }
+
+    fun toggleBleRadar() {
+        if (bleProximityFinder.isRadarActive.value) {
+            bleProximityFinder.stop()
+            _statusMessage.value = "Indoor BLE Proximity Radar OFF"
+        } else {
+            bleProximityFinder.start(bleTag, repository.getCurrentUserDisplayName())
+            _statusMessage.value = "Indoor BLE Proximity Radar ON"
+        }
+    }
+
+    fun toggleBackgroundBeacon(enabled: Boolean) {
+        locationRepository.setBackgroundBeaconEnabled(enabled)
+        val app = getApplication<Application>()
+        if (enabled) {
+            LocationForegroundService.startBeaconService(app)
+            _statusMessage.value = "Background Device Beacon ON"
+        } else {
+            LocationForegroundService.stopBeaconService(app)
+            _statusMessage.value = "Background Device Beacon OFF"
+        }
+    }
+
+    fun ringPersonalDevice(device: PersonalDevice) {
+        viewModelScope.launch {
+            val result = repository.sendRingCommandToDevice(device.deviceId.ifBlank { device.id })
+            result.onSuccess {
+                _statusMessage.value = "Ring alert sent to ${device.deviceName}!"
+            }.onFailure { e ->
+                _errorMessage.value = e.localizedMessage ?: "Failed to ring ${device.deviceName}."
+            }
+        }
+    }
+
+    fun ringP2PPeer(endpointId: String, peerName: String) {
+        repository.sendP2PRingCommand(endpointId)
+        _statusMessage.value = "Offline P2P Ring sent to $peerName!"
+    }
+
+    fun stopRingingAlarm() {
+        FindDeviceAlarmManager.stopRinging(getApplication())
     }
 
     fun clearStatusMessage() {
@@ -248,14 +319,14 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         broadcastJob?.cancel()
         broadcastJob = viewModelScope.launch {
             while (isActive) {
-                // Adaptive sync interval: 10s if moving, 30s if stationary
                 val loc = locationRepository.currentLocation.value
                 val isMoving = (loc?.speed ?: 0f) > 0.5f
-                val intervalMs = if (isMoving) 10_000L else 30_000L
+                val intervalMs = if (isMoving) 10_000L else 25_000L
 
                 val group = _activeGroup.value
                 val p2pActive = _isP2PEnabled.value
-                if (loc != null && (group != null || p2pActive)) {
+                val isSignedIn = auth.currentUser != null
+                if (loc != null && (group != null || p2pActive || isSignedIn)) {
                     performBroadcast(group, loc)
                 }
 
@@ -268,7 +339,8 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         val loc = locationRepository.currentLocation.value ?: return
         val group = _activeGroup.value
         val p2pActive = _isP2PEnabled.value
-        if (group != null || p2pActive) {
+        val isSignedIn = auth.currentUser != null
+        if (group != null || p2pActive || isSignedIn) {
             viewModelScope.launch {
                 performBroadcast(group, loc)
             }
@@ -281,7 +353,16 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         val mode = locationRepository.trackingMode.value.name
         val displayName = repository.getCurrentUserDisplayName()
 
-        // Distinct deterministic avatar color based on userId hash
+        // Always update personal device fleet doc when signed in so multi-device tracking & Find works out of the box
+        if (auth.currentUser != null) {
+            repository.publishPersonalDevice(
+                location = loc,
+                batteryPercent = batteryLevel,
+                isCharging = isCharging,
+                trackingMode = mode
+            )
+        }
+
         val colorPalette = listOf("#2563EB", "#059669", "#D97706", "#DC2626", "#7C3AED", "#DB2777", "#0891B2")
         val avatarColor = colorPalette[Math.abs((auth.currentUser?.uid ?: "").hashCode()) % colorPalette.size]
 
@@ -300,7 +381,6 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
             repository.broadcastP2PLocationDirect(loc, displayName, batteryLevel)
             lastP2PLocationPushMs = System.currentTimeMillis()
         }
-        lastBroadcastTimestamp = System.currentTimeMillis()
     }
 
     private fun getBatteryInfo(context: Context): Pair<Int, Boolean> {
@@ -313,7 +393,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
             val status = batteryStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
             val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
             Pair(batteryPct, isCharging)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             Pair(100, false)
         }
     }

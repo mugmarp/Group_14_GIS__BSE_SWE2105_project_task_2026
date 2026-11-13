@@ -49,9 +49,9 @@ class LocationRepository(private val context: Context) {
     private val _cellTowers = MutableStateFlow<List<CellTowerInfo>>(emptyList())
     val cellTowers: StateFlow<List<CellTowerInfo>> = _cellTowers.asStateFlow()
 
-    private val _trackingMode = MutableStateFlow(
-        if (com.geotrace.BuildConfig.DEBUG) TrackingMode.BALANCED else TrackingMode.HIGH_ACCURACY
-    )
+    private val prefs = context.getSharedPreferences("geotrace_prefs", Context.MODE_PRIVATE)
+
+    private val _trackingMode = MutableStateFlow(loadInitialTrackingMode())
     val trackingMode: StateFlow<TrackingMode> = _trackingMode.asStateFlow()
 
     private val _filteredJitterMeters = MutableStateFlow(0.0)
@@ -60,8 +60,6 @@ class LocationRepository(private val context: Context) {
     private val _filteredJitterCount = MutableStateFlow(0)
     val filteredJitterCount: StateFlow<Int> = _filteredJitterCount.asStateFlow()
 
-    private val prefs = context.getSharedPreferences("geotrace_prefs", Context.MODE_PRIVATE)
-
     @Volatile
     var geofenceNotificationsEnabled: Boolean = prefs.getBoolean("geofence_notifications_enabled", false)
         private set
@@ -69,6 +67,32 @@ class LocationRepository(private val context: Context) {
     fun setGeofenceNotificationsEnabled(enabled: Boolean) {
         geofenceNotificationsEnabled = enabled
         prefs.edit().putBoolean("geofence_notifications_enabled", enabled).apply()
+    }
+
+    private val _backgroundBeaconEnabled = MutableStateFlow(
+        prefs.getBoolean("background_beacon_enabled", false)
+    )
+    val backgroundBeaconEnabled: StateFlow<Boolean> = _backgroundBeaconEnabled.asStateFlow()
+
+    fun setBackgroundBeaconEnabled(enabled: Boolean) {
+        _backgroundBeaconEnabled.value = enabled
+        prefs.edit().putBoolean("background_beacon_enabled", enabled).apply()
+    }
+
+    fun getSavedOpenCellIdApiKey(): String = prefs.getString("opencellid_api_key", "") ?: ""
+
+    fun saveOpenCellIdApiKey(apiKey: String) {
+        prefs.edit().putString("opencellid_api_key", apiKey.trim()).apply()
+    }
+
+    private fun loadInitialTrackingMode(): TrackingMode {
+        val saved = prefs.getString("selected_tracking_mode", null)
+        if (!saved.isNullOrBlank()) {
+            try {
+                return TrackingMode.valueOf(saved)
+            } catch (_: Exception) {}
+        }
+        return if (com.geotrace.BuildConfig.DEBUG) TrackingMode.BALANCED else TrackingMode.HIGH_ACCURACY
     }
 
     @Volatile
@@ -94,6 +118,7 @@ class LocationRepository(private val context: Context) {
 
     suspend fun setTrackingMode(mode: TrackingMode) = withContext(Dispatchers.IO) {
         _trackingMode.value = mode
+        prefs.edit().putString("selected_tracking_mode", mode.name).apply()
         val session = _activeSession.value
         if (session != null && session.isRecording) {
             val updated = session.copy(trackingMode = mode)

@@ -2,15 +2,15 @@
   "entities": {
     "Group": {
       "title": "Group",
-      "description": "Family or team circle for multi-device location sharing.",
+      "description": "Shared tracking group for multi-device or team location sharing.",
       "type": "object",
       "properties": {
-        "name": { "type": "string", "description": "Display name of the group/circle." },
-        "inviteCode": { "type": "string", "description": "Unique 6-character invitation code (e.g. FAM-7K2)." },
+        "name": { "type": "string", "description": "Display name of the tracking group." },
+        "inviteCode": { "type": "string", "description": "Unique 6-character invitation code." },
         "createdBy": { "type": "string", "description": "User ID of the group creator." },
         "memberIds": {
           "type": "array",
-          "description": "List of user IDs who are authorized members of this group.",
+          "description": "List of user IDs authorized in this group.",
           "items": { "type": "string" }
         },
         "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp." }
@@ -19,10 +19,13 @@
     },
     "MemberLocation": {
       "title": "MemberLocation",
-      "description": "Live real-time location and telemetry broadcast for a group member.",
+      "description": "Live real-time telemetry broadcast per device within a group.",
       "type": "object",
       "properties": {
-        "userId": { "type": "string", "description": "User ID of the member." },
+        "userId": { "type": "string", "description": "User ID of the device owner." },
+        "deviceId": { "type": "string", "description": "Unique hardware/app installation device ID." },
+        "deviceModel": { "type": "string", "description": "Hardware model label." },
+        "bleTag": { "type": "string", "description": "Short 6-character BLE beacon identifier." },
         "displayName": { "type": "string", "description": "Display name or callsign." },
         "avatarColor": { "type": "string", "description": "Hex color code for map pin representation." },
         "latitude": { "type": "number", "description": "WGS84 Latitude coordinate." },
@@ -31,24 +34,52 @@
         "speed": { "type": "number", "description": "Instantaneous or smoothed speed in m/s." },
         "bearing": { "type": "number", "description": "Heading in degrees (0-360)." },
         "altitude": { "type": "number", "description": "Altitude in meters above sea level." },
-        "gait": { "type": "string", "description": "Movement classification (Stationary, Walking, In Transit)." },
+        "gait": { "type": "string", "description": "Movement classification." },
         "batteryPercent": { "type": "integer", "description": "Device battery percentage (0-100)." },
         "isCharging": { "type": "boolean", "description": "Whether device is currently charging." },
-        "trackingMode": { "type": "string", "description": "Active tracking mode (HIGH_ACCURACY, BALANCED, POWER_SAVER)." },
-        "isSharingEnabled": { "type": "boolean", "description": "Whether location broadcasting is active or paused (Ghost Mode)." },
-        "lastUpdated": { "type": "string", "format": "date-time", "description": "Timestamp of the last telemetry update." }
+        "trackingMode": { "type": "string", "description": "Active tracking mode." },
+        "isSharingEnabled": { "type": "boolean", "description": "Whether location sharing is active or paused (Ghost Mode)." },
+        "lastUpdated": { "type": "string", "format": "date-time", "description": "Timestamp of the last update." }
       },
       "required": ["userId", "displayName", "latitude", "longitude", "lastUpdated"]
+    },
+    "PersonalDevice": {
+      "title": "PersonalDevice",
+      "description": "Personal phone or tablet registered under the user's account for cross-device tracking and Find/Ring.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Account owner UID." },
+        "deviceId": { "type": "string", "description": "Unique persistent device ID." },
+        "deviceName": { "type": "string", "description": "Editable device callsign/name." },
+        "deviceModel": { "type": "string", "description": "Manufacturer hardware model." },
+        "bleTag": { "type": "string", "description": "6-char BLE proximity finder tag." },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "accuracy": { "type": "number" },
+        "speed": { "type": "number" },
+        "bearing": { "type": "number" },
+        "batteryPercent": { "type": "integer" },
+        "isCharging": { "type": "boolean" },
+        "trackingMode": { "type": "string" },
+        "ringRequestedAt": { "type": "integer", "description": "Epoch millis when remote Ring alarm was triggered." },
+        "ringRequestedBy": { "type": "string", "description": "Name of caller device triggering ring." },
+        "lastUpdated": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "deviceId", "deviceName", "latitude", "longitude", "lastUpdated"]
     }
   },
   "firestore": {
+    "/users/{userId}/devices/{deviceId}": {
+      "schema": { "$ref": "#/entities/PersonalDevice" },
+      "description": "Personal fleet of phones and tablets owned by the same user account."
+    },
     "/groups/{groupId}": {
       "schema": { "$ref": "#/entities/Group" },
-      "description": "Stores group circles and authorized member rosters."
+      "description": "Stores shared tracking groups and authorized member rosters."
     },
-    "/groups/{groupId}/live_locations/{userId}": {
+    "/groups/{groupId}/live_locations/{locationDocId}": {
       "schema": { "$ref": "#/entities/MemberLocation" },
-      "description": "Stores real-time member locations scoped to group members."
+      "description": "Stores real-time device locations scoped to group members."
     }
   }
 }

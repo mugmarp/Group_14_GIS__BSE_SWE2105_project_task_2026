@@ -71,13 +71,36 @@ jobs:
           elif [ -f app/google-services.json ]; then
             echo "Found existing local app/google-services.json"
           else
-            echo "Generating mock google-services.json for CI compile check..."
+            echo "Generating fallback google-services.json for CI compile check..."
             cat << 'EOF' > app/google-services.json
-            {
-              "project_info": { "project_id": "geotrace-ci-mock", "project_number": "1039367946793" },
-              "client": [{ "client_info": { "mobilesdk_app_id": "1:1039367946793:android:6b7859d13c2d7c69c71238", "android_client_info": { "package_name": "com.geotrace" } } }]
-            }
-            EOF
+{
+  "project_info": {
+    "project_id": "geotrace-ci-mock",
+    "project_number": "1039367946793"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1039367946793:android:6b7859d13c2d7c69c71238",
+        "android_client_info": {
+          "package_name": "com.geotrace"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1039367946793-cimockwebclientid.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCiMockPlaceholderKey000000000000"
+        }
+      ]
+    }
+  ]
+}
+EOF
           fi
 
       - name: Resolve Version Code and Name
@@ -168,7 +191,7 @@ jobs:
   release:
     name: Publish Official GitHub Release
     needs: build
-    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && github.event.inputs.create_release == 'true')
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.create_release == true || github.event.inputs.create_release == 'true'))
     runs-on: ubuntu-24.04
     permissions:
       contents: write

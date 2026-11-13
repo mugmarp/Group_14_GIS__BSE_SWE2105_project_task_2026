@@ -31,6 +31,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 class LocationForegroundService : Service() {
 
@@ -39,6 +40,9 @@ class LocationForegroundService : Service() {
         const val NOTIFICATION_ID = 1001
 
         const val ACTION_START = "ACTION_START_TRACKING"
+        const val ACTION_UPDATE_MODE = "ACTION_UPDATE_MODE"
+        const val ACTION_START_BEACON = "ACTION_START_BEACON"
+        const val ACTION_STOP_BEACON = "ACTION_STOP_BEACON"
         const val ACTION_STOP = "ACTION_STOP_TRACKING"
         const val EXTRA_MODE = "EXTRA_MODE"
 
@@ -54,11 +58,52 @@ class LocationForegroundService : Service() {
             }
         }
 
-        fun stopService(context: Context) {
+        fun updateMode(context: Context, mode: TrackingMode) {
             val intent = Intent(context, LocationForegroundService::class.java).apply {
-                action = ACTION_STOP
+                action = ACTION_UPDATE_MODE
+                putExtra(EXTRA_MODE, mode.name)
             }
-            context.startService(intent)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun startBeaconService(context: Context) {
+            val intent = Intent(context, LocationForegroundService::class.java).apply {
+                action = ACTION_START_BEACON
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun stopBeaconService(context: Context) {
+            val repo = (context.applicationContext as? LocationTrackerApp)?.repository
+            if (repo?.activeSession?.value != null) {
+                // Keep foreground service running for active trail, just clear beacon flag via intent
+                val intent = Intent(context, LocationForegroundService::class.java).apply {
+                    action = ACTION_STOP_BEACON
+                }
+                try {
+                    context.startService(intent)
+                } catch (_: Exception) {}
+            } else {
+                context.stopService(Intent(context, LocationForegroundService::class.java))
+            }
+        }
+
+        fun stopService(context: Context) {
+            val repo = (context.applicationContext as? LocationTrackerApp)?.repository
+            if (repo?.backgroundBeaconEnabled?.value == true) {
+                // Transition smoothly to background device beacon if enabled
+                startBeaconService(context)
+            } else {
+                context.stopService(Intent(context, LocationForegroundService::class.java))
+            }
         }
     }
 
@@ -68,6 +113,9 @@ class LocationForegroundService : Service() {
     private var locationCallback: LocationCallback? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var cellDiagnosticsJob: kotlinx.coroutines.Job? = null
+    private var currentMode: TrackingMode = TrackingMode.HIGH_ACCURACY
+    private var isBeaconActive: Boolean = false
+    private var isForegroundStarted: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
@@ -77,38 +125,122 @@ class LocationForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val repo = (application as LocationTrackerApp).repository
+        isBeaconActive = repo.backgroundBeaconEnabled.value
+
         when (intent?.action) {
             ACTION_START -> {
-                val modeStr = intent.getStringExtra(EXTRA_MODE) ?: TrackingMode.HIGH_ACCURACY.name
-                val mode = try {
-                    TrackingMode.valueOf(modeStr)
-                } catch (e: Exception) {
-                    TrackingMode.HIGH_ACCURACY
-                }
+                val modeStr = intent.getStringExtra(EXTRA_MODE) ?: repo.trackingMode.value.name
+                val mode = parseMode(modeStr)
+                currentMode = mode
                 startForegroundTracking(mode)
             }
+            ACTION_UPDATE_MODE -> {
+                val modeStr = intent.getStringExtra(EXTRA_MODE) ?: repo.trackingMode.value.name
+                val mode = parseMode(modeStr)
+                currentMode = mode
+                ensureForeground(buildStatusNotification(mode))
+                requestLocationUpdates(mode)
+            }
+            ACTION_START_BEACON -> {
+                isBeaconActive = true
+                val activeSession = repo.activeSession.value
+                currentMode = activeSession?.trackingMode ?: repo.trackingMode.value
+                if (activeSession != null) {
+                    ensureForeground(buildStatusNotification(currentMode))
+                } else {
+                    ensureForeground(
+                        buildNotification(
+                            title = "GeoTrace Device Beacon Active",
+                            content = "Keeping device discoverable & reachable for remote Find/Ring",
+                            isBeaconOnly = true
+                        )
+                    )
+                    acquireWakeLock()
+                    requestLocationUpdates(TrackingMode.BALANCED)
+                    startPeriodicCellDiagnostics()
+                }
+            }
+            ACTION_STOP_BEACON -> {
+                isBeaconActive = false
+                if (repo.activeSession.value == null) {
+                    stopTrackingService(stopActiveSession = false)
+                } else {
+                    ensureForeground(buildStatusNotification(currentMode))
+                }
+            }
             ACTION_STOP -> {
-                stopTrackingService()
+                if (isBeaconActive) {
+                    serviceScope.launch {
+                        repo.stopCurrentSession()
+                    }
+                    ensureForeground(
+                        buildNotification(
+                            title = "GeoTrace Device Beacon Active",
+                            content = "Trail stopped • Device remains discoverable for Find/Ring",
+                            isBeaconOnly = true
+                        )
+                    )
+                    requestLocationUpdates(TrackingMode.BALANCED)
+                } else {
+                    stopTrackingService(stopActiveSession = repo.activeSession.value != null)
+                }
             }
         }
         return START_STICKY
     }
 
-    private fun startForegroundTracking(mode: TrackingMode) {
-        val initialNotification = buildNotification("GeoTrace Active", "Acquiring real-time GPS & cell fix...", mode)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                NOTIFICATION_ID,
-                initialNotification,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, initialNotification)
+    private fun parseMode(raw: String): TrackingMode {
+        return try {
+            TrackingMode.valueOf(raw)
+        } catch (_: Exception) {
+            TrackingMode.HIGH_ACCURACY
         }
+    }
 
+    private fun startForegroundTracking(mode: TrackingMode) {
+        ensureForeground(buildStatusNotification(mode))
         acquireWakeLock()
         requestLocationUpdates(mode)
         startPeriodicCellDiagnostics()
+    }
+
+    private fun ensureForeground(notification: Notification) {
+        if (!isForegroundStarted) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            isForegroundStarted = true
+        } else {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIFICATION_ID, notification)
+        }
+    }
+
+    private fun buildStatusNotification(mode: TrackingMode): Notification {
+        val repo = (application as LocationTrackerApp).repository
+        val activeSession = repo.activeSession.value
+        val calibratedPoint = repo.currentLocation.value
+        return if (calibratedPoint != null && activeSession != null) {
+            val speedKmh = calibratedPoint.speedKmh
+            val gait = calibratedPoint.gaitLabel
+            val distFormatted = activeSession.formattedDistance
+            val title = "Tracking (${mode.title}): ${activeSession.name}"
+            val content = "Dist: $distFormatted | Speed: ${String.format(Locale.US, "%.1f", speedKmh)} km/h ($gait) | Acc: ±${calibratedPoint.accuracy.toInt()}m"
+            buildNotification(title, content, isBeaconOnly = false)
+        } else {
+            buildNotification(
+                title = "GeoTrace Active (${mode.title})",
+                content = "Acquiring live location telemetry...",
+                isBeaconOnly = false
+            )
+        }
     }
 
     private fun acquireWakeLock() {
@@ -122,10 +254,8 @@ class LocationForegroundService : Service() {
                     setReferenceCounted(false)
                 }
             }
-            // Acquire with a 12-hour timeout safeguard against battery runaway
             wakeLock?.acquire(12 * 60 * 60 * 1000L)
-        } catch (e: Exception) {
-            // Non-fatal if power manager denies wake lock
+        } catch (_: Exception) {
         }
     }
 
@@ -134,14 +264,12 @@ class LocationForegroundService : Service() {
             if (wakeLock?.isHeld == true) {
                 wakeLock?.release()
             }
-        } catch (e: Exception) {
-            // Safe release
+        } catch (_: Exception) {
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun requestLocationUpdates(mode: TrackingMode) {
-        // Remove prior callback if any
         locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
 
         val priority = when (mode) {
@@ -165,8 +293,7 @@ class LocationForegroundService : Service() {
 
         try {
             fusedLocationClient.requestLocationUpdates(request, locationCallback!!, Looper.getMainLooper())
-        } catch (e: SecurityException) {
-            // Handled in activity permission flow
+        } catch (_: SecurityException) {
         }
     }
 
@@ -181,23 +308,26 @@ class LocationForegroundService : Service() {
             speed = if (loc.hasSpeed()) loc.speed else 0f,
             altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
             bearing = if (loc.hasBearing()) loc.bearing else 0f,
-            provider = if (mode == TrackingMode.POWER_SAVER) "cellular" else (loc.provider ?: "fused"),
+            provider = loc.provider ?: "fused",
             timestamp = loc.time,
-            sessionId = activeSession?.id ?: "ad_hoc"
+            sessionId = activeSession?.id ?: "beacon"
         )
 
         serviceScope.launch {
             repo.recordLocation(point)
-
-            val calibratedPoint = repo.currentLocation.value ?: point
-            val speedKmh = calibratedPoint.speedKmh
-            val gait = calibratedPoint.gaitLabel
-            val distFormatted = activeSession?.formattedDistance ?: "0 m"
-            val title = "Tracking: ${activeSession?.name ?: "Live Location"}"
-            val content = "Dist: $distFormatted | Speed: ${String.format("%.1f", speedKmh)} km/h ($gait) | Acc: ±${loc.accuracy.toInt()}m"
-
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.notify(NOTIFICATION_ID, buildNotification(title, content, mode))
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (activeSession != null) {
+                nm.notify(NOTIFICATION_ID, buildStatusNotification(mode))
+            } else if (isBeaconActive) {
+                nm.notify(
+                    NOTIFICATION_ID,
+                    buildNotification(
+                        title = "GeoTrace Device Beacon Active",
+                        content = "Live fix ±${loc.accuracy.toInt()}m • Device reachable for Find/Ring",
+                        isBeaconOnly = true
+                    )
+                )
+            }
         }
     }
 
@@ -208,12 +338,12 @@ class LocationForegroundService : Service() {
             while (isActive) {
                 val towers = cellManager.readCurrentCellTowers()
                 repo.updateCellTowers(towers)
-                delay(10000L) // Refresh cell towers every 10 seconds
+                delay(10000L)
             }
         }
     }
 
-    private fun buildNotification(title: String, content: String, mode: TrackingMode): Notification {
+    private fun buildNotification(title: String, content: String, isBeaconOnly: Boolean): Notification {
         val openIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
@@ -222,11 +352,13 @@ class LocationForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val stopAction = if (isBeaconOnly) ACTION_STOP_BEACON else ACTION_STOP
+        val stopLabel = if (isBeaconOnly) "Turn Off Beacon" else "Stop Tracking"
         val stopIntent = Intent(this, LocationForegroundService::class.java).apply {
-            action = ACTION_STOP
+            action = stopAction
         }
         val pendingStop = PendingIntent.getService(
-            this, 1, stopIntent,
+            this, if (isBeaconOnly) 2 else 1, stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -235,7 +367,7 @@ class LocationForegroundService : Service() {
             .setContentText(content)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentIntent(pendingOpen)
-            .addAction(android.R.drawable.ic_media_pause, "Stop Tracking", pendingStop)
+            .addAction(android.R.drawable.ic_media_pause, stopLabel, pendingStop)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
@@ -249,7 +381,7 @@ class LocationForegroundService : Service() {
                 "Real-Time GIS Tracking",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Shows live location tracking progress and notifications"
+                description = "Shows live location tracking and background device beacon status"
                 setShowBadge(false)
             }
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -257,14 +389,20 @@ class LocationForegroundService : Service() {
         }
     }
 
-    private fun stopTrackingService() {
+    private fun stopTrackingService(stopActiveSession: Boolean) {
         locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
         cellDiagnosticsJob?.cancel()
         cellDiagnosticsJob = null
         releaseWakeLock()
-        serviceScope.launch {
-            val repo = (application as LocationTrackerApp).repository
-            repo.stopCurrentSession()
+        isForegroundStarted = false
+        if (stopActiveSession) {
+            serviceScope.launch {
+                val repo = (application as LocationTrackerApp).repository
+                repo.stopCurrentSession()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+        } else {
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
         }
@@ -276,6 +414,7 @@ class LocationForegroundService : Service() {
         cellDiagnosticsJob?.cancel()
         cellDiagnosticsJob = null
         releaseWakeLock()
+        isForegroundStarted = false
         serviceScope.cancel()
     }
 

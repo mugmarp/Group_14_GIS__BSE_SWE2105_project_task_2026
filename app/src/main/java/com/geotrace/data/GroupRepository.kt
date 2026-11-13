@@ -8,6 +8,8 @@ import com.geotrace.model.LocationPoint
 import com.geotrace.model.MemberLocation
 import com.geotrace.model.P2PMeshState
 import com.geotrace.model.P2PPeer
+import com.geotrace.model.PersonalDevice
+import com.geotrace.service.FindDeviceAlarmManager
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.AdvertisingOptions
@@ -28,6 +30,7 @@ import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -46,7 +49,9 @@ import java.util.concurrent.ConcurrentHashMap
 
 private const val TAG = "GroupRepository"
 private const val NEARBY_SERVICE_ID = "com.geotrace.p2p.mesh"
-private const val P2P_PAYLOAD_VERSION: Byte = 2
+private const val P2P_PAYLOAD_VERSION_V2: Byte = 2
+private const val P2P_PAYLOAD_VERSION_V3: Byte = 3
+private const val P2P_CMD_RING: Byte = 10
 
 class GroupRepository(
     private val context: Context,
@@ -66,7 +71,14 @@ class GroupRepository(
         Nearby.getConnectionsClient(context)
     }
 
-    // Phase 2: Nearby P2P Peers & Connection Pipeline State
+    val currentDeviceId: String = loadOrInitDeviceId()
+    val bleTag: String = currentDeviceId
+        .filter { it.isLetterOrDigit() }
+        .take(6)
+        .uppercase()
+        .padEnd(6, '0')
+
+    // Nearby P2P Peers & Connection Pipeline State
     private val _nearbyPeers = MutableStateFlow<List<P2PPeer>>(emptyList())
     val nearbyPeers = _nearbyPeers.asStateFlow()
 
@@ -89,19 +101,41 @@ class GroupRepository(
     private var isP2PDiscovering = false
     @Volatile
     private var lastP2PError: String? = null
+    @Volatile
+    private var lastHandledRingTimestampMs: Long = prefs.getLong("last_handled_ring_ms", 0L)
 
     var onPeerConnectedCallback: ((String) -> Unit)? = null
+
+    init {
+        FindDeviceAlarmManager.onAlarmStoppedByUser = {
+            p2pScope.launch {
+                clearRingCommandOnSelf()
+            }
+        }
+    }
+
+    private fun loadOrInitDeviceId(): String {
+        val saved = prefs.getString("geotrace_device_id", null)
+        if (!saved.isNullOrBlank()) return saved
+        val modelPrefix = android.os.Build.MODEL
+            .filter { it.isLetterOrDigit() }
+            .take(6)
+            .lowercase()
+            .ifBlank { "dev" }
+        val generated = "${modelPrefix}_${UUID.randomUUID().toString().replace("-", "").take(10)}"
+        prefs.edit().putString("geotrace_device_id", generated).apply()
+        return generated
+    }
 
     private fun loadOrInitOfflineCallsign(): String {
         val saved = prefs.getString("offline_p2p_callsign", null)
         if (!saved.isNullOrBlank()) return saved
         val modelTag = android.os.Build.MODEL
             .filter { it.isLetterOrDigit() }
-            .take(5)
-            .uppercase()
-            .ifBlank { "FIELD" }
-        val suffix = UUID.randomUUID().toString().take(4).uppercase()
-        val generated = "Geo-$modelTag-$suffix"
+            .take(6)
+            .ifBlank { "Phone" }
+        val suffix = currentDeviceId.takeLast(4).uppercase()
+        val generated = "$modelTag-$suffix"
         prefs.edit().putString("offline_p2p_callsign", generated).apply()
         return generated
     }
@@ -121,15 +155,21 @@ class GroupRepository(
     fun getCurrentUserId(): String? = auth.currentUser?.uid
 
     fun getCurrentUserDisplayName(): String {
-        return auth.currentUser?.displayName?.takeIf { it.isNotBlank() }
+        val customDevice = _offlineCallsign.value.takeIf { it.isNotBlank() }
+        val accountName = auth.currentUser?.displayName?.takeIf { it.isNotBlank() }
             ?: auth.currentUser?.email?.substringBefore("@")
-            ?: _offlineCallsign.value
+        return when {
+            !customDevice.isNullOrBlank() && !accountName.isNullOrBlank() -> customDevice
+            !customDevice.isNullOrBlank() -> customDevice
+            !accountName.isNullOrBlank() -> accountName
+            else -> "GeoTrace Device"
+        }
     }
 
     /**
-     * Create a new group circle with a unique short invite code.
+     * Create a new tracking group with a unique short invite code.
      */
-    suspend fun createGroup(name: String, displayName: String): Result<Group> {
+    suspend fun createGroup(name: String): Result<Group> {
         val uid = auth.currentUser?.uid
             ?: return Result.failure(IllegalStateException("Must be signed in to create a group."))
 
@@ -159,7 +199,7 @@ class GroupRepository(
     }
 
     /**
-     * Join an existing group circle via its 6-character code (e.g., FAM-7K2).
+     * Join an existing tracking group via its invite code.
      */
     suspend fun joinGroupByCode(inviteCode: String): Result<Group> {
         val uid = auth.currentUser?.uid
@@ -194,7 +234,7 @@ class GroupRepository(
     }
 
     /**
-     * Observe all groups that the current user is a member of.
+     * Observe all tracking groups that the current user belongs to.
      */
     fun observeUserGroups(): Flow<List<Group>> = callbackFlow {
         val uid = auth.currentUser?.uid
@@ -222,7 +262,7 @@ class GroupRepository(
     }
 
     /**
-     * Leave a group circle.
+     * Leave a tracking group and delete this device's live location document.
      */
     suspend fun leaveGroup(groupId: String): Result<Unit> {
         val uid = auth.currentUser?.uid
@@ -232,13 +272,11 @@ class GroupRepository(
             db.collection("groups").document(groupId)
                 .update("memberIds", FieldValue.arrayRemove(uid))
                 .await()
-            // Also clean up member's live location record
             try {
-                db.collection("groups").document(groupId)
-                    .collection("live_locations").document(uid)
-                    .delete()
-                    .await()
-            } catch (ignored: Exception) {}
+                val locCol = db.collection("groups").document(groupId).collection("live_locations")
+                locCol.document("${uid}_${currentDeviceId}").delete().await()
+                locCol.document(uid).delete().await()
+            } catch (_: Exception) {}
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to leave group: ${e.message}", e)
@@ -247,7 +285,8 @@ class GroupRepository(
     }
 
     /**
-     * Publish current device's live location & telemetry to a group's live_locations collection.
+     * Publish current device's live location & telemetry to a group's live_locations collection
+     * using `{uid}_{deviceId}` so multiple devices under one account never overwrite each other.
      */
     suspend fun publishLocation(
         groupId: String,
@@ -263,11 +302,15 @@ class GroupRepository(
             ?: return Result.failure(IllegalStateException("User not signed in."))
 
         return try {
+            val docId = "${uid}_${currentDeviceId}"
             val docRef = db.collection("groups").document(groupId)
-                .collection("live_locations").document(uid)
+                .collection("live_locations").document(docId)
 
             val payload = mapOf(
                 "userId" to uid,
+                "deviceId" to currentDeviceId,
+                "deviceModel" to android.os.Build.MODEL,
+                "bleTag" to bleTag,
                 "displayName" to displayName,
                 "avatarColor" to avatarColor,
                 "latitude" to location.latitude,
@@ -276,7 +319,7 @@ class GroupRepository(
                 "speed" to location.speed,
                 "bearing" to location.bearing,
                 "altitude" to location.altitude,
-                "gait" to (location.gaitLabel ?: "Stationary"),
+                "gait" to location.gaitLabel,
                 "batteryPercent" to batteryPercent,
                 "isCharging" to isCharging,
                 "trackingMode" to trackingMode,
@@ -286,7 +329,6 @@ class GroupRepository(
 
             docRef.set(payload).await()
 
-            // Also broadcast via Nearby P2P mesh if active AND Ghost Mode is NOT freezing sharing
             if (isSharingEnabled && (isP2PAdvertising || isP2PDiscovering || connectedEndpoints.isNotEmpty())) {
                 broadcastP2PLocation(location, displayName, batteryPercent)
             }
@@ -299,7 +341,7 @@ class GroupRepository(
     }
 
     /**
-     * Real-time stream of all member locations within a specific group.
+     * Real-time stream of all device locations within a specific group.
      */
     fun observeGroupLocations(groupId: String): Flow<List<MemberLocation>> = callbackFlow {
         val listener: ListenerRegistration = db.collection("groups").document(groupId)
@@ -321,7 +363,126 @@ class GroupRepository(
     }
 
     // -----------------------------------------------------------------------------------------
-    // Phase 2: Nearby Connections P2P Mesh (Wilderness Off-Grid Tracking)
+    // Personal Multi-Device Fleet (`/users/{uid}/devices/{deviceId}`) + Remote Ring
+    // -----------------------------------------------------------------------------------------
+
+    suspend fun publishPersonalDevice(
+        location: LocationPoint,
+        batteryPercent: Int,
+        isCharging: Boolean,
+        trackingMode: String
+    ): Result<Unit> {
+        val uid = auth.currentUser?.uid
+            ?: return Result.failure(IllegalStateException("User not signed in."))
+
+        return try {
+            val docRef = db.collection("users").document(uid)
+                .collection("devices").document(currentDeviceId)
+
+            val payload = mapOf(
+                "userId" to uid,
+                "deviceId" to currentDeviceId,
+                "deviceName" to _offlineCallsign.value,
+                "deviceModel" to android.os.Build.MODEL,
+                "bleTag" to bleTag,
+                "latitude" to location.latitude,
+                "longitude" to location.longitude,
+                "accuracy" to location.accuracy,
+                "speed" to location.speed,
+                "bearing" to location.bearing,
+                "batteryPercent" to batteryPercent,
+                "isCharging" to isCharging,
+                "trackingMode" to trackingMode,
+                "lastUpdated" to FieldValue.serverTimestamp()
+            )
+            // Merge so another phone's pending ringRequestedAt trigger is preserved
+            docRef.set(payload, SetOptions.merge()).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to update personal device doc: ${e.message}")
+            Result.failure(e)
+        }
+    }
+
+    fun observePersonalDevices(): Flow<List<PersonalDevice>> = callbackFlow {
+        val uid = auth.currentUser?.uid
+        if (uid == null) {
+            trySend(emptyList())
+            close()
+            return@callbackFlow
+        }
+
+        val listener: ListenerRegistration = db.collection("users").document(uid)
+            .collection("devices")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.e(TAG, "Error observing personal devices: ${error.message}")
+                    close(error)
+                    return@addSnapshotListener
+                }
+
+                val devices = snapshot?.documents?.mapNotNull { doc ->
+                    doc.toObject(PersonalDevice::class.java)?.copy(id = doc.id)
+                } ?: emptyList()
+
+                // Check if another one of our devices requested THIS device to ring
+                val selfDoc = devices.firstOrNull { it.deviceId == currentDeviceId || it.id == currentDeviceId }
+                if (selfDoc != null) {
+                    val reqAt = selfDoc.ringRequestedAt
+                    val ageMs = System.currentTimeMillis() - reqAt
+                    if (reqAt > 0L && reqAt > lastHandledRingTimestampMs && ageMs in -5000L..60_000L) {
+                        lastHandledRingTimestampMs = reqAt
+                        prefs.edit().putLong("last_handled_ring_ms", reqAt).apply()
+                        val caller = selfDoc.ringRequestedBy.ifBlank { "Your GeoTrace Device" }
+                        FindDeviceAlarmManager.startRinging(context, caller)
+                    }
+                }
+
+                trySend(devices)
+            }
+
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun sendRingCommandToDevice(targetDeviceId: String): Result<Unit> {
+        val uid = auth.currentUser?.uid
+            ?: return Result.failure(IllegalStateException("Sign in to ring your cloud devices."))
+
+        return try {
+            val nowMs = System.currentTimeMillis()
+            db.collection("users").document(uid)
+                .collection("devices").document(targetDeviceId)
+                .update(
+                    mapOf(
+                        "ringRequestedAt" to nowMs,
+                        "ringRequestedBy" to _offlineCallsign.value
+                    )
+                )
+                .await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send remote ring command: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun clearRingCommandOnSelf() {
+        val uid = auth.currentUser?.uid ?: return
+        try {
+            db.collection("users").document(uid)
+                .collection("devices").document(currentDeviceId)
+                .update(
+                    mapOf(
+                        "ringRequestedAt" to 0L,
+                        "ringRequestedBy" to ""
+                    )
+                )
+                .await()
+        } catch (_: Exception) {}
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Nearby Connections P2P Mesh (Off-Grid Location Exchange & Remote Ring)
     // -----------------------------------------------------------------------------------------
 
     fun startP2PMesh(displayName: String) {
@@ -363,7 +524,7 @@ class GroupRepository(
             !isP2PMeshRequested -> "Off-grid P2P scanner idle"
             lastP2PError != null -> lastP2PError!!
             peerCount > 0 -> "Receiving live telemetry from $peerCount offline peer(s)"
-            connCount > 0 -> "Connected to $connCount peer(s); exchanging GPS coordinates..."
+            connCount > 0 -> "Connected to $connCount peer(s); exchanging coordinates..."
             discCount > 0 -> "Found $discCount device(s) nearby; establishing encrypted P2P link..."
             isP2PAdvertising && isP2PDiscovering -> "Broadcasting & scanning via BLE / Wi-Fi Direct (50-200m)"
             isP2PAdvertising || isP2PDiscovering -> "Initializing Nearby radios..."
@@ -424,13 +585,11 @@ class GroupRepository(
                     val remoteName = info.endpointName.ifBlank { "GeoPeer" }
                     discoveredEndpoints[endpointId] = remoteName
                     updateMeshState()
-                    Log.d(TAG, "Discovered P2P endpoint: $endpointId ($remoteName)")
 
                     if (connectedEndpoints.containsKey(endpointId) || !pendingConnections.add(endpointId)) {
                         return
                     }
 
-                    // Tie-breaker delay to avoid simultaneous P2P_CLUSTER requestConnection collisions
                     val delayMs = if (myDisplayName <= remoteName) 60L else 1100L
                     p2pScope.launch {
                         delay(delayMs)
@@ -452,7 +611,6 @@ class GroupRepository(
                 override fun onEndpointLost(endpointId: String) {
                     discoveredEndpoints.remove(endpointId)
                     pendingConnections.remove(endpointId)
-                    // Keep activePeers only if still connected; otherwise remove stale endpoint
                     if (!connectedEndpoints.containsKey(endpointId)) {
                         activePeers.remove(endpointId)
                         _nearbyPeers.value = activePeers.values.toList()
@@ -465,7 +623,6 @@ class GroupRepository(
             isP2PDiscovering = true
             lastP2PError = null
             updateMeshState()
-            Log.i(TAG, "Nearby discovery started")
         }.addOnFailureListener { ex ->
             val code = (ex as? ApiException)?.statusCode
             if (code == ConnectionsStatusCodes.STATUS_ALREADY_DISCOVERING) {
@@ -476,7 +633,6 @@ class GroupRepository(
                 lastP2PError = mapNearbyError("Discovery", ex)
             }
             updateMeshState()
-            Log.w(TAG, "Nearby discovery result: code=$code, err=$lastP2PError")
         }
     }
 
@@ -498,11 +654,8 @@ class GroupRepository(
                     connectedEndpoints[endpointId] = discoveredEndpoints[endpointId] ?: endpointDisplayName
                     lastP2PError = null
                     updateMeshState()
-                    Log.i(TAG, "P2P connected to $endpointId (${connectedEndpoints[endpointId]})")
-                    // Immediately push our location telemetry to the newly connected peer!
                     onPeerConnectedCallback?.invoke(endpointId)
                 } else {
-                    Log.w(TAG, "P2P connection rejected/failed for $endpointId (code=$statusCode)")
                     updateMeshState()
                 }
             }
@@ -520,10 +673,49 @@ class GroupRepository(
     private val payloadCallback = object : PayloadCallback() {
         override fun onPayloadReceived(endpointId: String, payload: Payload) {
             val bytes = payload.asBytes() ?: return
+            if (bytes.isEmpty()) return
             try {
+                // Handle Remote Ring Alarm Control Command over offline P2P
+                if (bytes[0] == P2P_CMD_RING) {
+                    val caller = if (bytes.size > 1) {
+                        String(bytes, 1, bytes.size - 1, StandardCharsets.UTF_8)
+                    } else {
+                        connectedEndpoints[endpointId] ?: "Nearby GeoTrace Device"
+                    }
+                    FindDeviceAlarmManager.startRinging(context, caller)
+                    return
+                }
+
                 val buffer = ByteBuffer.wrap(bytes)
-                val peer = if (buffer.remaining() >= 29 && bytes[0] == P2P_PAYLOAD_VERSION) {
-                    buffer.get() // version byte
+                val peer = if (buffer.remaining() >= 30 && bytes[0] == P2P_PAYLOAD_VERSION_V3) {
+                    buffer.get() // v3
+                    val lat = buffer.double
+                    val lng = buffer.double
+                    val speed = buffer.float
+                    val bearing = buffer.float
+                    val battery = buffer.int.coerceIn(0, 100)
+                    val tagLen = (buffer.get().toInt() and 0xFF).coerceAtMost(buffer.remaining())
+                    val tagBytes = ByteArray(tagLen)
+                    buffer.get(tagBytes)
+                    val peerTag = String(tagBytes, StandardCharsets.US_ASCII)
+                    val nameBytes = ByteArray(buffer.remaining())
+                    buffer.get(nameBytes)
+                    val name = String(nameBytes, StandardCharsets.UTF_8)
+                        .ifBlank { connectedEndpoints[endpointId] ?: "Nearby Peer" }
+
+                    P2PPeer(
+                        endpointId = endpointId,
+                        displayName = name,
+                        latitude = lat,
+                        longitude = lng,
+                        speed = speed,
+                        bearing = bearing,
+                        batteryPercent = battery,
+                        bleTag = peerTag,
+                        lastSeenTimestamp = System.currentTimeMillis()
+                    )
+                } else if (buffer.remaining() >= 29 && bytes[0] == P2P_PAYLOAD_VERSION_V2) {
+                    buffer.get() // v2
                     val lat = buffer.double
                     val lng = buffer.double
                     val speed = buffer.float
@@ -545,7 +737,6 @@ class GroupRepository(
                         lastSeenTimestamp = System.currentTimeMillis()
                     )
                 } else if (buffer.remaining() >= 24) {
-                    // Backward-compatible v1 packet
                     val lat = buffer.double
                     val lng = buffer.double
                     val speed = buffer.float
@@ -582,6 +773,18 @@ class GroupRepository(
         override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {}
     }
 
+    fun sendP2PRingCommand(endpointId: String) {
+        try {
+            val callerBytes = _offlineCallsign.value.toByteArray(StandardCharsets.UTF_8)
+            val buffer = ByteBuffer.allocate(1 + callerBytes.size)
+            buffer.put(P2P_CMD_RING)
+            buffer.put(callerBytes)
+            connectionsClient.sendPayload(endpointId, Payload.fromBytes(buffer.array()))
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to send P2P ring command to $endpointId: ${e.message}")
+        }
+    }
+
     fun broadcastP2PLocationDirect(loc: LocationPoint, displayName: String, batteryPercent: Int) {
         broadcastP2PLocation(loc, displayName, batteryPercent)
     }
@@ -590,14 +793,17 @@ class GroupRepository(
         val targets = connectedEndpoints.keys.toList()
         if (targets.isEmpty()) return
         try {
+            val tagBytes = bleTag.toByteArray(StandardCharsets.US_ASCII)
             val nameBytes = displayName.toByteArray(StandardCharsets.UTF_8)
-            val buffer = ByteBuffer.allocate(1 + 8 + 8 + 4 + 4 + 4 + nameBytes.size)
-            buffer.put(P2P_PAYLOAD_VERSION)
+            val buffer = ByteBuffer.allocate(1 + 8 + 8 + 4 + 4 + 4 + 1 + tagBytes.size + nameBytes.size)
+            buffer.put(P2P_PAYLOAD_VERSION_V3)
             buffer.putDouble(loc.latitude)
             buffer.putDouble(loc.longitude)
             buffer.putFloat(loc.speed)
             buffer.putFloat(loc.bearing)
             buffer.putInt(batteryPercent)
+            buffer.put(tagBytes.size.toByte())
+            buffer.put(tagBytes)
             buffer.put(nameBytes)
 
             val payload = Payload.fromBytes(buffer.array())

@@ -89,7 +89,7 @@ import kotlinx.coroutines.launch
 enum class Screen(val title: String, val testTag: String) {
     MAP("Live Map & Telemetry", "nav_map"),
     CELLULAR("Cellular Signal Hub", "nav_cellular"),
-    GROUPS("Family & Circle Tracking", "nav_groups"),
+    GROUPS("Devices & Tracking Groups", "nav_groups"),
     GEOFENCE("Safe Zones & Geofencing", "nav_geofence"),
     HISTORY("Saved Trails & Exports", "nav_history"),
     RESEARCH("SWE2105 Research Analysis", "nav_research"),
@@ -135,6 +135,9 @@ fun MainAppScreen(
     val geofenceZones by viewModel.geofenceZones.collectAsState()
     val settings by viewModel.settings.collectAsState()
     val activeGroup by groupViewModel.activeGroup.collectAsState()
+    val isRingingAlarm by groupViewModel.isRingingAlarm.collectAsState()
+    val ringCallerName by groupViewModel.ringCallerName.collectAsState()
+    val isBackgroundBeaconEnabled by groupViewModel.isBackgroundBeaconEnabled.collectAsState()
 
     // Handle Back Press: Close menu bottom sheet if open, or return to Map screen
     if (showMenuSheet) {
@@ -164,6 +167,9 @@ fun MainAppScreen(
         if (fineGranted || coarseGranted) {
             viewModel.startStandbyLocationUpdates()
             viewModel.refreshCellTowers()
+            if (isBackgroundBeaconEnabled) {
+                com.geotrace.service.LocationForegroundService.startBeaconService(context)
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
@@ -188,6 +194,9 @@ fun MainAppScreen(
         } else {
             viewModel.startStandbyLocationUpdates()
             viewModel.refreshCellTowers()
+            if (isBackgroundBeaconEnabled) {
+                com.geotrace.service.LocationForegroundService.startBeaconService(context)
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
@@ -221,8 +230,8 @@ fun MainAppScreen(
                         NavigationBarItem(
                             selected = currentScreen == Screen.MAP,
                             onClick = { currentScreen = Screen.MAP },
-                            icon = { Icon(Icons.Default.Map, contentDescription = "Live Map", modifier = Modifier.size(20.dp)) },
-                            label = { Text("GPS Map", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.02.sp) },
+                            icon = { Icon(Icons.Default.Map, contentDescription = "Map", modifier = Modifier.size(20.dp)) },
+                            label = { Text("Map", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.02.sp) },
                             modifier = Modifier.testTag("nav_bottom_map"),
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = colorScheme.onPrimary,
@@ -251,8 +260,8 @@ fun MainAppScreen(
                         NavigationBarItem(
                             selected = currentScreen == Screen.GROUPS,
                             onClick = { currentScreen = Screen.GROUPS },
-                            icon = { Icon(Icons.Default.Group, contentDescription = "Family Circles", modifier = Modifier.size(20.dp)) },
-                            label = { Text("Circles", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.02.sp) },
+                            icon = { Icon(Icons.Default.Group, contentDescription = "Devices and Tracking Groups", modifier = Modifier.size(20.dp)) },
+                            label = { Text("Devices", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.02.sp) },
                             modifier = Modifier.testTag("nav_bottom_groups"),
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = colorScheme.onPrimary,
@@ -315,6 +324,65 @@ fun MainAppScreen(
                     viewModel = viewModel,
                     onNavigateBack = { currentScreen = Screen.MAP }
                 )
+            }
+
+            // Urgent Full-Width Overlay when a Find/Ring Alarm is Active on this Device
+            if (isRingingAlarm) {
+                Surface(
+                    color = colorScheme.errorContainer,
+                    border = BorderStroke(2.dp, colorScheme.error),
+                    shape = RoundedCornerShape(16.dp),
+                    shadowElevation = 10.dp,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 14.dp)
+                        .testTag("find_alarm_banner")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                Icons.Default.NotificationsActive,
+                                contentDescription = "Find Device Alarm Active",
+                                tint = colorScheme.error,
+                                modifier = Modifier.size(28.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "DEVICE FIND ALARM",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.error
+                                )
+                                Text(
+                                    text = "Triggered by ${ringCallerName ?: "Remote Device"}",
+                                    fontSize = 11.sp,
+                                    color = colorScheme.onErrorContainer
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        androidx.compose.material3.Button(
+                            onClick = { groupViewModel.stopRingingAlarm() },
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = colorScheme.error,
+                                contentColor = colorScheme.onError
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.height(48.dp).testTag("stop_find_alarm_btn")
+                        ) {
+                            Text("Stop Alarm", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+                }
             }
         }
 
@@ -429,10 +497,10 @@ fun MainAppScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Card 0: Family & Circle Tracking (Cloud & P2P Mesh)
+                    // Card 0: Devices & Tracking Groups
                     MenuNavigationCard(
-                        title = "Family & Circle Tracking",
-                        subtitle = "Multi-device real-time sync, battery telemetry & P2P mesh",
+                        title = "Devices & Tracking Groups",
+                        subtitle = "Multi-device fleet, remote ring, BLE radar & shared groups",
                         badgeText = if (activeGroup != null) activeGroup!!.name else "Setup",
                         badgeColor = if (activeGroup != null) colorScheme.tertiary else colorScheme.primary,
                         icon = { Icon(Icons.Default.Group, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(22.dp)) },

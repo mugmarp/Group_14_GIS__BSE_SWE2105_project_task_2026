@@ -108,9 +108,14 @@ fun MapScreen(
 
     val activeGroup by (groupViewModel?.activeGroup ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
     val groupMembers by (groupViewModel?.groupMembers ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsState()
+    val personalDevices by (groupViewModel?.personalDevices ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsState()
     val nearbyPeers by (groupViewModel?.nearbyPeers ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsState()
     val isGhostMode by (groupViewModel?.isGhostMode ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
     val isP2PEnabled by (groupViewModel?.isP2PEnabled ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
+    val currentDeviceId = groupViewModel?.currentDeviceId ?: ""
+    val remotePersonalDevices = remember(personalDevices, currentDeviceId) {
+        personalDevices.filter { it.deviceId != currentDeviceId && it.id != currentDeviceId }
+    }
 
     var showStartDialog by remember { mutableStateOf(false) }
     var showProfileDialog by remember { mutableStateOf(false) }
@@ -138,6 +143,8 @@ fun MapScreen(
             cellTowerLocation = cellTowerLocation,
             allCellTowers = allCellTowers,
             groupMembers = groupMembers,
+            personalDevices = remotePersonalDevices,
+            currentDeviceId = currentDeviceId,
             nearbyPeers = nearbyPeers,
             settings = settings,
             onSelectTileLayer = { selectedTile ->
@@ -207,10 +214,10 @@ fun MapScreen(
                                     Text(
                                         text = when {
                                              activeSession != null -> "RECORDING • ${activeSession?.name}"
-                                             trackingMode == TrackingMode.POWER_SAVER -> "CELLULAR ONLY • SECTOR TELEMETRY (MTN/AIRTEL)"
+                                             trackingMode == TrackingMode.POWER_SAVER -> "CELLULAR ONLY • BASE STATION TELEMETRY"
                                              currentLocation?.provider == "cellular" -> "CELLULAR FIX • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
-                                             currentLocation != null -> "GNSS LOCKED • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
-                                             else -> "STANDBY • AWAITING GNSS SATELLITE FIX"
+                                             currentLocation != null -> "POSITION LOCKED • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
+                                             else -> "STANDBY • AWAITING LOCATION FIX"
                                         },
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.SemiBold,
@@ -445,12 +452,13 @@ fun MapScreen(
                     }
                 }
 
-                // Floating Group / Circle & Off-Grid P2P Tracking Pill
-                val meshOrGroupActive = activeGroup != null || isP2PEnabled
+                // Floating Devices / Tracking Group & Off-Grid P2P Pill
+                val meshOrGroupActive = activeGroup != null || isP2PEnabled || remotePersonalDevices.isNotEmpty()
                 Surface(
                     shape = RoundedCornerShape(20.dp),
                     color = when {
                         activeGroup != null -> colorScheme.primaryContainer.copy(alpha = 0.5f)
+                        remotePersonalDevices.isNotEmpty() -> colorScheme.secondaryContainer.copy(alpha = 0.5f)
                         isP2PEnabled -> colorScheme.tertiaryContainer.copy(alpha = 0.55f)
                         else -> colorScheme.surface
                     },
@@ -459,6 +467,7 @@ fun MapScreen(
                         1.dp,
                         when {
                             activeGroup != null -> colorScheme.primary
+                            remotePersonalDevices.isNotEmpty() -> colorScheme.secondary
                             isP2PEnabled -> colorScheme.tertiary
                             else -> colorScheme.outlineVariant
                         }
@@ -473,9 +482,10 @@ fun MapScreen(
                     ) {
                         Icon(
                             Icons.Default.Group,
-                            contentDescription = "Circles and Offline P2P Mesh",
+                            contentDescription = "Devices and Offline P2P Mesh",
                             tint = when {
                                 activeGroup != null -> colorScheme.primary
+                                remotePersonalDevices.isNotEmpty() -> colorScheme.secondary
                                 isP2PEnabled -> colorScheme.tertiary
                                 else -> colorScheme.onSurfaceVariant
                             },
@@ -485,14 +495,16 @@ fun MapScreen(
                         val pillLabel = when {
                             activeGroup != null && isP2PEnabled -> "${activeGroup!!.name} (${groupMembers.size}) • P2P (${nearbyPeers.size})"
                             activeGroup != null -> "${activeGroup!!.name} (${groupMembers.size})"
+                            remotePersonalDevices.isNotEmpty() && isP2PEnabled -> "My Devices (${remotePersonalDevices.size}) • P2P (${nearbyPeers.size})"
+                            remotePersonalDevices.isNotEmpty() -> "My Devices (${remotePersonalDevices.size})"
                             isP2PEnabled -> "P2P Mesh (${nearbyPeers.size})"
-                            else -> "Circles / P2P"
+                            else -> "Devices / P2P"
                         }
                         Text(
                             text = pillLabel,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (meshOrGroupActive) colorScheme.onSurface else colorScheme.onSurface
+                            color = colorScheme.onSurface
                         )
                         if (isGhostMode) {
                             Spacer(modifier = Modifier.width(4.dp))
@@ -573,8 +585,8 @@ fun MapScreen(
             }
         }
 
-        // Bottom Member & Offline P2P Peer Carousel (Situational Awareness)
-        if ((activeGroup != null && groupMembers.isNotEmpty()) || nearbyPeers.isNotEmpty()) {
+        // Bottom Multi-Device, Group Member & Offline P2P Peer Carousel (Situational Awareness)
+        if ((activeGroup != null && groupMembers.isNotEmpty()) || remotePersonalDevices.isNotEmpty() || nearbyPeers.isNotEmpty()) {
             val memberScrollState = rememberScrollState()
             Row(
                 modifier = Modifier
@@ -585,8 +597,61 @@ fun MapScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                for (device in remotePersonalDevices) {
+                    val dist = if (currentLocation != null) device.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude) else null
+                    val distStr = when {
+                        dist == null -> "--"
+                        dist < 1000 -> "${dist.toInt()}m"
+                        else -> String.format(Locale.US, "%.1fkm", dist / 1000f)
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = colorScheme.surface,
+                        shadowElevation = 4.dp,
+                        border = BorderStroke(1.dp, Color(0xFF7C3AED).copy(alpha = 0.7f)),
+                        modifier = Modifier
+                            .clickable { onNavigateToGroups?.invoke() }
+                            .testTag("carousel_device_${device.deviceId}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF7C3AED)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = device.deviceName.trim().take(2).uppercase().ifBlank { "DV" },
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = device.deviceName,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "$distStr • ${device.batteryPercent}% 📱",
+                                    fontSize = 10.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
                 if (activeGroup != null) {
                     for (member in groupMembers) {
+                        if (currentDeviceId.isNotBlank() && member.deviceId == currentDeviceId) continue
                         val dist = if (currentLocation != null) member.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude) else null
                         val distStr = when {
                             dist == null -> "--"
@@ -925,7 +990,7 @@ fun MapScreen(
             onDismissRequest = { showStartDialog = false },
             title = {
                 Text(
-                    "Start Real GPS Trail",
+                    "Start Field Trail",
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
                     color = colorScheme.onSurface
@@ -934,7 +999,7 @@ fun MapScreen(
             text = {
                 Column {
                     Text(
-                        "Enter a name for this field tracking session. Real coordinates from FusedLocationProviderClient will be persisted to SQLite.",
+                        "Enter a name for this field tracking session. Coordinates from your active positioning profile (GPS, Wi-Fi & Cellular) will be persisted to SQLite.",
                         fontSize = 13.sp,
                         color = colorScheme.onSurfaceVariant
                     )
@@ -991,8 +1056,8 @@ private data class ProfileInfo(
 
 private fun getProfileInfo(mode: TrackingMode, colorScheme: androidx.compose.material3.ColorScheme): ProfileInfo {
     return when (mode) {
-        TrackingMode.HIGH_ACCURACY -> ProfileInfo(Icons.Default.Bolt, "GPS Real-Time (1s)", "~25mA", colorScheme.primary)
-        TrackingMode.BALANCED -> ProfileInfo(Icons.Default.Balance, "Balanced (10s)", "~8mA", colorScheme.secondary)
+        TrackingMode.HIGH_ACCURACY -> ProfileInfo(Icons.Default.Bolt, "GNSS High-Accuracy (1s)", "~25mA", colorScheme.primary)
+        TrackingMode.BALANCED -> ProfileInfo(Icons.Default.Balance, "Balanced Fused (5s)", "~8mA", colorScheme.secondary)
         TrackingMode.POWER_SAVER -> ProfileInfo(Icons.Default.CellTower, "Cell Only", "<2mA", colorScheme.tertiary)
     }
 }
