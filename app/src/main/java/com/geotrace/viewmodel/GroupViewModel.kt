@@ -8,16 +8,13 @@ import android.os.BatteryManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.geotrace.LocationTrackerApp
-import com.geotrace.model.BlePeerProximity
 import com.geotrace.model.Group
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.MemberLocation
 import com.geotrace.model.P2PMeshState
 import com.geotrace.model.P2PPeer
 import com.geotrace.model.PersonalDevice
-import com.geotrace.service.BleProximityFinder
 import com.geotrace.service.FindDeviceAlarmManager
-import com.geotrace.service.LocationForegroundService
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -39,10 +36,8 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = (application as LocationTrackerApp).groupRepository
     private val locationRepository = (application as LocationTrackerApp).repository
     private val auth: FirebaseAuth = Firebase.auth
-    private val bleProximityFinder = BleProximityFinder(application)
 
     val currentDeviceId: String = repository.currentDeviceId
-    val bleTag: String = repository.bleTag
 
     private val _currentUser = MutableStateFlow<FirebaseUser?>(auth.currentUser)
     val currentUser: StateFlow<FirebaseUser?> = _currentUser.asStateFlow()
@@ -83,13 +78,8 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     val p2pMeshState: StateFlow<P2PMeshState> = repository.p2pMeshState
     val offlineCallsign: StateFlow<String> = repository.offlineCallsign
 
-    val blePeers: StateFlow<List<BlePeerProximity>> = bleProximityFinder.blePeers
-    val isBleRadarActive: StateFlow<Boolean> = bleProximityFinder.isRadarActive
-    val bleStatusText: StateFlow<String> = bleProximityFinder.bleStatusText
-
     val isRingingAlarm: StateFlow<Boolean> = FindDeviceAlarmManager.isRinging
     val ringCallerName: StateFlow<String?> = FindDeviceAlarmManager.ringCallerName
-    val isBackgroundBeaconEnabled: StateFlow<Boolean> = locationRepository.backgroundBeaconEnabled
 
     private val _isGhostMode = MutableStateFlow(false)
     val isGhostMode: StateFlow<Boolean> = _isGhostMode.asStateFlow()
@@ -150,7 +140,6 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         if (_isP2PEnabled.value) {
             repository.stopP2PMesh()
         }
-        bleProximityFinder.stop()
     }
 
     fun selectGroup(group: Group?) {
@@ -237,10 +226,6 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         repository.setOfflineCallsign(cleaned)
-        if (bleProximityFinder.isRadarActive.value) {
-            bleProximityFinder.stop()
-            bleProximityFinder.start(bleTag, cleaned)
-        }
         _statusMessage.value = "Device name updated to '$cleaned'"
         triggerImmediateBroadcast()
     }
@@ -251,39 +236,15 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         if (newEnabled) {
             val myName = repository.getCurrentUserDisplayName()
             repository.startP2PMesh(myName)
-            bleProximityFinder.start(bleTag, myName)
             _statusMessage.value = if (_isGhostMode.value) {
-                "Off-Grid P2P & BLE Radar ON (Ghost Mode: coordinates hidden)"
+                "Off-Grid P2P Finder ON (Ghost Mode: coordinates hidden)"
             } else {
-                "Off-Grid P2P & Indoor BLE Radar ON"
+                "Off-Grid P2P Device Finder ON"
             }
             triggerImmediateBroadcast()
         } else {
             repository.stopP2PMesh()
-            bleProximityFinder.stop()
-            _statusMessage.value = "Off-Grid P2P & BLE Radar OFF"
-        }
-    }
-
-    fun toggleBleRadar() {
-        if (bleProximityFinder.isRadarActive.value) {
-            bleProximityFinder.stop()
-            _statusMessage.value = "Indoor BLE Proximity Radar OFF"
-        } else {
-            bleProximityFinder.start(bleTag, repository.getCurrentUserDisplayName())
-            _statusMessage.value = "Indoor BLE Proximity Radar ON"
-        }
-    }
-
-    fun toggleBackgroundBeacon(enabled: Boolean) {
-        locationRepository.setBackgroundBeaconEnabled(enabled)
-        val app = getApplication<Application>()
-        if (enabled) {
-            LocationForegroundService.startBeaconService(app)
-            _statusMessage.value = "Background Device Beacon ON"
-        } else {
-            LocationForegroundService.stopBeaconService(app)
-            _statusMessage.value = "Background Device Beacon OFF"
+            _statusMessage.value = "Off-Grid P2P Device Finder OFF"
         }
     }
 

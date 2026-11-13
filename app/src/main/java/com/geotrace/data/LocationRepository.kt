@@ -69,16 +69,6 @@ class LocationRepository(private val context: Context) {
         prefs.edit().putBoolean("geofence_notifications_enabled", enabled).apply()
     }
 
-    private val _backgroundBeaconEnabled = MutableStateFlow(
-        prefs.getBoolean("background_beacon_enabled", false)
-    )
-    val backgroundBeaconEnabled: StateFlow<Boolean> = _backgroundBeaconEnabled.asStateFlow()
-
-    fun setBackgroundBeaconEnabled(enabled: Boolean) {
-        _backgroundBeaconEnabled.value = enabled
-        prefs.edit().putBoolean("background_beacon_enabled", enabled).apply()
-    }
-
     fun getSavedOpenCellIdApiKey(): String = prefs.getString("opencellid_api_key", "") ?: ""
 
     fun saveOpenCellIdApiKey(apiKey: String) {

@@ -114,19 +114,6 @@ data class PersonalDevice(
 }
 
 /**
- * Indoor BLE RSSI proximity reading for "Warmer / Colder" device locating.
- */
-data class BlePeerProximity(
-    val bleTag: String,
-    val displayName: String,
-    val rssi: Int,
-    val smoothedRssi: Float,
-    val proximityBucket: String,
-    val proximityProgress: Float,
-    val lastSeenMs: Long = System.currentTimeMillis()
-)
-
-/**
  * Peer-to-Peer discovered device via Android Nearby Connections.
  */
 data class P2PPeer(

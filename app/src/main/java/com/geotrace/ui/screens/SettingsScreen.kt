@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,12 +19,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -42,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.geotrace.model.CoordinateFormat
@@ -532,38 +537,46 @@ fun SettingsScreen(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "Installed Version: v${com.geotrace.BuildConfig.VERSION_NAME} (${com.geotrace.BuildConfig.VERSION_CODE})",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurface
                         )
+                        Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = "Source: github.com/${com.geotrace.service.AppUpdateManager.GITHUB_REPO}",
                             fontSize = 10.sp,
-                            color = colorScheme.onSurfaceVariant
+                            color = colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
 
-                    androidx.compose.material3.Button(
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Button(
                         onClick = {
                             coroutineScope.launch {
                                 viewModel.appUpdateManager.checkForUpdates()
                             }
                         },
                         enabled = updateStatus !is com.geotrace.service.UpdateStatus.Checking,
-                        shape = RoundedCornerShape(8.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("check_updates_btn")
                     ) {
                         if (updateStatus is com.geotrace.service.UpdateStatus.Checking) {
                             androidx.compose.material3.CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
+                                modifier = Modifier.size(16.dp),
                                 color = colorScheme.onPrimary,
                                 strokeWidth = 2.dp
                             )
                         } else {
-                            Text("Check Updates", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("Check Updates", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -571,74 +584,140 @@ fun SettingsScreen(
                 // Status details card
                 when (val status = updateStatus) {
                     is com.geotrace.service.UpdateStatus.UpdateAvailable -> {
+                        val sizeMb = if (status.info.apkSizeBytes > 0L) {
+                            String.format(java.util.Locale.US, " • %.1f MB", status.info.apkSizeBytes / (1024.0 * 1024.0))
+                        } else ""
                         Spacer(modifier = Modifier.height(10.dp))
                         androidx.compose.material3.Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = colorScheme.primary.copy(alpha = 0.1f),
+                            shape = RoundedCornerShape(10.dp),
+                            color = colorScheme.primary.copy(alpha = 0.08f),
                             border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.4f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Column(modifier = Modifier.padding(10.dp)) {
+                            Column(modifier = Modifier.padding(12.dp)) {
                                 Text(
-                                    text = "New Update Available: ${status.info.tagName}",
+                                    text = "Update Available: ${status.info.tagName}$sizeMb",
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = colorScheme.primary
                                 )
                                 Text(
                                     text = status.info.body,
-                                    fontSize = 10.sp,
+                                    fontSize = 11.sp,
                                     color = colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(vertical = 4.dp)
+                                    modifier = Modifier.padding(vertical = 6.dp)
                                 )
-                                androidx.compose.material3.Button(
+                                Button(
                                     onClick = {
                                         viewModel.appUpdateManager.startDownload(status.info)
                                     },
-                                    shape = RoundedCornerShape(6.dp),
-                                    modifier = Modifier.fillMaxWidth()
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .testTag("download_update_btn")
                                 ) {
-                                    Text("Download & Install Release APK (${status.info.apkFileName})", fontSize = 11.sp)
+                                    Text("Download & Install (${status.info.apkFileName})", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
                     }
                     is com.geotrace.service.UpdateStatus.UpToDate -> {
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "GeoTrace is on the latest official SWE2105 release.",
+                            text = if (status.latestTag != null) {
+                                "GeoTrace is up to date (latest GitHub release: ${status.latestTag})."
+                            } else {
+                                "GeoTrace is on the latest official release."
+                            },
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = colorScheme.tertiary
                         )
                     }
-                    is com.geotrace.service.UpdateStatus.Downloading -> {
-                        Spacer(modifier = Modifier.height(8.dp))
+                    is com.geotrace.service.UpdateStatus.NoReleasesPublished -> {
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "Downloading APK in background via DownloadManager...",
+                            text = "No GitHub releases have been published yet for this repository (running local build v${com.geotrace.BuildConfig.VERSION_NAME}).",
                             fontSize = 11.sp,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    is com.geotrace.service.UpdateStatus.Downloading -> {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Downloading release APK via Android DownloadManager...",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
                             color = colorScheme.primary
                         )
                     }
                     is com.geotrace.service.UpdateStatus.ReadyToInstall -> {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        androidx.compose.material3.Button(
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
                             onClick = { viewModel.appUpdateManager.installApk(status.apkFile) },
-                            shape = RoundedCornerShape(6.dp),
-                            modifier = Modifier.fillMaxWidth()
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("install_apk_btn")
                         ) {
-                            Text("Install Downloaded APK Now", fontSize = 11.sp)
+                            Text("Install Downloaded APK Now", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    is com.geotrace.service.UpdateStatus.InstallPermissionRequired -> {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = "Allow \"Install unknown apps\" for GeoTrace in Android Settings, then tap Install APK.",
+                                fontSize = 11.sp,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                                OutlinedButton(
+                                    onClick = { viewModel.appUpdateManager.openInstallPermissionSettings() },
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.weight(1f).height(48.dp)
+                                ) {
+                                    Text("Open Settings", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                                Button(
+                                    onClick = { viewModel.appUpdateManager.installApk(status.apkFile) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.weight(1f).height(48.dp)
+                                ) {
+                                    Text("Install APK", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
                     }
                     is com.geotrace.service.UpdateStatus.Error -> {
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
-                            text = "Update Check Notice: ${status.message}",
+                            text = status.message,
                             fontSize = 11.sp,
                             color = colorScheme.error
                         )
                     }
                     else -> {}
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = { viewModel.appUpdateManager.openReleasesPage() },
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("open_releases_page_btn")
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = "Open GitHub Releases in Browser",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Open GitHub Releases in Browser", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -664,7 +743,7 @@ fun SettingsScreen(
                         text = "• Positioning Engine: FusedLocationProviderClient (GNSS Multi-Constellation)\n" +
                                "• Cellular Telemetry: TelephonyManager Radio Layer + OpenCellID\n" +
                                "• Release Channel: GitHub Releases (${com.geotrace.service.AppUpdateManager.GITHUB_REPO})\n" +
-                               "• Persistence: SQLite Local (zero-cloud leak, Cap 97 compliant)\n" +
+                               "• Persistence: Local SQLite + Firebase Firestore (Multi-Device Cloud Sync)\n" +
                                "• Active Recording Session: ${activeSession?.name ?: "Idle (Standby Mode)"}",
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,

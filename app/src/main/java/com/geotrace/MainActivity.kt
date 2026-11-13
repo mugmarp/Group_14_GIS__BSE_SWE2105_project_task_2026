@@ -24,12 +24,15 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Close
@@ -126,7 +129,7 @@ fun MainAppScreen(
 
     var currentScreen by remember { mutableStateOf(Screen.MAP) }
     var showMenuSheet by remember { mutableStateOf(false) }
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val currentLocation by viewModel.currentLocation.collectAsState()
     val activeSession by viewModel.activeSession.collectAsState()
@@ -137,7 +140,6 @@ fun MainAppScreen(
     val activeGroup by groupViewModel.activeGroup.collectAsState()
     val isRingingAlarm by groupViewModel.isRingingAlarm.collectAsState()
     val ringCallerName by groupViewModel.ringCallerName.collectAsState()
-    val isBackgroundBeaconEnabled by groupViewModel.isBackgroundBeaconEnabled.collectAsState()
 
     // Handle Back Press: Close menu bottom sheet if open, or return to Map screen
     if (showMenuSheet) {
@@ -167,9 +169,6 @@ fun MainAppScreen(
         if (fineGranted || coarseGranted) {
             viewModel.startStandbyLocationUpdates()
             viewModel.refreshCellTowers()
-            if (isBackgroundBeaconEnabled) {
-                com.geotrace.service.LocationForegroundService.startBeaconService(context)
-            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
@@ -194,9 +193,6 @@ fun MainAppScreen(
         } else {
             viewModel.startStandbyLocationUpdates()
             viewModel.refreshCellTowers()
-            if (isBackgroundBeaconEnabled) {
-                com.geotrace.service.LocationForegroundService.startBeaconService(context)
-            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
@@ -386,7 +382,7 @@ fun MainAppScreen(
             }
         }
 
-        // Partial Bottom Sheet for Secondary Utilities (occupies ~50-55% of the screen)
+        // Full-Height Scrollable Bottom Sheet for Secondary Utilities
         if (showMenuSheet) {
             ModalBottomSheet(
                 onDismissRequest = { showMenuSheet = false },
@@ -408,6 +404,8 @@ fun MainAppScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .navigationBarsPadding()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
                     // Header Row
@@ -437,7 +435,7 @@ fun MainAppScreen(
                                     showMenuSheet = false
                                 }
                             },
-                            modifier = Modifier.size(32.dp).testTag("close_sheet_btn")
+                            modifier = Modifier.size(48.dp).testTag("close_sheet_btn")
                         ) {
                             Icon(Icons.Default.Close, contentDescription = "Close Sheet", tint = colorScheme.onSurface)
                         }
@@ -472,8 +470,8 @@ fun MainAppScreen(
                                 Text(
                                     text = when {
                                         activeSession != null -> "RECORDING IN PROGRESS • ${activeSession?.name}"
-                                        currentLocation != null -> "GNSS SATELLITES LOCKED (±${currentLocation?.accuracy?.toInt()}m)"
-                                        else -> "STANDBY • AWAITING SATELLITE FIX"
+                                        currentLocation != null -> "LOCATION LOCKED (±${currentLocation?.accuracy?.toInt()}m)"
+                                        else -> "STANDBY • AWAITING LOCATION FIX"
                                     },
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
@@ -500,7 +498,7 @@ fun MainAppScreen(
                     // Card 0: Devices & Tracking Groups
                     MenuNavigationCard(
                         title = "Devices & Tracking Groups",
-                        subtitle = "Multi-device fleet, remote ring, BLE radar & shared groups",
+                        subtitle = "Multi-device fleet, remote ring, off-grid P2P & shared groups",
                         badgeText = if (activeGroup != null) activeGroup!!.name else "Setup",
                         badgeColor = if (activeGroup != null) colorScheme.tertiary else colorScheme.primary,
                         icon = { Icon(Icons.Default.Group, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(22.dp)) },
@@ -607,7 +605,7 @@ fun MainAppScreen(
                             color = colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = "Cap 97 Local SQLite",
+                            text = "Local + Cloud Sync",
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             color = colorScheme.onSurfaceVariant

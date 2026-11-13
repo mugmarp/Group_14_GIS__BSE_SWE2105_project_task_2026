@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ContextWrapper
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
@@ -28,7 +29,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BatteryChargingFull
-import androidx.compose.material.icons.filled.BluetoothSearching
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Edit
@@ -40,7 +40,6 @@ import androidx.compose.material.icons.filled.NearMe
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -56,7 +55,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -88,8 +86,9 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
+import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.NoCredentialException
 import com.geotrace.R
-import com.geotrace.model.BlePeerProximity
 import com.geotrace.model.Group
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.MemberLocation
@@ -103,6 +102,7 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Co
 import com.google.firebase.Firebase
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -128,10 +128,6 @@ fun GroupScreen(
     val personalDevices by groupViewModel.personalDevices.collectAsState()
     val nearbyPeers by groupViewModel.nearbyPeers.collectAsState()
     val p2pMeshState by groupViewModel.p2pMeshState.collectAsState()
-    val blePeers by groupViewModel.blePeers.collectAsState()
-    val isBleRadarActive by groupViewModel.isBleRadarActive.collectAsState()
-    val bleStatusText by groupViewModel.bleStatusText.collectAsState()
-    val isBackgroundBeaconEnabled by groupViewModel.isBackgroundBeaconEnabled.collectAsState()
     val offlineCallsign by groupViewModel.offlineCallsign.collectAsState()
     val isGhostMode by groupViewModel.isGhostMode.collectAsState()
     val isP2PEnabled by groupViewModel.isP2PEnabled.collectAsState()
@@ -146,33 +142,24 @@ fun GroupScreen(
     var inviteCodeInput by remember { mutableStateOf("") }
     var callsignInput by remember(offlineCallsign) { mutableStateOf(offlineCallsign) }
     var isAuthSigningIn by remember { mutableStateOf(false) }
-    var pendingPermissionAction by remember { mutableStateOf<String?>(null) }
 
-    // Unified Nearby Connections, BLE & Background Beacon runtime permissions launcher (Android 8 - 15)
+    // Nearby Connections Off-Grid P2P runtime permissions launcher (Android 8 - 15)
     val radioPermissionsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
-        val action = pendingPermissionAction
-        pendingPermissionAction = null
-        val coreGranted = grants.entries
-            .filter { it.key != android.Manifest.permission.POST_NOTIFICATIONS }
-            .all { it.value }
-        if (coreGranted) {
-            when (action) {
-                "P2P_MESH" -> groupViewModel.toggleP2PMesh()
-                "BLE_RADAR" -> groupViewModel.toggleBleRadar()
-                "BG_BEACON" -> groupViewModel.toggleBackgroundBeacon(true)
-            }
+        val allGranted = grants.values.all { it }
+        if (allGranted) {
+            groupViewModel.toggleP2PMesh()
         } else {
             Toast.makeText(
                 context,
-                "Location & Bluetooth permissions are required for device finder & beacon features.",
+                "Location & Bluetooth permissions are required for the Off-Grid P2P Device Finder.",
                 Toast.LENGTH_LONG
             ).show()
         }
     }
 
-    fun collectMissingPermissions(includeNearbyWifi: Boolean, includeNotifications: Boolean): List<String> {
+    fun collectMissingP2PPermissions(): List<String> {
         val needed = mutableListOf<String>()
         if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             needed.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
@@ -188,14 +175,9 @@ fun GroupScreen(
                 needed.add(android.Manifest.permission.BLUETOOTH_CONNECT)
             }
         }
-        if (includeNearbyWifi && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.NEARBY_WIFI_DEVICES) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
                 needed.add(android.Manifest.permission.NEARBY_WIFI_DEVICES)
-            }
-        }
-        if (includeNotifications && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                needed.add(android.Manifest.permission.POST_NOTIFICATIONS)
             }
         }
         return needed
@@ -203,51 +185,14 @@ fun GroupScreen(
 
     val requestP2PMeshWithPermissions = {
         if (!isP2PEnabled) {
-            val missing = collectMissingPermissions(includeNearbyWifi = true, includeNotifications = false)
+            val missing = collectMissingP2PPermissions()
             if (missing.isNotEmpty()) {
-                pendingPermissionAction = "P2P_MESH"
                 radioPermissionsLauncher.launch(missing.toTypedArray())
             } else {
                 groupViewModel.toggleP2PMesh()
             }
         } else {
             groupViewModel.toggleP2PMesh()
-        }
-    }
-
-    val requestBleRadarWithPermissions = {
-        if (!isBleRadarActive) {
-            val missing = collectMissingPermissions(includeNearbyWifi = false, includeNotifications = false)
-            if (missing.isNotEmpty()) {
-                pendingPermissionAction = "BLE_RADAR"
-                radioPermissionsLauncher.launch(missing.toTypedArray())
-            } else {
-                groupViewModel.toggleBleRadar()
-            }
-        } else {
-            groupViewModel.toggleBleRadar()
-        }
-    }
-
-    val requestBeaconWithPermissions: (Boolean) -> Unit = { enable ->
-        if (enable) {
-            val needed = mutableListOf<String>()
-            if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                needed.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
-            }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
-                androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
-            ) {
-                needed.add(android.Manifest.permission.POST_NOTIFICATIONS)
-            }
-            if (needed.isNotEmpty()) {
-                pendingPermissionAction = "BG_BEACON"
-                radioPermissionsLauncher.launch(needed.toTypedArray())
-            } else {
-                groupViewModel.toggleBackgroundBeacon(true)
-            }
-        } else {
-            groupViewModel.toggleBackgroundBeacon(false)
         }
     }
 
@@ -363,7 +308,7 @@ fun GroupScreen(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "THIS DEVICE NAME • BLE #${groupViewModel.bleTag}",
+                                    text = "THIS DEVICE NAME",
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     letterSpacing = 0.04.sp,
@@ -537,134 +482,6 @@ fun GroupScreen(
             }
         }
 
-        // Indoor Home BLE RSSI Proximity Radar (Warmer / Colder) & Background Beacon Card
-        item {
-            Card(
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-                border = BorderStroke(
-                    1.dp,
-                    if (isBleRadarActive) colorScheme.primary.copy(alpha = 0.6f) else colorScheme.outlineVariant
-                ),
-                modifier = Modifier.fillMaxWidth().testTag("ble_radar_card")
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clip(CircleShape)
-                                    .background(colorScheme.primary.copy(alpha = 0.12f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    Icons.Default.BluetoothSearching,
-                                    contentDescription = "Indoor BLE Proximity Radar",
-                                    tint = colorScheme.primary,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column {
-                                Text(
-                                    text = "Indoor BLE Radar (Warmer / Colder)",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.onSurface
-                                )
-                                Text(
-                                    text = bleStatusText,
-                                    fontSize = 11.sp,
-                                    color = colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                        Switch(
-                            checked = isBleRadarActive,
-                            onCheckedChange = { requestBleRadarWithPermissions() },
-                            colors = SwitchDefaults.colors(checkedThumbColor = colorScheme.primary),
-                            modifier = Modifier.testTag("ble_radar_switch")
-                        )
-                    }
-
-                    if (isBleRadarActive) {
-                        if (blePeers.isEmpty()) {
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = customColors.surfaceContainerLow,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    text = "Walk room to room with BLE Radar enabled on both devices to measure RSSI warmth (<1m to 15m).",
-                                    fontSize = 11.sp,
-                                    color = colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(10.dp)
-                                )
-                            }
-                        } else {
-                            blePeers.forEach { blePeer ->
-                                BleProximityPeerRow(peer = blePeer)
-                            }
-                        }
-                    }
-
-                    // Background Device Beacon toggle for stationary spare phones/tablets at home
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = customColors.surfaceContainerLow,
-                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                Icon(
-                                    Icons.Default.Sensors,
-                                    contentDescription = "Background Beacon",
-                                    tint = if (isBackgroundBeaconEnabled) successColor else colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text(
-                                        text = "Background Device Beacon",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = if (isBackgroundBeaconEnabled) {
-                                            "Active • Keeps this device discoverable & ringable if left at home"
-                                        } else {
-                                            "Keep spare phone/tablet findable & remotely ringable in background"
-                                        },
-                                        fontSize = 11.sp,
-                                        color = colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            Switch(
-                                checked = isBackgroundBeaconEnabled,
-                                onCheckedChange = { enabled -> requestBeaconWithPermissions(enabled) },
-                                colors = SwitchDefaults.colors(checkedThumbColor = successColor),
-                                modifier = Modifier.testTag("bg_beacon_switch")
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
         // Authentication Card / Profile Section
         item {
             if (currentUser == null) {
@@ -713,6 +530,7 @@ fun GroupScreen(
                                 isAuthSigningIn = true
                                 performGoogleSignIn(
                                     context = context,
+                                    scope = scope,
                                     onSuccess = { isAuthSigningIn = false },
                                     onError = { err ->
                                         isAuthSigningIn = false
@@ -796,7 +614,7 @@ fun GroupScreen(
 
                         IconButton(
                             onClick = {
-                                performSignOut(context)
+                                performSignOut(context, scope)
                             },
                             modifier = Modifier.size(48.dp).testTag("sign_out_btn")
                         ) {
@@ -1284,7 +1102,7 @@ fun GroupScreen(
             text = {
                 Column {
                     Text(
-                        "Set a recognizable device label shown in your My Devices fleet, shared groups, and off-grid P2P/BLE radar.",
+                        "Set a recognizable device label shown in your My Devices fleet, shared groups, and off-grid P2P device finder.",
                         fontSize = 12.sp,
                         color = colorScheme.onSurfaceVariant
                     )
@@ -1498,7 +1316,7 @@ fun PersonalDeviceCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "${device.batteryPercent}% • ${device.trackingMode} • BLE #${device.bleTag}",
+                        text = "${device.batteryPercent}% • ${device.trackingMode}",
                         fontSize = 10.sp,
                         color = colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace
@@ -1523,63 +1341,6 @@ fun PersonalDeviceCard(
                 Spacer(modifier = Modifier.width(4.dp))
                 Text("Ring", fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
-        }
-    }
-}
-
-@Composable
-fun BleProximityPeerRow(peer: BlePeerProximity) {
-    val colorScheme = MaterialTheme.colorScheme
-    val warmthColor = when {
-        peer.smoothedRssi >= -54f -> Color(0xFF059669)
-        peer.smoothedRssi >= -68f -> colorScheme.primary
-        peer.smoothedRssi >= -82f -> Color(0xFFD97706)
-        else -> colorScheme.onSurfaceVariant
-    }
-
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = warmthColor.copy(alpha = 0.08f),
-        border = BorderStroke(1.dp, warmthColor.copy(alpha = 0.35f)),
-        modifier = Modifier.fillMaxWidth().testTag("ble_peer_${peer.bleTag}")
-    ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "${peer.displayName} (#${peer.bleTag})",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colorScheme.onSurface
-                )
-                Text(
-                    text = "${peer.rssi} dBm",
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    color = warmthColor
-                )
-            }
-            Spacer(modifier = Modifier.height(6.dp))
-            LinearProgressIndicator(
-                progress = { peer.proximityProgress },
-                color = warmthColor,
-                trackColor = colorScheme.surfaceVariant,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp))
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = peer.proximityBucket,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = warmthColor
-            )
         }
     }
 }
@@ -1685,25 +1446,36 @@ private fun toCompassCardinal(bearingDegrees: Float): String {
     return dirs[idx]
 }
 
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 // Credential Manager Google Sign-In Implementation
 private fun performGoogleSignIn(
     context: Context,
+    scope: CoroutineScope,
     onSuccess: () -> Unit,
     onError: (String) -> Unit
 ) {
-    val activity = context as? Activity ?: return
-    val credentialManager = CredentialManager.create(context)
+    val activity = context.findActivity()
+    if (activity == null) {
+        onError("Unable to resolve host Activity for Google Sign-In.")
+        return
+    }
+    val credentialManager = CredentialManager.create(activity)
     val clientId = try {
         context.getString(R.string.default_web_client_id)
     } catch (e: Exception) {
-        onError("Google Client ID not found. Ensure google-services.json is present.")
+        onError("Google Client ID not found. Ensure google-services.json is configured.")
         return
     }
 
     val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
     val request = GetCredentialRequest.Builder().addCredentialOption(signInOption).build()
 
-    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+    scope.launch {
         try {
             val result = credentialManager.getCredential(activity, request)
             val credential = result.credential
@@ -1713,20 +1485,37 @@ private fun performGoogleSignIn(
                 Firebase.auth.signInWithCredential(authCredential).await()
                 onSuccess()
             } else {
-                onError("Unexpected credential response type.")
+                onError("Unexpected credential response type: ${credential.type}")
             }
         } catch (e: GetCredentialCancellationException) {
-            onError("Sign-in was cancelled.")
+            val detail = e.errorMessage?.toString()?.takeIf { it.isNotBlank() } ?: e.message.orEmpty()
+            Log.w("GroupScreen", "Google Sign-In cancelled/aborted: $detail", e)
+            val userMsg = if (detail.contains("developer", ignoreCase = true) ||
+                detail.contains("10:", ignoreCase = true) ||
+                detail.contains("28444", ignoreCase = true) ||
+                detail.contains("caller", ignoreCase = true)
+            ) {
+                "Google OAuth rejected this APK build ($detail). Verify the APK signing SHA-1 & OAuth consent settings."
+            } else {
+                "Sign-in cancelled. If this occurred right after tapping an account, ensure this APK's SHA-1 matches Firebase & OAuth consent settings."
+            }
+            onError(userMsg)
+        } catch (e: NoCredentialException) {
+            Log.w("GroupScreen", "No Google credentials available: ${e.errorMessage}", e)
+            onError("No Google account available on this device. Add a Google account in Android Settings.")
+        } catch (e: GetCredentialException) {
+            Log.e("GroupScreen", "CredentialManager failed (${e.type}): ${e.errorMessage}", e)
+            onError("Google Sign-In failed (${e.type}): ${e.errorMessage ?: e.localizedMessage ?: "Unknown error"}")
         } catch (e: Exception) {
-            Log.e("GroupScreen", "Google Sign-In failed", e)
+            Log.e("GroupScreen", "Firebase Google Sign-In failed", e)
             onError(e.localizedMessage ?: "Google sign-in failed.")
         }
     }
 }
 
-private fun performSignOut(context: Context) {
+private fun performSignOut(context: Context, scope: CoroutineScope) {
     val credentialManager = CredentialManager.create(context)
-    kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main).launch {
+    scope.launch {
         withContext(NonCancellable) {
             try {
                 credentialManager.clearCredentialState(ClearCredentialStateRequest())

@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.geotrace.BuildConfig
 import kotlinx.coroutines.Dispatchers
@@ -37,16 +38,19 @@ sealed class UpdateStatus {
     object Idle : UpdateStatus()
     object Checking : UpdateStatus()
     data class UpdateAvailable(val info: AppReleaseInfo) : UpdateStatus()
-    object UpToDate : UpdateStatus()
+    data class UpToDate(val latestTag: String? = null) : UpdateStatus()
+    object NoReleasesPublished : UpdateStatus()
     data class Downloading(val progressPercent: Int) : UpdateStatus()
     data class ReadyToInstall(val apkFile: File) : UpdateStatus()
+    data class InstallPermissionRequired(val apkFile: File) : UpdateStatus()
     data class Error(val message: String) : UpdateStatus()
 }
 
 /**
- * AppUpdateManager handles checking for official releases on GitHub,
- * comparing Semantic Versioning (e.g. v1.1.0 vs current BuildConfig.VERSION_NAME),
- * downloading APK assets using Android DownloadManager, and initiating secure package installation via FileProvider.
+ * AppUpdateManager checks GitHub Releases for newer GeoTrace APKs,
+ * compares semantic versions against BuildConfig.VERSION_NAME,
+ * downloads release APKs via Android DownloadManager, verifies unknown-app-sources permission,
+ * and launches secure package installation via FileProvider.
  */
 class AppUpdateManager(private val context: Context) {
 
@@ -55,14 +59,16 @@ class AppUpdateManager(private val context: Context) {
 
     companion object {
         const val GITHUB_REPO = "mugmarp/Group_14_GIS__BSE_SWE2105_project_task_2026"
+        const val RELEASES_WEB_URL = "https://github.com/$GITHUB_REPO/releases"
         private const val API_URL = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
     }
 
     suspend fun checkForUpdates(): UpdateStatus = withContext(Dispatchers.IO) {
         _updateStatus.value = UpdateStatus.Checking
+        var connection: HttpURLConnection? = null
         try {
             val url = URL(API_URL)
-            val connection = (url.openConnection() as HttpURLConnection).apply {
+            connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 10000
                 readTimeout = 10000
@@ -70,11 +76,9 @@ class AppUpdateManager(private val context: Context) {
                 setRequestProperty("User-Agent", "GeoTrace-Android-${BuildConfig.VERSION_NAME}")
             }
 
-            if (connection.responseCode == HttpURLConnection.HTTP_OK) {
-                val reader = BufferedReader(InputStreamReader(connection.inputStream))
-                val responseStr = reader.use { it.readText() }
-                connection.disconnect()
-
+            val code = connection.responseCode
+            if (code == HttpURLConnection.HTTP_OK) {
+                val responseStr = BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
                 val json = JSONObject(responseStr)
                 val tagName = json.optString("tag_name", "v1.0.0")
                 val releaseName = json.optString("name", tagName)
@@ -82,7 +86,7 @@ class AppUpdateManager(private val context: Context) {
                 val publishedAt = json.optString("published_at", "")
 
                 var apkDownloadUrl = ""
-                var apkFileName = "GeoTrace-release.apk"
+                var apkFileName = "geotrace-release.apk"
                 var apkSizeBytes = 0L
 
                 val assets = json.optJSONArray("assets")
@@ -94,7 +98,6 @@ class AppUpdateManager(private val context: Context) {
                             apkDownloadUrl = asset.optString("browser_download_url", "")
                             apkFileName = name
                             apkSizeBytes = asset.optLong("size", 0L)
-                            // Prefer release over debug if multiple APK assets exist
                             if (name.contains("release", ignoreCase = true)) {
                                 break
                             }
@@ -103,8 +106,7 @@ class AppUpdateManager(private val context: Context) {
                 }
 
                 if (apkDownloadUrl.isEmpty()) {
-                    // Fallback to releases web page or tag download if assets haven't populated yet
-                    apkDownloadUrl = "https://github.com/$GITHUB_REPO/releases/download/$tagName/app-release.apk"
+                    apkDownloadUrl = "https://github.com/$GITHUB_REPO/releases/download/$tagName/geotrace-release.apk"
                 }
 
                 val currentVersion = BuildConfig.VERSION_NAME
@@ -124,37 +126,41 @@ class AppUpdateManager(private val context: Context) {
                 val result = if (isNewer) {
                     UpdateStatus.UpdateAvailable(info)
                 } else {
-                    UpdateStatus.UpToDate
+                    UpdateStatus.UpToDate(tagName)
                 }
                 _updateStatus.value = result
                 result
+            } else if (code == HttpURLConnection.HTTP_NOT_FOUND) {
+                _updateStatus.value = UpdateStatus.NoReleasesPublished
+                UpdateStatus.NoReleasesPublished
             } else {
-                val errMsg = if (connection.responseCode == 403) {
-                    "GitHub API rate limit reached (60/hr). You can still download the release APK directly from GitHub."
-                } else {
-                    "HTTP ${connection.responseCode}: ${connection.responseMessage}"
+                val errMsg = when (code) {
+                    403 -> "GitHub API rate limit reached (60/hr). Open GitHub Releases in browser to check manually."
+                    else -> "GitHub responded with HTTP $code (${connection.responseMessage})."
                 }
-                connection.disconnect()
                 val errStatus = UpdateStatus.Error(errMsg)
                 _updateStatus.value = errStatus
                 errStatus
             }
         } catch (e: Exception) {
-            val errStatus = UpdateStatus.Error(e.message ?: "Failed to check GitHub releases")
+            val errStatus = UpdateStatus.Error(e.message ?: "Network error while checking GitHub releases")
             _updateStatus.value = errStatus
             errStatus
+        } finally {
+            connection?.disconnect()
         }
     }
 
     /**
-     * Downloads the APK file and triggers the install intent when download completes.
+     * Downloads the release APK via DownloadManager and prompts installation when complete.
      */
     fun startDownload(info: AppReleaseInfo, onDownloadStarted: () -> Unit = {}) {
         try {
             val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val sanitizedTag = info.tagName.replace(Regex("[^A-Za-z0-9._-]"), "_")
             val destinationFile = File(
                 context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
-                "GeoTrace_${info.tagName.replace(".", "_")}.apk"
+                "GeoTrace_$sanitizedTag.apk"
             )
 
             if (destinationFile.exists()) {
@@ -163,7 +169,7 @@ class AppUpdateManager(private val context: Context) {
 
             val request = DownloadManager.Request(Uri.parse(info.apkDownloadUrl)).apply {
                 setTitle("Downloading GeoTrace ${info.tagName}")
-                setDescription("Official SWE2105 GIS GeoTrace Update")
+                setDescription("Official GitHub Release APK")
                 setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 setDestinationUri(Uri.fromFile(destinationFile))
                 setMimeType("application/vnd.android.package-archive")
@@ -173,30 +179,48 @@ class AppUpdateManager(private val context: Context) {
             _updateStatus.value = UpdateStatus.Downloading(0)
             onDownloadStarted()
 
-            // Register broadcast receiver to detect download completion
             val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+            val appContext = context.applicationContext
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(recvContext: Context?, intent: Intent?) {
                     val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-                    if (id == downloadId) {
-                        try {
-                            recvContext?.unregisterReceiver(this)
-                        } catch (_: Exception) {}
+                    if (id != downloadId) return
 
-                        if (destinationFile.exists() && destinationFile.length() > 0) {
-                            _updateStatus.value = UpdateStatus.ReadyToInstall(destinationFile)
-                            installApk(destinationFile)
-                        } else {
-                            _updateStatus.value = UpdateStatus.Error("Downloaded APK file is empty or corrupted")
+                    try {
+                        appContext.unregisterReceiver(this)
+                    } catch (_: Exception) {}
+
+                    val query = DownloadManager.Query().setFilterById(downloadId)
+                    var succeeded = false
+                    var reasonCode = -1
+                    downloadManager.query(query)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                            val reasonIdx = cursor.getColumnIndex(DownloadManager.COLUMN_REASON)
+                            if (statusIdx >= 0) {
+                                succeeded = cursor.getInt(statusIdx) == DownloadManager.STATUS_SUCCESSFUL
+                            }
+                            if (reasonIdx >= 0) {
+                                reasonCode = cursor.getInt(reasonIdx)
+                            }
                         }
+                    }
+
+                    if (succeeded && destinationFile.exists() && destinationFile.length() > 0) {
+                        _updateStatus.value = UpdateStatus.ReadyToInstall(destinationFile)
+                        installApk(destinationFile)
+                    } else {
+                        _updateStatus.value = UpdateStatus.Error(
+                            "APK download did not complete (reason $reasonCode). Try opening GitHub Releases in browser."
+                        )
                     }
                 }
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                appContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
             } else {
-                context.registerReceiver(receiver, filter)
+                appContext.registerReceiver(receiver, filter)
             }
         } catch (e: Exception) {
             _updateStatus.value = UpdateStatus.Error("Failed to initiate download: ${e.message}")
@@ -204,10 +228,17 @@ class AppUpdateManager(private val context: Context) {
     }
 
     /**
-     * Installs the downloaded APK via Intent.ACTION_VIEW and FileProvider.
+     * Checks Install Unknown Apps permission on Android 8+ before launching FileProvider package installer.
      */
     fun installApk(file: File) {
         try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                !context.packageManager.canRequestPackageInstalls()
+            ) {
+                _updateStatus.value = UpdateStatus.InstallPermissionRequired(file)
+                return
+            }
+
             val uri: Uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.fileprovider",
@@ -224,16 +255,43 @@ class AppUpdateManager(private val context: Context) {
         }
     }
 
+    fun openInstallPermissionSettings() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:${context.packageName}")
+                ).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                context.startActivity(intent)
+            }
+        } catch (e: Exception) {
+            _updateStatus.value = UpdateStatus.Error("Unable to open Install Unknown Apps settings: ${e.message}")
+        }
+    }
+
+    fun openReleasesPage() {
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(RELEASES_WEB_URL)).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            _updateStatus.value = UpdateStatus.Error("No browser found to open GitHub Releases.")
+        }
+    }
+
     fun resetStatus() {
         _updateStatus.value = UpdateStatus.Idle
     }
 
     /**
-     * Compare semantic versions. Example: "v1.2.0" vs "1.1.0"
+     * Compare semantic versions cleanly (e.g. "v1.2.0" vs "1.0.0").
      */
     private fun isVersionNewer(remoteTag: String, localVersion: String): Boolean {
-        val cleanRemote = remoteTag.removePrefix("v").trim()
-        val cleanLocal = localVersion.removePrefix("v").trim()
+        val cleanRemote = remoteTag.removePrefix("v").substringBefore("-").trim()
+        val cleanLocal = localVersion.removePrefix("v").substringBefore("-").trim()
 
         val remoteParts = cleanRemote.split(".").mapNotNull { it.toIntOrNull() }
         val localParts = cleanLocal.split(".").mapNotNull { it.toIntOrNull() }
