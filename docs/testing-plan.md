@@ -37,6 +37,7 @@ The GeoTrace quality assurance architecture verifies both functional software be
 | **Real-Device Multi-Phone QA** | Google Sign-In, My Other Devices + Ring, Shared Groups, Off-Grid P2P, OTA Updates | Physical Android devices (see `docs/team-guide.md`) | Live telemetry, Ring alarm & offline P2P verified |
 | **Multi-Layer & Offline Maps QA** | Layer switches (`STANDARD`, `SATELLITE`, `HYBRID`, `TOPO` Z17 clamp, `HUMANITARIAN`), 2km/5km offline download/cancel/jump/clear | Physical device Map Settings / `OfflineMapsDialog` | Crisp aerial & label overlays, offline tiles render in Airplane Mode |
 | **Mode Transition QA** | Rapid toggles between `High Accuracy`, `Balanced`, and `Power Saver (Cell Only)` during active & standby tracking | Physical device HUD Mode Pill | Zero phantom jump distance, clean GNSS ↔ `"cellular"` handoff |
+| **24/7 Protection & Map Pick QA** | Sign in, enable 24/7 Background Protection, swipe app UI away, trigger Remote Ring from 2nd phone; test `Pick on Map` on Satellite view | Two physical phones + `GroupScreen` / `GeofenceScreen` | Background sync & Remote Ring fire with UI closed; tapped rooftop coordinate populates Zone Editor |
 
 ---
 
@@ -50,19 +51,18 @@ FIRESTORE_EMULATOR_HOST="127.0.0.1:8085" node --test firestore.test.js
 Run unit tests and compile both installable packages (decode `debug.keystore.base64` first if running locally outside CI):
 ```bash
 base64 -d debug.keystore.base64 > debug.keystore
-./gradlew testDebugUnitTest assembleDebug assembleRelease
+gradle testDebugUnitTest assembleDebug assembleRelease
 ```
 
 ---
 
-## 4. QA Testing Power Optimization (Auto-Balanced GPS)
+## 4. Background Protection, Settings Persistence & Geofence QA Notes
 
-*Ref: `docs/issues-and-resolutions.md`*
+*Ref: `docs/issues-and-resolutions.md` (`GT-ISSUE-04`, `GT-ISSUE-17`, `GT-ISSUE-18`)*
 
-To prevent rapid battery depletion and desk multipath jitter during prolonged QA testing:
-- **Debug Builds**: Default tracking profile is automatically set to **`TrackingMode.BALANCED`** (5-second update intervals, 10-meter displacement threshold, ~8 mA power draw).
-- **Settings Toggle**: Testers can switch between Auto-Balanced (5s) and High-Accuracy (1s GNSS) via the **Testing & Power Optimization** card in `SettingsScreen.kt`.
-- **Full Trail Integrity**: Balanced testing continues to log complete location points to SQLite, render real-time breadcrumbs on the map, and output identical GPX/KML/CSV exports.
+- **Default Profile & Full Settings Persistence:** GeoTrace starts in `TrackingMode.HIGH_ACCURACY` by default with zero hidden debug overrides; whichever tracking tier, map layer, speed unit, coordinate format, accuracy ring, or jitter threshold the user selects is persisted in `geotrace_prefs`.
+- **24/7 Background Protection Mode:** When signed into Google and enabled in **Devices → This Device & Privacy**, `LocationForegroundService` stays active in a low-drain balanced heartbeat (`60s / 25m`, no WakeLock) even after `REC` stops or the app window is swiped away, keeping `My Other Devices`, active group telemetry, and Remote Ring listening alive (and auto-restarting on reboot when background location permission is granted).
+- **Geofence Coordinate Verification:** Use `"Pick on Map"` inside the Zone Editor while viewing **Satellite Imagery** / **Satellite + Labels** to verify or refine Kihumuro (`-0.5982, 30.6178`), Main Town Campus (`-0.6163, 30.6568`), and Kakoba Hostels (`-0.6075, 30.6727`) centers.
 
 For full audit details on resolved issues and architecture decisions, see **[`docs/issues-and-resolutions.md`](issues-and-resolutions.md)** and **[`docs/team-guide.md`](team-guide.md)**.
 

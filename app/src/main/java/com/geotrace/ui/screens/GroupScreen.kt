@@ -141,12 +141,41 @@ fun GroupScreen(
     val p2pMeshState by groupViewModel.p2pMeshState.collectAsState()
     val offlineCallsign by groupViewModel.offlineCallsign.collectAsState()
     val isGhostMode by groupViewModel.isGhostMode.collectAsState()
+    val isBackgroundProtectionEnabled by groupViewModel.isBackgroundProtectionEnabled.collectAsState()
     val isP2PEnabled by groupViewModel.isP2PEnabled.collectAsState()
     val isActionLoading by groupViewModel.isActionLoading.collectAsState()
     val isSyncing by groupViewModel.isSyncing.collectAsState()
     val lastSyncTimestampMs by groupViewModel.lastSyncTimestampMs.collectAsState()
     val statusMessage by groupViewModel.statusMessage.collectAsState()
     val errorMessage by groupViewModel.errorMessage.collectAsState()
+
+    val bgLocationPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
+    val protectionPermissionsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val fineOrCoarse = (grants[android.Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
+            (grants[android.Manifest.permission.ACCESS_COARSE_LOCATION] == true)
+        if (fineOrCoarse) {
+            groupViewModel.toggleBackgroundProtection(true)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                bgLocationPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            }
+        } else {
+            Toast.makeText(
+                context,
+                "Location permission is required for 24/7 Background Device Protection.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var showJoinDialog by remember { mutableStateOf(false) }
@@ -454,6 +483,87 @@ fun GroupScreen(
                             onCheckedChange = { groupViewModel.toggleGhostMode() },
                             colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFD97706)),
                             modifier = Modifier.testTag("ghost_mode_switch")
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    val hasBgPermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        androidx.core.content.ContextCompat.checkSelfPermission(
+                            context,
+                            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    } else true
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                Icons.Default.NotificationsActive,
+                                contentDescription = null,
+                                tint = if (isBackgroundProtectionEnabled) colorScheme.tertiary else colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "24/7 Background Protection",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = when {
+                                        !isBackgroundProtectionEnabled -> "Only syncs & rings while app is open"
+                                        currentUser == null -> "Armed • Sign in below to activate"
+                                        !hasBgPermission -> "Active • Grant 'All the time' location for reboot auto-start"
+                                        else -> "Locatable & Remote Ring active even when closed"
+                                    },
+                                    fontSize = 11.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = isBackgroundProtectionEnabled,
+                            onCheckedChange = { enable ->
+                                if (!enable) {
+                                    groupViewModel.toggleBackgroundProtection(false)
+                                } else {
+                                    val needed = mutableListOf<String>()
+                                    if (androidx.core.content.ContextCompat.checkSelfPermission(
+                                            context,
+                                            android.Manifest.permission.ACCESS_FINE_LOCATION
+                                        ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                                    ) {
+                                        needed.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                                    }
+                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+                                        androidx.core.content.ContextCompat.checkSelfPermission(
+                                            context,
+                                            android.Manifest.permission.POST_NOTIFICATIONS
+                                        ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                                    ) {
+                                        needed.add(android.Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                    if (needed.isNotEmpty()) {
+                                        protectionPermissionsLauncher.launch(needed.toTypedArray())
+                                    } else {
+                                        groupViewModel.toggleBackgroundProtection(true)
+                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q && !hasBgPermission) {
+                                            bgLocationPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                        }
+                                    }
+                                }
+                            },
+                            colors = SwitchDefaults.colors(checkedThumbColor = colorScheme.tertiary),
+                            modifier = Modifier.testTag("background_protection_switch")
                         )
                     }
                 }

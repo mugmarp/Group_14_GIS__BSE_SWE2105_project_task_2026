@@ -33,6 +33,8 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 | **GT-ISSUE-14** | Cartography / Layers | **High** | Missing Satellite/Hybrid layers, `HUMANITARIAN` fallback to `MAPNIK`, unlinked label overlay redraws, and Z17 Topo blank tiles | **Resolved** |
 | **GT-ISSUE-15** | Telemetry / Mode Switch | **Critical** | False jump distance/speed spikes across `"cellular"` ↔ GNSS transitions, `POWER_SAVER` Wi-Fi ping-ponging, and stale cell fix on return to GNSS | **Resolved** |
 | **GT-ISSUE-16** | Offline Maps / Perf | **High** | Offline estimator `OutOfMemoryError` risk on wide zoom, main-thread disk cache scan, and `Clear Cache` SQLite desync (`v3`) | **Resolved** |
+| **GT-ISSUE-17** | Multi-Device / Bg | **Critical** | Devices unreachable / Remote Ring silent when `MainActivity` is closed or after device reboot | **Resolved** |
+| **GT-ISSUE-18** | Geofencing / GIS | **High** | Kakoba Hostels coordinate offset, lack of interactive map coordinate picking, and non-persisted Settings flags | **Resolved** |
 
 ---
 
@@ -77,17 +79,15 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 
 ---
 
-### GT-ISSUE-04: QA Tester Battery Depletion & Desk Jitter Default
-- **Discovered:** November 8, 2026 (Ref: `WEB_DASHBOARD_AND_AUTO_GPS_FEEDBACK.md`)
-- **Files Affected:** `SettingsModels.kt`, `SettingsScreen.kt`, `TrackerViewModel.kt`, `LocationModels.kt`
-- **Symptom:** Testers conducting QA in office environments frequently left tracking active at the default `HIGH_ACCURACY` mode (1-second updates, 2m threshold, ~25 mA GNSS drain). This caused fast battery drain and registered stationary multipath jitter while sitting at desks.
-- **Root Cause:** App previously had no mechanism to default to a battery-friendly test profile while still recording full trails.
+### GT-ISSUE-04: Tracking Tier Efficiency & Settings Persistence
+- **Discovered:** November 8, 2026 (Updated November 14, 2026)
+- **Files Affected:** `SettingsModels.kt`, `SettingsScreen.kt`, `TrackerViewModel.kt`, `LocationRepository.kt`
+- **Symptom:** Testers leaving `HIGH_ACCURACY` (1s GNSS) active at a desk consumed unnecessary battery, while other Settings flags (`speedUnit`, `coordinateFormat`, `showAccuracyRing`, `followUserLocation`, `keepScreenOn`, `showCellTowerPin`, `stationaryJitterThresholdMeters`) previously lived only in memory and reset on app restart.
+- **Root Cause:** An interim `autoBalancedTestMode` debug flag created unpredictable mode behavior (forcing Balanced overrides on debug builds) while most `TrackerSettings` properties were not backed by `SharedPreferences`.
 - **Resolution:**
-  1. Tuned `TrackingMode.BALANCED` to a 5-second interval and 10-meter displacement threshold (~8 mA).
-  2. Added `autoBalancedTestMode` to `TrackerSettings`, defaulting to `true` on debug builds (`BuildConfig.DEBUG`) and `false` on release builds.
-  3. Added an interactive switch in `SettingsScreen.kt` under **TESTING & POWER OPTIMIZATION** allowing users and testers to toggle between Auto-Balanced (5s) and High-Accuracy (1s) defaults at any time.
-  4. Full trail recording to SQLite, map polyline breadcrumbs, and GPX/KML exports remain completely active and identical during balanced test mode.
-- **Outcome:** QA testers can run prolonged testing without draining device batteries, while preserving complete trail fidelity.
+  1. Discarded `autoBalancedTestMode` completely so `TrackingMode.HIGH_ACCURACY` is a clean, explicit default across both Debug and Release builds unless the user picks `Balanced (5s)` or `Power Saver (Cell Only)` from the HUD Mode Pill.
+  2. Persisted **every field** of `TrackerSettings` in `geotrace_prefs` (`LocationRepository.kt`) and hydrated `_settings` on startup in `TrackerViewModel.kt`.
+- **Outcome:** Predictable tracking profiles on all build variants and 100% persistent user preferences across restarts.
 
 ---
 
@@ -228,11 +228,11 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 ### GT-ISSUE-15: Telemetry Spikes & Stale Fixes During Tracking Mode Switching
 - **Discovered:** November 14, 2026
 - **Files Affected:** `LocationRepository.kt`, `TrackerViewModel.kt`, `LocationForegroundService.kt`, `MainActivity.kt`
-- **Symptom:** Rapidly switching between `POWER_SAVER` (cellular tower centroid) and `HIGH_ACCURACY` / `BALANCED` (GNSS/fused) logged fake hundred-meter distance jumps and velocity spikes; `PRIORITY_LOW_POWER` fused Wi-Fi updates overwrote active cell tower fixes in `POWER_SAVER`; switching back from `POWER_SAVER` to GNSS kept showing the old cellular fix until the next satellite callback; `startTracking()` could overwrite a user-selected mode with `autoBalancedTestMode` if settings loaded asymmetrically.
+- **Symptom:** Rapidly switching between `POWER_SAVER` (cellular tower centroid) and `HIGH_ACCURACY` / `BALANCED` (GNSS/fused) logged fake hundred-meter distance jumps and velocity spikes; `PRIORITY_LOW_POWER` fused Wi-Fi updates overwrote active cell tower fixes in `POWER_SAVER`; switching back from `POWER_SAVER` to GNSS kept showing the old cellular fix until the next satellite callback.
 - **Resolution:**
   1. Added a **provider-tier transition guard** in `LocationRepository.recordLocation()` and `stopCurrentSession()`: transitions between `"cellular"` and GNSS/`"fused"` reset the anchor point and speed EMA without adding cross-tier jump distance or derived speed spikes.
   2. Suppressed `PRIORITY_LOW_POWER` fused callbacks in `POWER_SAVER` whenever a fresh `"cellular"` fix exists, fired immediate cell lookup when switching to `POWER_SAVER`, restarted `startStandbyCellPolling()`, and enabled `requestLastKnownLocation(forceIfCellular = true)` when switching back to GNSS.
-  3. Synchronized `autoBalancedTestMode` initialization cleanly without overriding manual `HIGH_ACCURACY` selection during `startTracking()`, and prevented duplicate standby listener registration in `MainActivity.kt`.
+  3. Discarded `autoBalancedTestMode` so `LocationRepository` always respects the persisted/selected `TrackingMode` without build-type overrides, and prevented duplicate standby listener registration in `MainActivity.kt`.
 - **Outcome:** Clean, mathematically consistent telemetry trajectories across all mode switches without phantom distance or speed artifacts.
 
 ---
@@ -248,12 +248,36 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 
 ---
 
+### GT-ISSUE-17: 24/7 Background Protection & Remote Ring Survival
+- **Discovered:** November 14, 2026
+- **Files Affected:** `GroupRepository.kt`, `LocationForegroundService.kt`, `GeofenceBroadcastReceiver.kt`, `GroupViewModel.kt`, `GroupScreen.kt`, `TrackerViewModel.kt`, `MainActivity.kt`
+- **Symptom:** Cloud location sync for `My Other Devices` / active Tracking Groups and the Firestore `ringRequestedAt` Remote Ring listener previously ran only inside `GroupViewModel`, pausing whenever a user swiped the app UI closed or rebooted their phone.
+- **Resolution:**
+  1. Moved the personal devices + Remote Ring Firestore snapshot listener into the singleton `GroupRepository` driven by `FirebaseAuth.AuthStateListener` so `FindDeviceAlarmManager.startRinging()` fires even when `MainActivity` is closed.
+  2. Added **24/7 Background Protection** (`ACTION_START_PROTECTION` / `ACTION_STOP_PROTECTION`) to `LocationForegroundService` using low-drain `PRIORITY_BALANCED_POWER_ACCURACY` (60s / 25m, zero WakeLock), throttled cloud telemetry sync (`15s` recording / `45s` protection), persisted `selectedGroupId`, and seamless downgrade from `REC` → Protection Mode via `stopTrackingOrDowngrade()`.
+  3. Added Android 14+ safe permission guards and `BOOT_COMPLETED` auto-restart in `GeofenceBroadcastReceiver.kt`, plus an opt-out toggle in `GroupScreen.kt`.
+- **Outcome:** Personal devices and group members stay locatable and remotely ringable in daily background use with minimal battery impact.
+
+---
+
+### GT-ISSUE-18: Geofence Zone Coordinates, Sample Reset & Interactive Map Picking
+- **Discovered:** November 14, 2026
+- **Files Affected:** `LocationRepository.kt`, `GeofenceScreen.kt`, `MapScreen.kt`, `MapViewComposable.kt`, `TrackerViewModel.kt`, `MainActivity.kt`, `FIELD_TESTING_PROTOCOL.md`
+- **Symptom:** `MUST Kakoba Student Hostels` starter coordinates pointed near Mbarara Town Center instead of Kakoba Ward; `Kihumuro` vs `Town Campus` labels conflicted in `FIELD_TESTING_PROTOCOL.md`; southern-hemisphere zone cards printed `°N` on negative latitudes; users had to type decimal coordinates manually when fine-tuning zones.
+- **Resolution:**
+  1. Corrected `MUST Kakoba Student Hostels` default coordinates to `-0.6075, 30.6727` (`300m` radius), aligned `FIELD_TESTING_PROTOCOL.md` Site A label (`MUST Town Campus Open Grounds`), and fixed `S`/`N` hemisphere labeling in `GeofenceScreen.kt`.
+  2. Added non-destructive `Reset Sample Zones` (`LocationRepository.resetSampleGeofences()`) to restore/update the 3 starter campus zones without deleting user-created custom zones.
+  3. Implemented interactive `"Pick on Map"` inside `GeofenceEditDialog` using osmdroid `MapEventsOverlay`, allowing users to tap directly on Esri Satellite imagery to set exact building/gate centers.
+- **Outcome:** Accurate Mbarara campus zones and rooftop-exact geofence authoring directly on the live map.
+
+---
+
 ## 3. Verification & Compliance Checklist
 
 - [x] **FileProvider Export**: Verified `.gpx`, `.kml`, and `.csv` generate valid URIs without Binder overflow.
-- [x] **WakeLock Execution**: Verified `PARTIAL_WAKE_LOCK` acquires cleanly and releases without leaks on service stop.
+- [x] **WakeLock Execution**: Verified `PARTIAL_WAKE_LOCK` acquires cleanly during `REC` and releases cleanly on downgrade/stop.
 - [x] **Database Migration**: Verified clean upgrade from `v1` → `v2` (composite index) → `v3` (`offline_map_regions`).
-- [x] **Auto-Balanced Testing Switch**: Verified UI toggle in Settings, 5s interval setting, and full trail recording.
+- [x] **Full Settings Persistence**: Verified `autoBalancedTestMode` removal and persistence of all `TrackerSettings` fields in `geotrace_prefs`.
 - [x] **Pedestrian Speed Calibration**: Verified low-speed clamp, EMA smoothing, derived fallback, and gait classification.
 - [x] **Cross-Screen Responsiveness**: Verified 48dp touch targets, weighted telemetry columns, and speed unit consistency.
 - [x] **Mode Switching Concurrency & Tier Guard**: Verified `cellDiagnosticsJob` cancellation, active session SQLite sync, provider-tier transition guard, and GNSS/cellular handoff.
@@ -261,5 +285,6 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 - [x] **Safe Menu & Updates UI**: Verified auto-expanded scrollable bottom-sheet menu, Settings update button layout, and 404/install-permission handling.
 - [x] **Google Sign-In & CI Keystore**: Verified `findActivity()` context unwrapping and `debug.keystore.base64` CI decode step.
 - [x] **5-Layer Cartography & Offline Maps**: Verified Esri Satellite, Carto Hybrid overlay, Humanitarian HOT, Topo zoom clamping, and $O(\text{zoomLevels})$ offline region downloads.
+- [x] **24/7 Background Protection & Map Pick**: Verified `ACTION_START_PROTECTION`, boot recovery, process-wide Remote Ring listener, Kakoba preset fix, and `"Pick on Map"`.
 - [x] **Gradle Build**: Verified project builds cleanly (`compile_applet` PASS).
 

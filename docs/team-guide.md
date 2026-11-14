@@ -1,129 +1,122 @@
-# GeoTrace — Group 14 Onboarding & System Guide
+# GeoTrace — Team Guide & System Walkthrough (BSE SWE2105 Option 2)
 
-Welcome to **GeoTrace** (`com.geotrace`), Group 14's Android GIS & real-time telemetry application for **BSE SWE2105**.  
-This guide gives every group member a clear mental model of **how the app works**, **common misconceptions to avoid**, **architectural rules**, and **how to build and test it on real phones**.
+Welcome to **GeoTrace** (`com.geotrace`), Group 14's Android GIS & real-time mobile tracking application built for **BSE SWE2105 (Geographic Information Systems)** at **Mbarara University of Science and Technology (MUST)**.
 
----
-
-## 1. Plain-English Overview of GeoTrace
-
-GeoTrace solves **SWE2105 Option 2 (Mobile Phone Tracking)** using real on-device sensors rather than coarse IP geolocation:
-
-- **Bottom Tab 1 — `Map`**: 5-layer cartographic viewport (OSM Streets, Esri Satellite Imagery, Satellite + Labels Hybrid, OpenTopoMap, Humanitarian HOT) + **Offline Maps Manager** (`Map View`, `2 km`, `5 km`), telemetry HUD (coordinates, EMA-smoothed speed, gait state, accuracy ring, distance, waypoints), positioning mode selector, active trail recording (`REC`), bearing-rotated user chevron, trail `S`/`E` pins, plus live pins for your other devices, group members, P2P peers, geofence zones, and dBm-colored cell tower rays.
-- **Bottom Tab 2 — `Cellular Hub`**: Live hardware radio telemetry from Android `TelephonyManager` (CID/NCI, LAC/TAC, MCC, MNC, signal dBm, LTE/5G/3G/2G, serving + neighbor cells) and optional coordinate resolution via the **OpenCellID API**.
-- **Bottom Tab 3 — `Devices`**: Multi-device tracking & locating hub containing:
-  1. **Off-Grid P2P Device Finder** (works with **zero internet and zero sign-in** via Bluetooth LE + Wi-Fi Direct).
-  2. **My Other Devices** (all phones/tablets signed into **your** Google account, with **Remote Ring**).
-  3. **Shared Tracking Groups** (invite-code groups for teammates/other users, with **Ghost Mode**).
-- **GeoTrace Safe Menu (Top-Right Hamburger `☰`)**: Auto-expanded, scrollable bottom-sheet menu (skips half-height collapse so all cards are immediately visible without clipping) for:
-  - **Saved Trails & Exports** (inspect SQLite tracks, export `.gpx`, `.kml`, `.csv` via `FileProvider`)
-  - **Geofencing & Safe Zones** (circular entry/exit alerts with 15 m exit hysteresis)
-  - **SWE2105 Research & Comparison** (in-app Option 1 vs Option 2 & Uganda legal summary)
-  - **Telemetry & System Setup** (`Settings`: units, DD/DMS coordinates, map tiles, jitter filter, OpenCellID API key, and GitHub Releases **Application Updates**)
+This guide explains **the course task we are solving**, **how every part of GeoTrace works end-to-end**, **why key engineering choices were made**, and **how the team builds, tests, and demonstrates the app**.
 
 ---
 
-## 2. Do NOT Confuse These (Common Misconceptions)
+## 1. The SWE2105 Task & How GeoTrace Solves It
 
-### Misconception 1: "The Map only uses GPS"
-- **Reality:** Single-device tracking supports **three positioning profiles** switchable from the Map pill:
-  1. **High Accuracy (GPS):** 1 s multi-constellation GNSS (`~2–5 m`, `~25 mA`).
-  2. **Balanced Power (Fused):** 5 s Google Fused Location combining GPS + Wi-Fi + Cell (`~5–15 m`, `~8 mA`).
-  3. **Power Saver (Cell Only):** 30 s low-power Fused updates (`~100–1,000 m`, `< 2 mA`) paired with 10 s passive `TelephonyManager` cell polling, falling back to OpenCellID serving-tower coordinates when needed.
-- Changing modes updates both **standby monitoring** (`TrackerViewModel`) and an **active recording foreground service** (`LocationForegroundService`), persists the selection across restarts (`geotrace_prefs`), and triggers a provider-tier transition guard so switching between `"cellular"` and GNSS does not log fake jump distance or speed spikes.
+Our assignment asks us to **track the movement of a person carrying a mobile phone in real time using GPS or cell tower triangulation, and evaluate the pros and cons of both approaches**. (Option 1—IP address geolocation on a laptop—fails real-time movement tracking because IP leases remain static for hours/days at city or ISP-gateway level.)
 
-### Misconception 2: Confusing the 3 Multi-Device Systems
-They solve different scenarios—do not mix up their names or backends:
+GeoTrace implements **Option 2** natively on Android using real device hardware:
+1. **Multi-Constellation GNSS Positioning (`FusedLocationProviderClient`):** Combines GPS, GLONASS, Galileo, and BeiDou satellites (fused with Wi-Fi and cell signals when needed) for continuous meter-level (`~2–5 m`) outdoor tracking.
+2. **Cellular Base Station Telemetry (`TelephonyManager` + OpenCellID):** Reads the phone's serving and neighboring mobile mast radio identifiers (`MCC`, `MNC`, `LAC/TAC`, `CID/NCI`, and signal strength in `dBm`) and optionally resolves physical mast coordinates via the **OpenCellID REST API**.
+3. **Side-by-Side Academic Evaluation:** Evaluates accuracy, Time-to-First-Fix (TTFF), indoor penetration, power draw, and Ugandan telecom/legal realities directly inside the app (`SWE2105 Research Analysis`) and in our supporting reports.
 
-| Feature | Who Can See Whom? | Internet & Google Sign-In Required? | Range & Transport | Backend / API |
+---
+
+## 2. How Each Screen & Subsystem Works
+
+### Tab 1: `Map` — Live Cartography, Modes & Telemetry HUD
+- **5 Base & Hybrid Map Layers (`MapTileSources.kt`):** Switchable directly from the map layer button or Settings:
+  - **OSM Streets (`STANDARD`):** OpenStreetMap road & POI layer (`MAPNIK`), auto-cached as you pan/zoom.
+  - **Satellite Imagery (`SATELLITE`):** Physical aerial imagery via Esri World Imagery showing rooftops, compounds, dirt tracks, and masts.
+  - **Satellite + Labels (`HYBRID`):** Esri Satellite combined with a transparent Carto Light street/place label overlay.
+  - **Topographic Relief (`TOPO`):** OpenTopoMap elevation contours and terrain shading (capped cleanly at zoom Z17).
+  - **Humanitarian (`HUMANITARIAN`):** Humanitarian OpenStreetMap Team (`HOT`) high-contrast campus paths and buildings.
+- **Offline Maps (`OfflineMapManager.kt` & `OfflineMapsDialog.kt`):** Lets field testers pre-download the current viewport, a `2 km` radius, or a `5 km` radius (for Satellite, Hybrid, Topo, or HOT) into a private `512 MB` internal tile cache (`filesDir/osmdroid/tiles`). Useful when moving into zero-data areas around rural Mbarara.
+- **Three Positioning Modes (HUD Mode Pill):**
+  - **High Accuracy (1 s GNSS):** Uses `PRIORITY_HIGH_ACCURACY` for 1-second satellite trail recording (`~2–5 m`, `~25 mA`).
+  - **Balanced Power (5 s Fused):** Uses `PRIORITY_BALANCED_POWER_ACCURACY` (GPS + Wi-Fi + Cell fusion, `~5–15 m`, `~8 mA`).
+  - **Power Saver (Cell Only):** Uses low-power positioning paired with `10 s` cellular radio polling (`< 2 mA`), falling back to OpenCellID serving-mast coordinates (`"cellular"` provider) when resolved.
+- **Anti-Drift Filtering & Speed Smoothing (`LocationRepository.kt`):**
+  - **Stationary Deadband (`1.5 m` default):** Micro-jumps below the threshold while standing still are discarded so multipath satellite bounce does not log fake walking distance. Settings shows the cumulative rejected drift (`ELIMINATED MULTIPATH DRIFT`) as empirical proof.
+  - **Pedestrian Gait & EMA Smoothing:** Clamps sub-walking noise (`< 0.6 m/s`), derives speed from $\Delta d / \Delta t$ when a provider omits Doppler velocity, smooths display speed with an Exponential Moving Average ($\alpha = 0.35$), and classifies gait (`Stationary`, `Slow Walk`, `Walking`, `Brisk Walk`, `Running`, `In Transit`).
+  - **Provider-Tier Transition Guard:** Prevents fake jump distance or speed spikes when switching mid-trail between `"cellular"` tower coordinates and GNSS/fused coordinates.
+- **GIS Map Symbology (`MapViewComposable.kt`):** Renders bearing-rotated direction chevrons, trail Start (`S`) and End (`E`) markers, translucent 68% GNSS accuracy rings, geofence circles, serving/neighbor mast badges, and `dBm`-colored signal rays from phone to mast.
+- **Foreground Trail Recording (`REC`):** Tapping Record creates a session in local SQLite (`gis_tracker.db` v3) and launches `LocationForegroundService` with a `PARTIAL_WAKE_LOCK` so logging continues reliably even when the screen turns off in a pocket.
+
+### Tab 2: `Cellular Hub` — Radio Diagnostics & Uganda Telecom Reality
+- **Hardware Telemetry (`CellularDiagnosticManager.kt`):** Reads active SIM towers (`LTE`, `NR/5G`, `WCDMA/UMTS`, `GSM`), PLMN codes (e.g., **MTN Uganda `641-10`**, **Airtel Uganda `641-22`**), `LAC/TAC`, `CID/NCI`, `PCI/PSC`, and signal strength (`RSRP`/`RSSI` in `dBm`).
+- **Coordinate Resolution (`OpenCellIdClient.kt`):** Queries the live OpenCellID API when an API key is set (in Settings or `OPENCELLID_API_KEY`). GeoTrace never invents fake tower coordinates—without a key or internet, raw hardware radio IDs remain visible while map tower pins stay off.
+- **True Triangulation vs. Cell-ID Lookup:** In Uganda, telecom operators (MTN/Airtel) do not expose internal timing-advance / TDOA / angle-of-arrival network APIs to third-party apps (restricted under the **Uganda Communications Act, Cap 106** & **Regulation of Interception of Communications Act, Cap 101**). Standard Android apps perform **Single/Serving Cell-ID Lookup** against public/crowd-sourced databases like OpenCellID rather than true multi-tower network triangulation.
+
+### Tab 3: `Devices` — Multi-Device Tracking, Groups & Off-Grid P2P
+GeoTrace includes three distinct locating capabilities under one hub:
+
+| Capability | Who Can See Whom | Network & Account Needed | Transport & Range | Backend / Mechanism |
 | :--- | :--- | :--- | :--- | :--- |
-| **My Other Devices** | Only **your own** phones/tablets signed into the **same Google account** | **Yes** (Internet + Google Sign-In) | Worldwide | Cloud Firestore `/users/{uid}/devices/{deviceId}` |
-| **Shared Tracking Groups** | Multiple users/devices that join the **same `XXX-XXX` invite code** | **Yes** (Internet + Google Sign-In) | Worldwide | Cloud Firestore `/groups/{groupId}/live_locations/{uid}_{deviceId}` |
-| **Off-Grid P2P Device Finder** | Any nearby GeoTrace phone with P2P Finder switched ON | **No** (works in Airplane Mode with Bluetooth/Wi-Fi Direct ON) | `~50–200 m` | Google Nearby Connections (`Strategy.P2P_CLUSTER`) |
+| **My Other Devices** | Only **your own** phones/tablets signed into the same Google account | Internet + Google Sign-In | Global | Cloud Firestore `/users/{uid}/devices/{deviceId}` + **Remote Ring** (`FindDeviceAlarmManager`) |
+| **Shared Tracking Groups** | Teammates or family who join the same `XXX-XXX` invite code | Internet + Google Sign-In | Global | Cloud Firestore `/groups/{groupId}/live_locations/{uid}_{deviceId}` + **Ghost Mode** pause |
+| **Off-Grid P2P Device Finder** | Nearby GeoTrace phones with P2P Finder switched ON | **None** (works with Airplane Mode + Bluetooth/Wi-Fi Direct ON) | `~50–200 m` | Google Nearby Connections (`Strategy.P2P_CLUSTER`) exchanging real GNSS fixes + offline **P2P Ring** |
 
-- **How Off-Grid P2P Fits SWE2105 Option 2 (Academic Justification):** Unlike the removed Indoor BLE RSSI Radar (which attempted Bluetooth signal-strength indoor distance estimation), **Off-Grid P2P Device Finder does NOT replace GPS or cellular positioning**. Every peer marker, compass bearing, and distance comes from genuine Option 2 GNSS/fused coordinates computed on each phone—Nearby Connections (`P2P_CLUSTER`) simply replaces the internet/Firestore transport layer when cellular mobile data is unavailable or out of coverage in rural Uganda.
-- **Removed Out-of-Scope Features:** Earlier prototypes explored an **Indoor BLE RSSI ("Warmer/Colder") Radar** and a **Background Device Beacon** toggle. Both were intentionally removed to keep the project focused and reliable. Do not re-add them or look for them in the UI.
-- **Terminology:** The app uses general terms (**Devices & Tracking Groups**, **Tracking Group**, **Map**) rather than "Family Circle" or "GPS Map", because the app tracks personal fleets, field teams, or study assets alike.
+**Why composite keys (`{uid}_{deviceId}`) and `SetOptions.merge()` matter:** If a teammate signs into two phones with one Google account inside a group, keying by `uid` alone would overwrite one phone with the other. Merging updates on personal device documents also prevents routine GPS writes from clearing a pending Remote Ring request.
 
-### Misconception 3: "Are there still hardcoded/mock locations or updates?"
-- **Live telemetry & cell towers:** **Zero mock data.** `OpenCellIdClient` previously had bundled fallback towers, which were removed—if no OpenCellID key is set (in Settings or `OPENCELLID_API_KEY`), tower coordinates simply remain unresolved while real radio IDs (`TelephonyManager`) still display.
-- **Application Updates:** `AppUpdateManager` queries the live GitHub API (`releases/latest`). If you haven't published a GitHub Release yet, GitHub returns HTTP `404` and the app cleanly displays *"No GitHub releases have been published yet"*—it is not fake data.
-- **Pre-seeded Geofences (Intentional Starter Zones):** On first launch when the SQLite `geofences` table is empty, `LocationRepository.loadGeofences()` seeds 7 Uganda sample safe zones (MUST Kihumuro, MUST Town Campus, Wandegeya) so geofencing can be demonstrated immediately. Users can edit, delete, or add their own zones at any time.
+**24/7 Background Protection & Daily-Life Locating:** When signed into Google with **24/7 Background Protection** enabled (on by default under `Devices → This Device & Privacy`), `GroupRepository` maintains a process-wide Firestore listener for Remote Ring signals while `LocationForegroundService` runs in a lightweight balanced heartbeat (`PRIORITY_BALANCED_POWER_ACCURACY`, `60s / 25m`, no WakeLock). Swiping the app closed does **not** silence Remote Ring or stop your device from refreshing its last known coordinates, and stopping a high-precision `REC` trail smoothly downgrades back to Protection Mode (with `BOOT_COMPLETED` recovery after phone restarts when Background Location permission is granted). Off-grid Nearby P2P Discovery remains an explicit foreground/in-hub toggle so Bluetooth/Wi-Fi radios only advertise when wanted.
 
-### Misconception 4: "GPS stopped counting distance / speed is stuck at 0.0 km/h while I test at my desk"
-- **Reality:** This is intentional anti-drift filtering in `LocationRepository.recordLocation()`:
-  - **Stationary Deadband (`1.5 m` default, configurable in Settings):** Movements smaller than the threshold are filtered out so indoor multipath GPS bounce doesn't falsely log kilometers of distance.
-  - **Pedestrian Noise Floor (`0.6 m/s ≈ 2.1 km/h`) + EMA Smoothing (`α = 0.35`):** Prevents standing-still hand jitter from showing `3–4 km/h` while smoothing walking speed cleanly. Walk 10+ meters outdoors to test live distance/speed accumulation.
+### Menu (`☰`) Modules
+- **Safe Zones & Geofencing (`GeofenceScreen.kt` & `GeofenceManager.kt`):** Supports circular entry/exit monitoring with `15 m` exit hysteresis (preventing GPS noise flapping at the perimeter) plus optional OS-level `GeofencingClient` background alerts (`GeofenceBroadcastReceiver`). Includes updated Mbarara/MUST sample zones (`Kihumuro Campus`, `Main Town Campus`, `Kakoba Student Hostels`), non-destructive **`Reset Sample Zones`**, and **`Pick on Map`** so you can tap directly on Esri Satellite imagery to place a perimeter center on a specific building or gate.
+- **Saved Trails & Exports (`HistoryScreen.kt` & `TrackExporter.kt`):** Inspects recorded SQLite sessions and shares `.gpx` (GPX 1.1), `.kml` (KML 2.2), and `.csv` files directly via Android `FileProvider` for QGIS, Google Earth, Python/Pandas, or Strava.
+- **SWE2105 Research Analysis (`ResearchAnalysisScreen.kt`):** Interactive comparator summarizing Option 1 vs Option 2, GNSS vs Cellular metrics, and Ugandan data-privacy compliance (**Data Protection and Privacy Act, Cap 97**).
+- **Telemetry & System Settings (`SettingsScreen.kt`):** Controls velocity units (`km/h`, `mph`, `m/s`), coordinate format (`DD` / `DMS`), map tile layer, Offline Maps Manager, accuracy ring & auto-center toggles, keep-screen-on, cell tower map pins, stationary deadband threshold (`1.5 m`, `3.0 m`, `Off`), OpenCellID API key, and in-app OTA updates (`AppUpdateManager.kt` checking GitHub Releases)—all persisted cleanly across restarts in `geotrace_prefs`.
 
 ---
 
-## 3. Critical Engineering Invariants (Read Before Editing Code)
+## 3. Repository & Codebase Map
 
-### 1. Firestore Named Database Rule (CRITICAL)
-GeoTrace uses a **named Firestore database** configured in `app/src/main/res/values/firebase_applet_config.xml` (`firestore_database_id`).
-- **ALWAYS** initialize Firestore with `FirebaseFirestore.getInstance(context.getString(R.string.firestore_database_id))`.
-- **NEVER** call parameterless `Firebase.firestore` or `FirebaseFirestore.getInstance()`—that connects to `(default)` instead of the provisioned database and causes empty reads or permission failures.
-
-### 2. Multi-Device Document Keys (`{uid}_{deviceId}`)
-Inside a group's `live_locations` subcollection, documents are keyed by **`${uid}_${currentDeviceId}`** (not just `${uid}`), and `personalDevices` docs use `SetOptions.merge()` under `/users/{uid}/devices/{deviceId}`.
-- **Why:** If you sign into two phones with the same Google account and join a group, keying only by `uid` causes Phone B to overwrite Phone A. Keeping `SetOptions.merge()` on `/users/{uid}/devices/{deviceId}` also ensures periodic GPS updates do not wipe out an incoming `ringRequestedAt` trigger from another device.
-
-### 3. Google Sign-In & Keystore SHA-1 Trap (CRITICAL)
-If tapping an account in **Sign in with Google** immediately fails with `"Sign-in cancelled"`:
-- **Root Cause #1 — Keystore SHA-1 Mismatch:** Firebase & `app/google-services.json` authorize the certificate SHA-1 `a2:50:90:0a:d4:a5:ae:0b:c2:af:30:34:ae:23:2c:b4:c1:a0:9c:35` (which comes from **`debug.keystore.base64`** in the repo root).
-  - Never commit raw `debug.keystore` or `release.keystore` to Git, and never run local Android Studio builds using your PC's random `~/.android/debug.keystore` unless you add that keystore's SHA-1/SHA-256 to Firebase Console too.
-  - Before building locally on your computer, decode the shared project keystore once in the project root:
-    ```bash
-    # Linux / macOS
-    base64 -d debug.keystore.base64 > debug.keystore
-
-    # Windows PowerShell
-    [IO.File]::WriteAllBytes("debug.keystore", [Convert]::FromBase64String((Get-Content debug.keystore.base64 -Raw)))
-    ```
-  - GitHub Actions (`.github/workflows/android-ci.yml`) already decodes `debug.keystore.base64` automatically.
-- **Root Cause #2 — Google Cloud OAuth Consent Screen:** In Google Cloud Console (**APIs & Services → OAuth consent screen** for `gen-lang-client-0500925114`), if status is **Testing**, only emails listed under **Test users** can sign in on a phone. Either add teammates' Gmail addresses to **Test users** or publish the consent screen to **In production**.
-- **Auth Invariant:** Never add `signInAnonymously()` or email/password auth in `app/src/main/`. Credential Manager with `GetSignInWithGoogleOption` is required by the Firebase security setup.
-
-### 4. Build System & Environment Rules
-- **Do not create `local.properties`** when working inside cloud build environments (`ANDROID_SDK_ROOT` is managed automatically).
-- **Do not modify `signingConfigs`** in `app/build.gradle.kts` (`debugConfig` / `releaseConfig` assignments are required for reproducible builds).
-- **Secrets belong in GitHub Secrets / Settings UI**, never hardcoded in Kotlin or `gradle` files (`OPENCELLID_API_KEY`, `SIGNING_*`, `GOOGLE_SERVICES_JSON_BASE64`). All CI secrets in `android-ci.yml` are **optional**—without them, CI uses `debug.keystore.base64` and `app/google-services.json`.
+```
+app/src/main/java/com/geotrace/
+├── LocationTrackerApp.kt          # osmdroid 512 MB internal cache & repository initialization
+├── MainActivity.kt                # Edge-to-edge Compose host, permissions, bottom nav & Safe Menu
+├── data/
+│   ├── LocationDbHelper.kt        # SQLite v3 (sessions, points + index, geofences, alerts, offline_map_regions)
+│   ├── LocationRepository.kt      # Trail recording, deadband/EMA/tier-guard, geofence evaluation
+│   ├── GroupRepository.kt         # Cloud Firestore (named DB) & Nearby Connections P2P mesh
+│   └── export/TrackExporter.kt    # GPX 1.1, KML 2.2 & CSV file generators
+├── model/                         # Domain models (Location, Cell, Geofence, Group, Settings/Offline)
+├── service/                       # LocationForegroundService, CellularDiagnosticManager, OpenCellIdClient,
+│                                  # OfflineMapManager, GeofenceManager, FindDeviceAlarmManager, AppUpdateManager
+├── ui/
+│   ├── components/                # MapTileSources.kt, MapViewComposable.kt, OfflineMapsDialog.kt
+│   └── screens/                   # Map, Cellular Hub, Devices/Groups, Geofencing, History, Research, Settings
+└── viewmodel/                     # TrackerViewModel & GroupViewModel
+```
 
 ---
 
-## 4. Source Code Map (`app/src/main/java/com/geotrace/`)
+## 4. Team Presentation & Demo Guide
 
-| Layer | File(s) | Responsibility |
-| :--- | :--- | :--- |
-| **Entry & Navigation** | `LocationTrackerApp.kt`, `MainActivity.kt` | Initializes `osmdroid`, repositories, and single-activity Compose host (`Screen` tabs + auto-expanded scrollable `GeoTrace Safe Menu` bottom sheet + incoming Ring alarm banner). |
-| **Repositories** | `data/LocationRepository.kt`, `data/LocationDbHelper.kt`, `data/GroupRepository.kt` | SQLite trails/geofences/alerts/offline regions (`gis_tracker.db` v3), jitter deadband + EMA + tier-guard smoothing, Firestore sync (`groups`, `users/{uid}/devices`), Nearby Connections `P2P_CLUSTER` mesh (`v3` binary telemetry + `0x0A` Ring). |
-| **Exporters** | `data/export/TrackExporter.kt` | Generates GPX 1.1, KML 2.2, and CSV files shared via `FileProvider`. |
-| **Services** | `service/LocationForegroundService.kt`, `CellularDiagnosticManager.kt`, `OpenCellIdClient.kt`, `OfflineMapManager.kt`, `GeofenceManager.kt`, `FindDeviceAlarmManager.kt`, `AppUpdateManager.kt` | Foreground WakeLock location tracking, TelephonyManager radio reader, OpenCellID HTTP resolver, osmdroid `CacheManager` + `SqlTileWriter` offline region downloader, Android Geofencing API + BroadcastReceiver, high-priority Ring alarm + vibrator, GitHub Releases OTA APK updater. |
-| **ViewModels** | `viewmodel/TrackerViewModel.kt`, `viewmodel/GroupViewModel.kt` | StateFlows for map telemetry, modes, cell towers, settings, offline download progress, groups, personal device fleet, P2P peers, and Ring triggers. |
-| **UI Screens & Map** | `ui/screens/*Screen.kt`, `ui/components/MapTileSources.kt`, `MapViewComposable.kt`, `OfflineMapsDialog.kt` | Material 3 Compose screens; 5-layer `osmdroid` map viewport (`MapTileSources`) and offline region manager dialog. |
+When demonstrating GeoTrace to lecturers or evaluators:
+1. **Option 1 vs. Option 2 Rationale:** Open **SWE2105 Research Analysis** (`☰`) to show why IP geolocation fails real-time movement tracking and how GNSS + Cellular solves it under Ugandan infrastructure & law.
+2. **Live Cartography & Anti-Drift:** On **Map**, switch between **OSM Streets**, **Satellite Imagery**, and **Satellite + Labels**, toggle **High Accuracy → Balanced → Power Saver**, and record a short outdoor walk to demonstrate real trail breadcrumbs, rotated direction chevron, and stationary deadband rejection.
+3. **Cellular Telemetry:** Open **Cellular Hub** to display live serving & neighbor cell IDs (`MCC 641`, `MNC`, `LAC`, `CID`, `dBm`) from Android hardware.
+4. **Multi-Device & Off-Grid P2P:** On two phones, demonstrate **My Other Devices** + **Remote Ring** online, and toggle **Off-Grid P2P Device Finder** with internet turned off (Bluetooth + Location on) to demonstrate peer coordinates, bearing, and offline Ring.
+5. **Spatial Interoperability:** Stop a recorded trail, open **Saved Trails & Exports**, and export **CSV/GPX/KML** to show real GIS software integration (QGIS / Google Earth).
 
 ---
 
-## 5. Quick Verification & Real-Phone Test Checklist
+## 5. Building & Testing Locally
 
-### Automated Checks
-- **Firestore Security Rules Tests (Node + Firebase Emulator):**
+### Prerequisites & Project Configuration
+- **Named Firestore Database:** Initialized via `R.string.firestore_database_id` (defined in `firebase_applet_config.xml`) so all reads/writes target the provisioned Firestore instance.
+- **Consistent Keystore Signing for Google Sign-In:** Before building locally, decode the shared project debug keystore in the repository root so local APKs share the same SHA-1 certificate registered with Firebase Auth:
   ```bash
-  FIRESTORE_EMULATOR_HOST="127.0.0.1:8085" node --test firestore.test.js
-  ```
-- **Local Gradle Compilation:**
-  ```bash
-  ./gradlew testDebugUnitTest assembleDebug assembleRelease
-  ```
-  *(Inside AI Studio shell, use `gradle` instead of `./gradlew`. Note: `app/src/test` has no Kotlin unit test classes yet, so `testDebugUnitTest` validates test compilation cleanly while `firestore.test.js` executes the real security rules suite.)*
+  # Linux / macOS
+  base64 -d debug.keystore.base64 > debug.keystore
 
-### 2-Phone Real-World Smoke Test
-1. **Phone A & B (Online — Cloud Fleet & Groups):**
-   - Sign in with the **same Google account** on both phones → confirm both appear under **My Other Devices** and on the **Map** → tap **Ring** on Phone A to ring Phone B.
-   - Create a **Tracking Group** on Phone A, join with the `XXX-XXX` invite code on Phone B, and verify **Ghost Mode** hides coordinates when toggled ON.
-2. **Phone A & B (Offline — Airplane Mode + Bluetooth ON):**
-   - Turn OFF mobile data & Wi-Fi internet; enable Bluetooth + Location on both phones.
-   - Switch **Off-Grid P2P Device Finder** ON on both phones → wait ~5–15 s for peer discovery/handshake → verify live distance, compass bearing, Map peer pin, and offline **P2P Ring**.
-3. **1-Phone Field Test (Outdoors + Offline Maps):**
-   - Switch map layers (`OSM Streets` → `Satellite Imagery` → `Satellite + Labels` → `Topographic Relief` → `Humanitarian HOT`), pre-download a `2 km` Offline Map Region around your test site, and confirm tiles render in Airplane Mode.
-   - Switch modes (`High Accuracy` → `Balanced` → `Power Saver`), record a short walk with screen off for 30 s, stop recording, and export GPX/KML/CSV from **Saved Trails & Exports**.
+  # Windows PowerShell
+  [IO.File]::WriteAllBytes("debug.keystore", [Convert]::FromBase64String((Get-Content debug.keystore.base64 -Raw)))
+  ```
+- **OAuth Access:** In Google Cloud Console (**OAuth consent screen**), while status is **Testing**, ensure each team tester's Google email is listed under **Test users** (or publish the app to production).
+
+### Build & Verification Commands
+```bash
+# Verify Firestore security rules (requires Firebase Emulator on port 8085)
+FIRESTORE_EMULATOR_HOST="127.0.0.1:8085" node --test firestore.test.js
+
+# Compile unit tests and assemble Debug & Release APKs
+./gradlew testDebugUnitTest assembleDebug assembleRelease
+```
+*(In cloud CI shells, use `gradle` directly instead of `./gradlew`, and never commit local `local.properties` or raw `debug.keystore` binaries.)*

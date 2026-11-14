@@ -56,6 +56,5 @@ data class TrackerSettings(
     val keepScreenOn: Boolean = true,
     val showCellTowerPin: Boolean = true,
     val openCellIdApiKey: String = "",
-    val autoBalancedTestMode: Boolean = com.geotrace.BuildConfig.DEBUG,
     val geofenceNotificationEnabled: Boolean = false
 )

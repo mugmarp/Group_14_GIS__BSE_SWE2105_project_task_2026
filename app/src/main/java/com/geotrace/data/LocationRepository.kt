@@ -4,12 +4,14 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
 import com.geotrace.model.CellTowerInfo
+import com.geotrace.model.CoordinateFormat
 import com.geotrace.model.GeofenceAlert
 import com.geotrace.model.GeofenceCategory
 import com.geotrace.model.GeofenceZone
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineMapRegion
+import com.geotrace.model.SpeedUnit
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
 import kotlinx.coroutines.CoroutineScope
@@ -74,6 +76,55 @@ class LocationRepository(private val context: Context) {
         prefs.edit().putBoolean("geofence_notifications_enabled", enabled).apply()
     }
 
+    fun getSavedSpeedUnit(): SpeedUnit {
+        val raw = prefs.getString("speed_unit", null) ?: return SpeedUnit.KMH
+        return try { SpeedUnit.valueOf(raw) } catch (_: Exception) { SpeedUnit.KMH }
+    }
+
+    fun saveSpeedUnit(unit: SpeedUnit) {
+        prefs.edit().putString("speed_unit", unit.name).apply()
+    }
+
+    fun getSavedCoordinateFormat(): CoordinateFormat {
+        val raw = prefs.getString("coordinate_format", null) ?: return CoordinateFormat.DECIMAL
+        return try { CoordinateFormat.valueOf(raw) } catch (_: Exception) { CoordinateFormat.DECIMAL }
+    }
+
+    fun saveCoordinateFormat(format: CoordinateFormat) {
+        prefs.edit().putString("coordinate_format", format.name).apply()
+    }
+
+    fun getSavedShowAccuracyRing(): Boolean = prefs.getBoolean("show_accuracy_ring", true)
+
+    fun saveShowAccuracyRing(show: Boolean) {
+        prefs.edit().putBoolean("show_accuracy_ring", show).apply()
+    }
+
+    fun getSavedFollowUserLocation(): Boolean = prefs.getBoolean("follow_user_location", true)
+
+    fun saveFollowUserLocation(follow: Boolean) {
+        prefs.edit().putBoolean("follow_user_location", follow).apply()
+    }
+
+    fun getSavedKeepScreenOn(): Boolean = prefs.getBoolean("keep_screen_on", true)
+
+    fun saveKeepScreenOn(keepOn: Boolean) {
+        prefs.edit().putBoolean("keep_screen_on", keepOn).apply()
+    }
+
+    fun getSavedShowCellTowerPin(): Boolean = prefs.getBoolean("show_cell_tower_pin", true)
+
+    fun saveShowCellTowerPin(show: Boolean) {
+        prefs.edit().putBoolean("show_cell_tower_pin", show).apply()
+    }
+
+    fun getSavedJitterThreshold(): Float = prefs.getFloat("jitter_threshold_meters", 1.5f)
+
+    fun saveJitterThreshold(thresholdMeters: Float) {
+        jitterThresholdMeters = thresholdMeters
+        prefs.edit().putFloat("jitter_threshold_meters", thresholdMeters).apply()
+    }
+
     fun getSavedOpenCellIdApiKey(): String = prefs.getString("opencellid_api_key", "") ?: ""
 
     fun saveOpenCellIdApiKey(apiKey: String) {
@@ -100,11 +151,11 @@ class LocationRepository(private val context: Context) {
                 return TrackingMode.valueOf(saved)
             } catch (_: Exception) {}
         }
-        return if (com.geotrace.BuildConfig.DEBUG) TrackingMode.BALANCED else TrackingMode.HIGH_ACCURACY
+        return TrackingMode.HIGH_ACCURACY
     }
 
     @Volatile
-    var jitterThresholdMeters: Float = 1.5f
+    var jitterThresholdMeters: Float = getSavedJitterThreshold()
 
     @Volatile
     private var smoothedSpeedMps: Float = 0f
@@ -473,86 +524,7 @@ class LocationRepository(private val context: Context) {
             }
         }
         if (list.isEmpty()) {
-            // Seed comprehensive MUST (Mbarara University) & Safe Zones demonstration perimeters
-            val defaultZones = listOf(
-                GeofenceZone(
-                    id = "must_kihumuro_campus",
-                    name = "MUST Kihumuro Campus (FAST)",
-                    latitude = -0.5982,
-                    longitude = 30.6178,
-                    radiusMeters = 350f,
-                    category = GeofenceCategory.CAMPUS,
-                    colorHex = "#006948",
-                    alertOnEntry = true,
-                    alertOnExit = true
-                ),
-                GeofenceZone(
-                    id = "must_kihumuro_library",
-                    name = "MUST Kihumuro Main Library",
-                    latitude = -0.5976,
-                    longitude = 30.6185,
-                    radiusMeters = 100f,
-                    category = GeofenceCategory.LIBRARY,
-                    colorHex = "#0051D5",
-                    alertOnEntry = true,
-                    alertOnExit = true
-                ),
-                GeofenceZone(
-                    id = "must_kihumuro_hostels",
-                    name = "MUST Kihumuro Hostels Zone",
-                    latitude = -0.5995,
-                    longitude = 30.6155,
-                    radiusMeters = 250f,
-                    category = GeofenceCategory.HOSTEL,
-                    colorHex = "#7C3AED",
-                    alertOnEntry = true,
-                    alertOnExit = true
-                ),
-                GeofenceZone(
-                    id = "must_main_town",
-                    name = "MUST Main Town Campus",
-                    latitude = -0.6163,
-                    longitude = 30.6568,
-                    radiusMeters = 300f,
-                    category = GeofenceCategory.CAMPUS,
-                    colorHex = "#006948",
-                    alertOnEntry = true,
-                    alertOnExit = true
-                ),
-                GeofenceZone(
-                    id = "must_town_library",
-                    name = "MUST Town Campus Library",
-                    latitude = -0.6158,
-                    longitude = 30.6575,
-                    radiusMeters = 90f,
-                    category = GeofenceCategory.LIBRARY,
-                    colorHex = "#0051D5",
-                    alertOnEntry = true,
-                    alertOnExit = true
-                ),
-                GeofenceZone(
-                    id = "must_kakoba_hostels",
-                    name = "MUST Kakoba Student Hostels",
-                    latitude = -0.6120,
-                    longitude = 30.6620,
-                    radiusMeters = 250f,
-                    category = GeofenceCategory.HOSTEL,
-                    colorHex = "#7C3AED",
-                    alertOnEntry = true,
-                    alertOnExit = true
-                ),
-                GeofenceZone(
-                    id = "wandegeya_boda",
-                    name = "Wandegeya Boda Boda Stage",
-                    latitude = 0.3308,
-                    longitude = 32.5705,
-                    radiusMeters = 160f,
-                    category = GeofenceCategory.BODA_HOTSPOT,
-                    colorHex = "#D97706",
-                    alertOnEntry = true,
-                    alertOnExit = true
-                )
-            )
+            val defaultZones = buildDefaultSampleZones()
             val writeDb = dbHelper.writableDatabase
             for (z in defaultZones) {
                 val cv = ContentValues().apply {
@@ -573,6 +545,107 @@ class LocationRepository(private val context: Context) {
         } else {
             _geofenceZones.value = list
         }
+    }
+
+    private fun buildDefaultSampleZones(): List<GeofenceZone> = listOf(
+        GeofenceZone(
+            id = "must_kihumuro_campus",
+            name = "MUST Kihumuro Campus (FAST)",
+            latitude = -0.5982,
+            longitude = 30.6178,
+            radiusMeters = 350f,
+            category = GeofenceCategory.CAMPUS,
+            colorHex = "#006948",
+            alertOnEntry = true,
+            alertOnExit = true
+        ),
+        GeofenceZone(
+            id = "must_kihumuro_library",
+            name = "MUST Kihumuro Main Library",
+            latitude = -0.5976,
+            longitude = 30.6185,
+            radiusMeters = 100f,
+            category = GeofenceCategory.LIBRARY,
+            colorHex = "#0051D5",
+            alertOnEntry = true,
+            alertOnExit = true
+        ),
+        GeofenceZone(
+            id = "must_kihumuro_hostels",
+            name = "MUST Kihumuro Hostels Zone",
+            latitude = -0.5995,
+            longitude = 30.6155,
+            radiusMeters = 250f,
+            category = GeofenceCategory.HOSTEL,
+            colorHex = "#7C3AED",
+            alertOnEntry = true,
+            alertOnExit = true
+        ),
+        GeofenceZone(
+            id = "must_main_town",
+            name = "MUST Main Town Campus",
+            latitude = -0.6163,
+            longitude = 30.6568,
+            radiusMeters = 300f,
+            category = GeofenceCategory.CAMPUS,
+            colorHex = "#006948",
+            alertOnEntry = true,
+            alertOnExit = true
+        ),
+        GeofenceZone(
+            id = "must_town_library",
+            name = "MUST Town Campus Library",
+            latitude = -0.6158,
+            longitude = 30.6575,
+            radiusMeters = 90f,
+            category = GeofenceCategory.LIBRARY,
+            colorHex = "#0051D5",
+            alertOnEntry = true,
+            alertOnExit = true
+        ),
+        GeofenceZone(
+            id = "must_kakoba_hostels",
+            name = "MUST Kakoba Student Hostels",
+            latitude = -0.6075,
+            longitude = 30.6727,
+            radiusMeters = 300f,
+            category = GeofenceCategory.HOSTEL,
+            colorHex = "#7C3AED",
+            alertOnEntry = true,
+            alertOnExit = true
+        ),
+        GeofenceZone(
+            id = "wandegeya_boda",
+            name = "Wandegeya Boda Boda Stage",
+            latitude = 0.3308,
+            longitude = 32.5705,
+            radiusMeters = 160f,
+            category = GeofenceCategory.BODA_HOTSPOT,
+            colorHex = "#D97706",
+            alertOnEntry = true,
+            alertOnExit = true
+        )
+    )
+
+    suspend fun resetSampleGeofences() = withContext(Dispatchers.IO) {
+        val defaults = buildDefaultSampleZones()
+        val writeDb = dbHelper.writableDatabase
+        for (z in defaults) {
+            val cv = ContentValues().apply {
+                put("id", z.id)
+                put("name", z.name)
+                put("latitude", z.latitude)
+                put("longitude", z.longitude)
+                put("radius", z.radiusMeters)
+                put("category", z.category.name)
+                put("color_hex", z.colorHex)
+                put("alert_on_entry", if (z.alertOnEntry) 1 else 0)
+                put("alert_on_exit", if (z.alertOnExit) 1 else 0)
+                put("is_inside", 0)
+            }
+            writeDb.insertWithOnConflict(LocationDbHelper.TABLE_GEOFENCES, null, cv, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
+        }
+        loadGeofences()
     }
 
     suspend fun addGeofence(zone: GeofenceZone) = withContext(Dispatchers.IO) {

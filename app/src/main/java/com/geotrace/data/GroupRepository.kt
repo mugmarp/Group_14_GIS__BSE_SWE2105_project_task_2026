@@ -91,8 +91,44 @@ class GroupRepository(
     private val _firestoreError = MutableStateFlow<String?>(null)
     val firestoreError = _firestoreError.asStateFlow()
 
+    private val _isBackgroundProtectionEnabled = MutableStateFlow(
+        prefs.getBoolean("background_protection_enabled", true)
+    )
+    val isBackgroundProtectionEnabled = _isBackgroundProtectionEnabled.asStateFlow()
+
+    private val _isGhostMode = MutableStateFlow(
+        prefs.getBoolean("is_ghost_mode", false)
+    )
+    val isGhostMode = _isGhostMode.asStateFlow()
+
+    private val _personalDevices = MutableStateFlow<List<PersonalDevice>>(emptyList())
+    val personalDevices = _personalDevices.asStateFlow()
+
+    private val _lastSyncTimestampMs = MutableStateFlow<Long?>(null)
+    val lastSyncTimestampMs = _lastSyncTimestampMs.asStateFlow()
+
     fun clearFirestoreError() {
         _firestoreError.value = null
+    }
+
+    fun setBackgroundProtectionEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("background_protection_enabled", enabled).apply()
+        _isBackgroundProtectionEnabled.value = enabled
+    }
+
+    fun setGhostMode(enabled: Boolean) {
+        prefs.edit().putBoolean("is_ghost_mode", enabled).apply()
+        _isGhostMode.value = enabled
+    }
+
+    fun getSelectedGroupId(): String? = prefs.getString("selected_group_id", null)
+
+    fun saveSelectedGroupId(groupId: String?) {
+        prefs.edit().putString("selected_group_id", groupId).apply()
+    }
+
+    fun isBackgroundProtectionActiveAndSignedIn(): Boolean {
+        return _isBackgroundProtectionEnabled.value && auth.currentUser != null
     }
 
     private val discoveredEndpoints = ConcurrentHashMap<String, String>()
@@ -111,6 +147,20 @@ class GroupRepository(
     @Volatile
     private var lastHandledRingTimestampMs: Long = prefs.getLong("last_handled_ring_ms", 0L)
 
+    private var personalDevicesListener: ListenerRegistration? = null
+    private var personalDevicesListenerUid: String? = null
+    private val personalDevicesListenerLock = Any()
+
+    private val repoAuthListener = com.google.firebase.auth.FirebaseAuth.AuthStateListener { fbAuth ->
+        val uid = fbAuth.currentUser?.uid
+        if (uid != null) {
+            ensurePersonalDevicesListenerActive()
+        } else {
+            stopPersonalDevicesListener()
+            _personalDevices.value = emptyList()
+        }
+    }
+
     var onPeerConnectedCallback: ((String) -> Unit)? = null
 
     init {
@@ -118,6 +168,10 @@ class GroupRepository(
             p2pScope.launch {
                 clearRingCommandOnSelf()
             }
+        }
+        auth.addAuthStateListener(repoAuthListener)
+        if (auth.currentUser != null) {
+            ensurePersonalDevicesListenerActive()
         }
     }
 
@@ -363,6 +417,7 @@ class GroupRepository(
             )
 
             docRef.set(payload).await()
+            _lastSyncTimestampMs.value = System.currentTimeMillis()
 
             if (isSharingEnabled && (isP2PAdvertising || isP2PDiscovering || connectedEndpoints.isNotEmpty())) {
                 broadcastP2PLocation(location, displayName, batteryPercent)
@@ -439,6 +494,7 @@ class GroupRepository(
             )
             // Merge so another phone's pending ringRequestedAt trigger is preserved
             docRef.set(payload, SetOptions.merge()).await()
+            _lastSyncTimestampMs.value = System.currentTimeMillis()
             Result.success(Unit)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to update personal device doc: ${e.message}")
@@ -446,51 +502,110 @@ class GroupRepository(
         }
     }
 
-    fun observePersonalDevices(): Flow<List<PersonalDevice>> = callbackFlow {
-        val uid = auth.currentUser?.uid
-        if (uid == null) {
-            trySend(emptyList())
-            close()
-            return@callbackFlow
+    /**
+     * Publishes device fleet location + active tracking group telemetry safely from either foreground UI
+     * or 24/7 background protection / trail service.
+     */
+    suspend fun syncDeviceAndGroupTelemetry(
+        location: LocationPoint,
+        trackingModeName: String,
+        explicitGroupId: String? = getSelectedGroupId()
+    ): Boolean {
+        val uid = auth.currentUser?.uid ?: return false
+        val (batteryPercent, isCharging) = readBatteryInfo()
+        val displayName = getCurrentUserDisplayName()
+        var anySucceeded = false
+
+        val fleetRes = publishPersonalDevice(
+            location = location,
+            batteryPercent = batteryPercent,
+            isCharging = isCharging,
+            trackingMode = trackingModeName
+        )
+        if (fleetRes.isSuccess) anySucceeded = true
+
+        if (!explicitGroupId.isNullOrBlank()) {
+            val colorPalette = listOf("#2563EB", "#059669", "#D97706", "#DC2626", "#7C3AED", "#DB2777", "#0891B2")
+            val avatarColor = colorPalette[(uid.hashCode() and 0x7fffffff) % colorPalette.size]
+            val groupRes = publishLocation(
+                groupId = explicitGroupId,
+                location = location,
+                displayName = displayName,
+                avatarColor = avatarColor,
+                batteryPercent = batteryPercent,
+                isCharging = isCharging,
+                trackingMode = trackingModeName,
+                isSharingEnabled = !_isGhostMode.value
+            )
+            if (groupRes.isSuccess) anySucceeded = true
         }
+        return anySucceeded
+    }
 
-        val listener: ListenerRegistration = db.collection("users").document(uid)
-            .collection("devices")
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    Log.e(TAG, "Error observing personal devices: ${error.code} ${error.message}", error)
-                    _firestoreError.value = "My Devices sync error (${error.code.name}): ${error.localizedMessage ?: "Check Firestore rules deployment"}"
-                    trySend(emptyList())
-                    close()
-                    return@addSnapshotListener
-                }
+    fun readBatteryInfo(): Pair<Int, Boolean> {
+        return try {
+            val intentFilter = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)
+            val batteryStatus = context.registerReceiver(null, intentFilter)
+            val level = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: 100
+            val scale = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: 100
+            val batteryPct = if (scale > 0) (level * 100 / scale) else 100
+            val status = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
+            val isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                status == android.os.BatteryManager.BATTERY_STATUS_FULL
+            Pair(batteryPct, isCharging)
+        } catch (_: Exception) {
+            Pair(100, false)
+        }
+    }
 
-                val devices = snapshot?.documents?.mapNotNull { doc ->
-                    try {
-                        doc.toObject(PersonalDevice::class.java)?.copy(id = doc.id)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Skipping malformed personal device doc ${doc.id}: ${e.message}")
-                        null
+    fun ensurePersonalDevicesListenerActive() {
+        val uid = auth.currentUser?.uid ?: return
+        synchronized(personalDevicesListenerLock) {
+            if (personalDevicesListener != null && personalDevicesListenerUid == uid) return
+            personalDevicesListener?.remove()
+            personalDevicesListenerUid = uid
+            personalDevicesListener = db.collection("users").document(uid)
+                .collection("devices")
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        Log.e(TAG, "Error observing personal devices: ${error.code} ${error.message}", error)
+                        _firestoreError.value = "My Devices sync error (${error.code.name}): ${error.localizedMessage ?: "Check Firestore rules deployment"}"
+                        return@addSnapshotListener
                     }
-                } ?: emptyList()
 
-                // Check if another one of our devices requested THIS device to ring
-                val selfDoc = devices.firstOrNull { it.deviceId == currentDeviceId || it.id == currentDeviceId }
-                if (selfDoc != null) {
-                    val reqAt = selfDoc.ringRequestedAt
-                    val ageMs = System.currentTimeMillis() - reqAt
-                    if (reqAt > 0L && reqAt > lastHandledRingTimestampMs && ageMs in -5000L..60_000L) {
-                        lastHandledRingTimestampMs = reqAt
-                        prefs.edit().putLong("last_handled_ring_ms", reqAt).apply()
-                        val caller = selfDoc.ringRequestedBy.ifBlank { "Your GeoTrace Device" }
-                        FindDeviceAlarmManager.startRinging(context, caller)
+                    val devices = snapshot?.documents?.mapNotNull { doc ->
+                        try {
+                            doc.toObject(PersonalDevice::class.java)?.copy(id = doc.id)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Skipping malformed personal device doc ${doc.id}: ${e.message}")
+                            null
+                        }
+                    } ?: emptyList()
+
+                    _personalDevices.value = devices
+
+                    // Check if another one of our devices requested THIS device to ring
+                    val selfDoc = devices.firstOrNull { it.deviceId == currentDeviceId || it.id == currentDeviceId }
+                    if (selfDoc != null) {
+                        val reqAt = selfDoc.ringRequestedAt
+                        val ageMs = System.currentTimeMillis() - reqAt
+                        if (reqAt > 0L && reqAt > lastHandledRingTimestampMs && ageMs in -5000L..60_000L) {
+                            lastHandledRingTimestampMs = reqAt
+                            prefs.edit().putLong("last_handled_ring_ms", reqAt).apply()
+                            val caller = selfDoc.ringRequestedBy.ifBlank { "Your GeoTrace Device" }
+                            FindDeviceAlarmManager.startRinging(context, caller)
+                        }
                     }
                 }
+        }
+    }
 
-                trySend(devices)
-            }
-
-        awaitClose { listener.remove() }
+    private fun stopPersonalDevicesListener() {
+        synchronized(personalDevicesListenerLock) {
+            personalDevicesListener?.remove()
+            personalDevicesListener = null
+            personalDevicesListenerUid = null
+        }
     }
 
     suspend fun sendRingCommandToDevice(targetDeviceId: String): Result<Unit> {

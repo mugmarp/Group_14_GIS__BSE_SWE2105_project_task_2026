@@ -53,13 +53,38 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     private val _settings = MutableStateFlow(
         com.geotrace.model.TrackerSettings(
+            speedUnit = repository.getSavedSpeedUnit(),
+            coordinateFormat = repository.getSavedCoordinateFormat(),
             mapTileType = repository.getSavedMapTileType(),
+            showAccuracyRing = repository.getSavedShowAccuracyRing(),
+            followUserLocation = repository.getSavedFollowUserLocation(),
+            stationaryJitterThresholdMeters = repository.getSavedJitterThreshold(),
+            keepScreenOn = repository.getSavedKeepScreenOn(),
+            showCellTowerPin = repository.getSavedShowCellTowerPin(),
             openCellIdApiKey = repository.getSavedOpenCellIdApiKey(),
-            autoBalancedTestMode = repository.trackingMode.value == TrackingMode.BALANCED,
             geofenceNotificationEnabled = repository.geofenceNotificationsEnabled
         )
     )
     val settings: StateFlow<com.geotrace.model.TrackerSettings> = _settings.asStateFlow()
+
+    data class GeofencePickDraft(
+        val isNew: Boolean,
+        val zoneId: String? = null,
+        val name: String,
+        val radiusMeters: Float,
+        val category: GeofenceCategory,
+        val colorHex: String,
+        val alertOnEntry: Boolean,
+        val alertOnExit: Boolean,
+        val latitude: Double,
+        val longitude: Double
+    )
+
+    private val _geofencePickDraft = MutableStateFlow<GeofencePickDraft?>(null)
+    val geofencePickDraft: StateFlow<GeofencePickDraft?> = _geofencePickDraft.asStateFlow()
+
+    private val _isPickingGeofenceCenter = MutableStateFlow(false)
+    val isPickingGeofenceCenter: StateFlow<Boolean> = _isPickingGeofenceCenter.asStateFlow()
 
     val geofenceManager = com.geotrace.service.GeofenceManager(application)
     val geofenceApiStatus: StateFlow<com.geotrace.service.GeofenceApiStatus> = geofenceManager.apiStatus
@@ -280,7 +305,6 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             stopStandbyLocationUpdates()
             repository.setTrackingMode(mode)
-            _settings.value = _settings.value.copy(autoBalancedTestMode = (mode == TrackingMode.BALANCED))
             repository.startNewSession(sessionName, mode)
             LocationForegroundService.startService(getApplication(), mode)
         }
@@ -289,7 +313,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun stopTracking() {
         viewModelScope.launch {
             repository.stopCurrentSession()
-            LocationForegroundService.stopService(getApplication())
+            LocationForegroundService.stopTrackingOrDowngrade(getApplication())
             startStandbyLocationUpdates()
         }
     }
@@ -303,7 +327,6 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun setTrackingMode(mode: TrackingMode) {
         viewModelScope.launch {
             repository.setTrackingMode(mode)
-            _settings.value = _settings.value.copy(autoBalancedTestMode = (mode == TrackingMode.BALANCED))
             startStandbyCellPolling()
             if (mode == TrackingMode.POWER_SAVER) {
                 refreshCellTowers()
@@ -364,6 +387,34 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun resetSampleGeofences() {
+        viewModelScope.launch {
+            repository.resetSampleGeofences()
+        }
+    }
+
+    fun beginMapPickForGeofence(draft: GeofencePickDraft) {
+        _geofencePickDraft.value = draft
+        _isPickingGeofenceCenter.value = true
+    }
+
+    fun completeMapPick(lat: Double, lon: Double) {
+        val current = _geofencePickDraft.value
+        if (current != null) {
+            _geofencePickDraft.value = current.copy(latitude = lat, longitude = lon)
+        }
+        _isPickingGeofenceCenter.value = false
+    }
+
+    fun cancelMapPick() {
+        _isPickingGeofenceCenter.value = false
+        _geofencePickDraft.value = null
+    }
+
+    fun clearGeofencePickDraft() {
+        _geofencePickDraft.value = null
+    }
+
     fun deleteSession(sessionId: String) {
         viewModelScope.launch {
             repository.deleteSession(sessionId)
@@ -400,10 +451,12 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun updateSpeedUnit(unit: com.geotrace.model.SpeedUnit) {
+        repository.saveSpeedUnit(unit)
         _settings.value = _settings.value.copy(speedUnit = unit)
     }
 
     fun updateCoordinateFormat(format: com.geotrace.model.CoordinateFormat) {
+        repository.saveCoordinateFormat(format)
         _settings.value = _settings.value.copy(coordinateFormat = format)
     }
 
@@ -478,16 +531,18 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun toggleAccuracyRing(show: Boolean) {
+        repository.saveShowAccuracyRing(show)
         _settings.value = _settings.value.copy(showAccuracyRing = show)
     }
 
     fun toggleFollowUser(follow: Boolean) {
+        repository.saveFollowUserLocation(follow)
         _settings.value = _settings.value.copy(followUserLocation = follow)
     }
 
     fun updateJitterThreshold(thresholdMeters: Float) {
+        repository.saveJitterThreshold(thresholdMeters)
         _settings.value = _settings.value.copy(stationaryJitterThresholdMeters = thresholdMeters)
-        repository.jitterThresholdMeters = thresholdMeters
     }
 
     fun calculateDistanceMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
@@ -495,10 +550,12 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun toggleKeepScreenOn(keepOn: Boolean) {
+        repository.saveKeepScreenOn(keepOn)
         _settings.value = _settings.value.copy(keepScreenOn = keepOn)
     }
 
     fun toggleCellTowerPin(show: Boolean) {
+        repository.saveShowCellTowerPin(show)
         _settings.value = _settings.value.copy(showCellTowerPin = show)
     }
 
@@ -506,11 +563,6 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         repository.saveOpenCellIdApiKey(apiKey)
         _settings.value = _settings.value.copy(openCellIdApiKey = apiKey)
         refreshCellTowers()
-    }
-
-    fun toggleAutoBalancedTestMode(enabled: Boolean) {
-        _settings.value = _settings.value.copy(autoBalancedTestMode = enabled)
-        setTrackingMode(if (enabled) TrackingMode.BALANCED else TrackingMode.HIGH_ACCURACY)
     }
 
     fun toggleGeofenceNotifications(enabled: Boolean) {

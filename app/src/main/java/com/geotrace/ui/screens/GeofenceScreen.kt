@@ -28,8 +28,10 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.AlertDialog
@@ -52,6 +54,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -90,6 +93,7 @@ data class ZonePreset(
 fun GeofenceScreen(
     viewModel: TrackerViewModel,
     onNavigateBack: () -> Unit,
+    onPickOnMap: ((TrackerViewModel.GeofencePickDraft) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onNavigateBack)
@@ -105,10 +109,40 @@ fun GeofenceScreen(
     val filteredJitterCount by viewModel.filteredJitterCount.collectAsState()
     val settings by viewModel.settings.collectAsState()
     val geofenceApiStatus by viewModel.geofenceApiStatus.collectAsState()
+    val geofencePickDraft by viewModel.geofencePickDraft.collectAsState()
+    val isPickingGeofenceCenter by viewModel.isPickingGeofenceCenter.collectAsState()
 
     var showAddDialog by remember { mutableStateOf(false) }
     var editingZone by remember { mutableStateOf<GeofenceZone?>(null) }
     var preloadedPreset by remember { mutableStateOf<ZonePreset?>(null) }
+    var draftOverrides by remember { mutableStateOf<TrackerViewModel.GeofencePickDraft?>(null) }
+
+    LaunchedEffect(geofencePickDraft, isPickingGeofenceCenter) {
+        val draft = geofencePickDraft
+        if (!isPickingGeofenceCenter && draft != null) {
+            draftOverrides = draft
+            preloadedPreset = null
+            if (draft.isNew) {
+                editingZone = null
+                showAddDialog = true
+            } else {
+                showAddDialog = false
+                editingZone = zones.firstOrNull { it.id == draft.zoneId }
+                    ?: GeofenceZone(
+                        id = draft.zoneId ?: UUID.randomUUID().toString(),
+                        name = draft.name,
+                        latitude = draft.latitude,
+                        longitude = draft.longitude,
+                        radiusMeters = draft.radiusMeters,
+                        category = draft.category,
+                        colorHex = draft.colorHex,
+                        alertOnEntry = draft.alertOnEntry,
+                        alertOnExit = draft.alertOnExit
+                    )
+            }
+            viewModel.clearGeofencePickDraft()
+        }
+    }
 
     val backgroundPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
@@ -216,9 +250,9 @@ fun GeofenceScreen(
             ),
             ZonePreset(
                 name = "MUST Kakoba Student Hostels",
-                latitude = -0.6120,
-                longitude = 30.6620,
-                radiusMeters = 250f,
+                latitude = -0.6075,
+                longitude = 30.6727,
+                radiusMeters = 300f,
                 category = GeofenceCategory.HOSTEL,
                 colorHex = "#7C3AED",
                 description = "Kakoba Residential Hostels & Quarters"
@@ -289,6 +323,7 @@ fun GeofenceScreen(
                     Button(
                         onClick = {
                             preloadedPreset = null
+                            draftOverrides = null
                             showAddDialog = true
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -584,17 +619,29 @@ fun GeofenceScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "MUST Quick Presets (1-Tap Setup)",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.primary
-                        )
-                        Text(
-                            text = "Tap to configure",
-                            fontSize = 10.sp,
-                            color = colorScheme.onSurfaceVariant
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "MUST Quick Presets (1-Tap Setup)",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.primary
+                            )
+                            Text(
+                                text = "Tip: Use 'Pick on Map' in any zone editor on Satellite view to align pins with rooftops.",
+                                fontSize = 10.sp,
+                                color = colorScheme.onSurfaceVariant,
+                                lineHeight = 13.sp
+                            )
+                        }
+                        TextButton(
+                            onClick = { viewModel.resetSampleGeofences() },
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.testTag("reset_sample_zones_btn")
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Reset Sample Zones", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
 
                     Spacer(modifier = Modifier.height(6.dp))
@@ -606,7 +653,7 @@ fun GeofenceScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         presets.forEach { preset ->
-                            val alreadyExists = zones.any { it.name.contains(preset.name.split(" ").first()) }
+                            val alreadyExists = zones.any { it.name.equals(preset.name, ignoreCase = true) }
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
                                 color = colorScheme.surface,
@@ -616,6 +663,7 @@ fun GeofenceScreen(
                                 ),
                                 modifier = Modifier.clickable {
                                     preloadedPreset = preset
+                                    draftOverrides = null
                                     showAddDialog = true
                                 }
                             ) {
@@ -728,25 +776,38 @@ fun GeofenceScreen(
                 GeofenceZoneCard(
                     zone = zone,
                     distanceMeters = distMeters,
-                    onEdit = { editingZone = zone },
+                    onEdit = {
+                        draftOverrides = null
+                        editingZone = zone
+                    },
                     onDelete = { viewModel.deleteGeofence(zone.id) }
                 )
             }
         }
     }
 
-    // Dialog for Adding a Zone (with optional preset)
+    // Dialog for Adding a Zone (with optional preset or map-picked draft)
     if (showAddDialog) {
         val initialPreset = preloadedPreset
         GeofenceEditDialog(
             isNew = true,
             initialZone = null,
             preset = initialPreset,
+            draft = draftOverrides,
             currentLat = currentLocation?.latitude ?: -0.5982,
             currentLon = currentLocation?.longitude ?: 30.6178,
+            onPickOnMap = if (onPickOnMap != null) {
+                { draft ->
+                    showAddDialog = false
+                    preloadedPreset = null
+                    draftOverrides = null
+                    onPickOnMap(draft)
+                }
+            } else null,
             onDismiss = {
                 showAddDialog = false
                 preloadedPreset = null
+                draftOverrides = null
             },
             onSave = { updated ->
                 viewModel.addGeofence(
@@ -759,6 +820,7 @@ fun GeofenceScreen(
                 )
                 showAddDialog = false
                 preloadedPreset = null
+                draftOverrides = null
             }
         )
     }
@@ -769,12 +831,24 @@ fun GeofenceScreen(
             isNew = false,
             initialZone = zoneToEdit,
             preset = null,
+            draft = draftOverrides,
             currentLat = currentLocation?.latitude ?: zoneToEdit.latitude,
             currentLon = currentLocation?.longitude ?: zoneToEdit.longitude,
-            onDismiss = { editingZone = null },
+            onPickOnMap = if (onPickOnMap != null) {
+                { draft ->
+                    editingZone = null
+                    draftOverrides = null
+                    onPickOnMap(draft)
+                }
+            } else null,
+            onDismiss = {
+                editingZone = null
+                draftOverrides = null
+            },
             onSave = { updated ->
                 viewModel.updateGeofence(updated)
                 editingZone = null
+                draftOverrides = null
             }
         )
     }
@@ -873,8 +947,10 @@ private fun GeofenceZoneCard(
                         fontWeight = FontWeight.SemiBold,
                         color = colorScheme.onSurface
                     )
+                    val latDir = if (zone.latitude >= 0) "N" else "S"
+                    val lonDir = if (zone.longitude >= 0) "E" else "W"
                     Text(
-                        text = "Coord: ${String.format(Locale.US, "%.4f", zone.latitude)}°N, ${String.format(Locale.US, "%.4f", zone.longitude)}°E",
+                        text = "Coord: ${String.format(Locale.US, "%.4f", kotlin.math.abs(zone.latitude))}°$latDir, ${String.format(Locale.US, "%.4f", kotlin.math.abs(zone.longitude))}°$lonDir",
                         fontSize = 10.sp,
                         color = colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace
@@ -966,8 +1042,10 @@ private fun GeofenceEditDialog(
     isNew: Boolean,
     initialZone: GeofenceZone?,
     preset: ZonePreset?,
+    draft: TrackerViewModel.GeofencePickDraft? = null,
     currentLat: Double,
     currentLon: Double,
+    onPickOnMap: ((TrackerViewModel.GeofencePickDraft) -> Unit)? = null,
     onDismiss: () -> Unit,
     onSave: (GeofenceZone) -> Unit
 ) {
@@ -975,43 +1053,43 @@ private fun GeofenceEditDialog(
 
     var name by remember {
         mutableStateOf(
-            preset?.name ?: initialZone?.name ?: "MUST Safe Perimeter"
+            draft?.name ?: preset?.name ?: initialZone?.name ?: "MUST Safe Perimeter"
         )
     }
 
     var radius by remember {
         mutableFloatStateOf(
-            preset?.radiusMeters ?: initialZone?.radiusMeters ?: 250f
+            draft?.radiusMeters ?: preset?.radiusMeters ?: initialZone?.radiusMeters ?: 250f
         )
     }
 
     var selectedCategory by remember {
         mutableStateOf(
-            preset?.category ?: initialZone?.category ?: GeofenceCategory.CAMPUS
+            draft?.category ?: preset?.category ?: initialZone?.category ?: GeofenceCategory.CAMPUS
         )
     }
 
     var lat by remember {
         mutableStateOf(
-            String.format(Locale.US, "%.5f", preset?.latitude ?: initialZone?.latitude ?: currentLat)
+            String.format(Locale.US, "%.5f", draft?.latitude ?: preset?.latitude ?: initialZone?.latitude ?: currentLat)
         )
     }
 
     var lon by remember {
         mutableStateOf(
-            String.format(Locale.US, "%.5f", preset?.longitude ?: initialZone?.longitude ?: currentLon)
+            String.format(Locale.US, "%.5f", draft?.longitude ?: preset?.longitude ?: initialZone?.longitude ?: currentLon)
         )
     }
 
     var alertOnEntry by remember {
-        mutableStateOf(initialZone?.alertOnEntry ?: true)
+        mutableStateOf(draft?.alertOnEntry ?: initialZone?.alertOnEntry ?: true)
     }
 
     var alertOnExit by remember {
-        mutableStateOf(initialZone?.alertOnExit ?: true)
+        mutableStateOf(draft?.alertOnExit ?: initialZone?.alertOnExit ?: true)
     }
 
-    val colorHex = preset?.colorHex ?: initialZone?.colorHex ?: selectedCategory.defaultColor
+    val colorHex = draft?.colorHex ?: preset?.colorHex ?: initialZone?.colorHex ?: selectedCategory.defaultColor
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1157,17 +1235,48 @@ private fun GeofenceEditDialog(
                                 color = colorScheme.onSurfaceVariant
                             )
 
-                            TextButton(
-                                onClick = {
-                                    lat = String.format(Locale.US, "%.5f", currentLat)
-                                    lon = String.format(Locale.US, "%.5f", currentLon)
-                                },
-                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                                modifier = Modifier.height(26.dp)
-                            ) {
-                                Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(12.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Use GPS Fix", fontSize = 10.sp)
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                if (onPickOnMap != null) {
+                                    TextButton(
+                                        onClick = {
+                                            val curLat = lat.toDoubleOrNull() ?: currentLat
+                                            val curLon = lon.toDoubleOrNull() ?: currentLon
+                                            onPickOnMap(
+                                                TrackerViewModel.GeofencePickDraft(
+                                                    isNew = isNew,
+                                                    zoneId = initialZone?.id,
+                                                    name = name,
+                                                    radiusMeters = radius,
+                                                    category = selectedCategory,
+                                                    colorHex = colorHex,
+                                                    alertOnEntry = alertOnEntry,
+                                                    alertOnExit = alertOnExit,
+                                                    latitude = curLat,
+                                                    longitude = curLon
+                                                )
+                                            )
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                        modifier = Modifier.height(28.dp).testTag("pick_geofence_map_btn")
+                                    ) {
+                                        Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(12.dp))
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text("Pick on Map", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                TextButton(
+                                    onClick = {
+                                        lat = String.format(Locale.US, "%.5f", currentLat)
+                                        lon = String.format(Locale.US, "%.5f", currentLon)
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                                    modifier = Modifier.height(28.dp)
+                                ) {
+                                    Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(12.dp))
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text("Use GPS Fix", fontSize = 10.sp)
+                                }
                             }
                         }
 

@@ -21,9 +21,9 @@ Field trials are partitioned across three distinct physical environments within 
 
 | Site Identifier | Location / Environment | Physical Characteristics | Expected Multipath / Obstruction | Target PLMNs |
 | :--- | :--- | :--- | :--- | :--- |
-| **Site A: Open Sky** | MUST Kihumuro Campus Sports Grounds (`0.6171°S, 30.6548°E`) | Unobstructed 360° celestial horizon, zero canopy | Baseline: Multipath < 2.5m, DOP < 1.4, RSSI > -65 dBm | MTN 4G / Airtel 4G |
-| **Site B: Urban Canyon** | FAST Engineering Building & Kihumuro Lecture Halls | Multi-story reinforced concrete, rebar shielding, stairwells | Moderate: Multipath reflections, GNSS accuracy degradation (8–25m) | MTN LTE / Airtel UMTS |
-| **Site C: Deep Indoor** | Kihumuro Hostel Basements / Indoor Corridors | Complete celestial obscuration, below-grade structures | Severe: Complete GNSS denial, cellular fallback to LAC/CID triangulation | MTN 3G/2G, Airtel 3G |
+| **Site A: Open Sky** | MUST Town Campus Open Grounds (`0.6171°S, 30.6548°E`) | Unobstructed 360° celestial horizon, zero canopy | Baseline: Multipath < 2.5m, DOP < 1.4, RSSI > -65 dBm | MTN 4G / Airtel 4G |
+| **Site B: Urban Canyon** | FAST Engineering Building & Kihumuro Lecture Halls (`0.5982°S, 30.6178°E`) | Multi-story reinforced concrete, rebar shielding, stairwells | Moderate: Multipath reflections, GNSS accuracy degradation (8–25m) | MTN LTE / Airtel UMTS |
+| **Site C: Deep Indoor** | Kihumuro / Kakoba Hostel Basements & Corridors | Complete celestial obscuration, below-grade structures | Severe: Complete GNSS denial, cellular fallback to LAC/CID lookup | MTN 3G/2G, Airtel 3G |
 
 ---
 
@@ -33,7 +33,7 @@ During each test run, the evaluators record telemetry at 1-second intervals via 
 
 ### Metric Definitions
 - **$E_{GPS}$ (GNSS Accuracy):** Estimated horizontal radial error (meters) reported by the GNSS provider at 68% confidence.
-- **$D_{error}$ (Euclidean Drift):** Radial difference between reported coordinate and surveyor-grade benchmark coordinates established at MUST Kihumuro geodetic marks:
+- **$D_{error}$ (Euclidean Drift):** Radial difference between reported coordinate and surveyor-grade benchmark coordinates established at MUST geodetic marks:
   $$D_{error} = 2R \arcsin\left(\sqrt{\sin^2\left(\frac{\Delta \phi}{2}\right) + \cos(\phi_1)\cos(\phi_2)\sin^2\left(\frac{\Delta \lambda}{2}\right)}\right)$$
 - **Stationary Deadband Filter Efficiency ($J_{rejected}$):**
   $$J_{rejected} = \sum_{k=1}^{N} d(P_k, P_{k-1}) \quad \forall d(P_k, P_{k-1}) < T_{threshold}$$
@@ -46,8 +46,8 @@ During each test run, the evaluators record telemetry at 1-second intervals via 
 +----------------------------------------------------------------------------------------------------+
 | SWE2105 FIELD RUN LOG SHEET                                                                        |
 | Date: _______________   Time: __________   Evaluator: ____________________________________________ |
-| Site: [ ] A (Kihumuro Grounds)  [ ] B (FAST Block)  [ ] C (Hostel Indoor)                          |
-| Tracking Mode: [ ] High Accuracy (1s)  [ ] Balanced (5s)  [ ] Power Saver (30s fused / 10s cell) |
+| Site: [ ] A (Town Open Grounds)  [ ] B (Kihumuro FAST Block)  [ ] C (Hostel Indoor)                |
+| Tracking Mode: [ ] High Accuracy (1s)  [ ] Balanced (5s)  [ ] Power Saver (10s cell telemetry)     |
 | Network Operator: [ ] MTN Uganda (641-10)  [ ] Airtel Uganda (641-22)                              |
 +-------+--------------+---------------+----------+--------+---------+-----------+---------+---------+
 | Sec   | GNSS Lat/Lon | Accuracy (m)  | Speed    | MCC/MNC| LAC/TAC | Cell ID   | RSSI    | Tower   |
@@ -75,8 +75,8 @@ During each test run, the evaluators record telemetry at 1-second intervals via 
 3. Verify that **Cellular Hub** displays live hardware radio IDs (`MCC`, `MNC`, `LAC/TAC`, `CID/NCI`, `dBm`) via `TelephonyManager` for `641-10` (MTN) or `641-22` (Airtel). Note: GeoTrace uses zero synthetic/bundled tower coordinates—live coordinates require an OpenCellID API key.
 
 ### Phase 2: Open Sky Static Baseline Trial (Site A)
-1. Mount the device on a survey tripod at benchmark station `MUST-KH-01` (`-0.617120, 30.654810`).
-2. Press **Start Recording** with session name `"MUST_Kihumuro_OpenSky_Baseline"`.
+1. Mount the device on a survey tripod at benchmark station `MUST-TOWN-01` (`-0.617120, 30.654810`).
+2. Press **Start Recording** with session name `"MUST_OpenSky_Baseline"`.
 3. Keep device stationary for 10 minutes (600 epochs).
 4. **Validation Criteria:**
    - Raw GNSS jitter must be suppressed by the deadband filter ($J_{rejected} > 0\text{ m}$ displayed on Settings counter).

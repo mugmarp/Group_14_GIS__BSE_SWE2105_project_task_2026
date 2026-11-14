@@ -47,8 +47,18 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     private val authListener = FirebaseAuth.AuthStateListener { fbAuth ->
         val wasSignedOut = _currentUser.value == null
         _currentUser.value = fbAuth.currentUser
-        if (wasSignedOut && fbAuth.currentUser != null) {
-            triggerImmediateBroadcast()
+        if (fbAuth.currentUser != null) {
+            repository.ensurePersonalDevicesListenerActive()
+            if (repository.isBackgroundProtectionEnabled.value && locationRepository.activeSession.value == null) {
+                com.geotrace.service.LocationForegroundService.startProtectionMode(getApplication())
+            }
+            if (wasSignedOut) {
+                triggerImmediateBroadcast()
+            }
+        } else {
+            if (locationRepository.activeSession.value == null) {
+                com.geotrace.service.LocationForegroundService.stopProtectionMode(getApplication())
+            }
         }
     }
 
@@ -66,19 +76,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val personalDevices: StateFlow<List<PersonalDevice>> = _currentUser
-        .flatMapLatest { user ->
-            if (user != null) {
-                repository.observePersonalDevices().catch { e ->
-                    _errorMessage.value = e.localizedMessage ?: "Failed to sync personal devices."
-                    emit(emptyList())
-                }
-            } else {
-                flowOf(emptyList())
-            }
-        }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val personalDevices: StateFlow<List<PersonalDevice>> = repository.personalDevices
 
     private val _activeGroup = MutableStateFlow<Group?>(null)
     val activeGroup: StateFlow<Group?> = _activeGroup.asStateFlow()
@@ -104,8 +102,8 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     val isRingingAlarm: StateFlow<Boolean> = FindDeviceAlarmManager.isRinging
     val ringCallerName: StateFlow<String?> = FindDeviceAlarmManager.ringCallerName
 
-    private val _isGhostMode = MutableStateFlow(false)
-    val isGhostMode: StateFlow<Boolean> = _isGhostMode.asStateFlow()
+    val isGhostMode: StateFlow<Boolean> = repository.isGhostMode
+    val isBackgroundProtectionEnabled: StateFlow<Boolean> = repository.isBackgroundProtectionEnabled
 
     private val _isP2PEnabled = MutableStateFlow(false)
     val isP2PEnabled: StateFlow<Boolean> = _isP2PEnabled.asStateFlow()
@@ -116,8 +114,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
-    private val _lastSyncTimestampMs = MutableStateFlow<Long?>(null)
-    val lastSyncTimestampMs: StateFlow<Long?> = _lastSyncTimestampMs.asStateFlow()
+    val lastSyncTimestampMs: StateFlow<Long?> = repository.lastSyncTimestampMs
 
     private val _mapFocusTarget = MutableStateFlow<MapFocusTarget?>(null)
     val mapFocusTarget: StateFlow<MapFocusTarget?> = _mapFocusTarget.asStateFlow()
@@ -133,6 +130,9 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         auth.addAuthStateListener(authListener)
+        if (auth.currentUser != null && repository.isBackgroundProtectionEnabled.value && locationRepository.activeSession.value == null) {
+            com.geotrace.service.LocationForegroundService.startProtectionMode(getApplication())
+        }
         repository.onPeerConnectedCallback = { _ ->
             triggerImmediateBroadcast()
         }
@@ -140,12 +140,18 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         observeLocationForP2P()
         viewModelScope.launch {
             userGroups.collect { groups ->
+                val savedId = repository.getSelectedGroupId()
                 val current = _activeGroup.value
-                if (current != null) {
-                    val refreshed = groups.firstOrNull { it.id == current.id }
-                    _activeGroup.value = refreshed ?: groups.firstOrNull()
-                } else if (groups.isNotEmpty()) {
-                    _activeGroup.value = groups.first()
+                val nextGroup = when {
+                    current != null -> groups.firstOrNull { it.id == current.id }
+                        ?: savedId?.let { id -> groups.firstOrNull { it.id == id } }
+                        ?: groups.firstOrNull()
+                    savedId != null -> groups.firstOrNull { it.id == savedId } ?: groups.firstOrNull()
+                    else -> groups.firstOrNull()
+                }
+                _activeGroup.value = nextGroup
+                repository.saveSelectedGroupId(nextGroup?.id)
+                if (current == null && nextGroup != null) {
                     triggerImmediateBroadcast()
                 }
             }
@@ -163,7 +169,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     private fun observeLocationForP2P() {
         viewModelScope.launch {
             locationRepository.currentLocation.collect { loc ->
-                if (loc != null && _isP2PEnabled.value && !_isGhostMode.value) {
+                if (loc != null && _isP2PEnabled.value && !isGhostMode.value) {
                     val now = System.currentTimeMillis()
                     if (now - lastP2PLocationPushMs >= 4_000L) {
                         lastP2PLocationPushMs = now
@@ -188,6 +194,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectGroup(group: Group?) {
         _activeGroup.value = group
+        repository.saveSelectedGroupId(group?.id)
         if (group != null) {
             _statusMessage.value = "Active Group: ${group.name}"
             triggerImmediateBroadcast()
@@ -209,6 +216,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
             result.onSuccess { created ->
                 _activeGroup.value = created
+                repository.saveSelectedGroupId(created.id)
                 _statusMessage.value = "Group '${created.name}' created! Share code: ${created.inviteCode}"
                 triggerImmediateBroadcast()
             }.onFailure { e ->
@@ -232,6 +240,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
             result.onSuccess { joined ->
                 _activeGroup.value = joined
+                repository.saveSelectedGroupId(joined.id)
                 _statusMessage.value = "Joined group '${joined.name}'!"
                 triggerImmediateBroadcast()
             }.onFailure { e ->
@@ -249,6 +258,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
             result.onSuccess {
                 _activeGroup.value = null
+                repository.saveSelectedGroupId(null)
                 _statusMessage.value = "Left '${group.name}'."
             }.onFailure { e ->
                 _errorMessage.value = e.localizedMessage ?: "Failed to leave group."
@@ -265,6 +275,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
             result.onSuccess {
                 _activeGroup.value = null
+                repository.saveSelectedGroupId(null)
                 _statusMessage.value = "Deleted group '${group.name}'."
             }.onFailure { e ->
                 _errorMessage.value = e.localizedMessage ?: "Failed to delete group."
@@ -273,10 +284,38 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun toggleGhostMode() {
-        val newMode = !_isGhostMode.value
-        _isGhostMode.value = newMode
-        _statusMessage.value = if (newMode) "Ghost Mode ON: Location sharing paused" else "Ghost Mode OFF: Live sharing resumed"
+        val newMode = !isGhostMode.value
+        repository.setGhostMode(newMode)
+        _statusMessage.value = if (newMode) "Ghost Mode ON: Group sharing paused" else "Ghost Mode OFF: Live group sharing resumed"
+        if (repository.isBackgroundProtectionActiveAndSignedIn() && locationRepository.activeSession.value == null) {
+            com.geotrace.service.LocationForegroundService.startProtectionMode(getApplication())
+        }
         triggerImmediateBroadcast()
+    }
+
+    fun toggleBackgroundProtection(enabled: Boolean) {
+        repository.setBackgroundProtectionEnabled(enabled)
+        if (enabled) {
+            if (auth.currentUser != null) {
+                val started = com.geotrace.service.LocationForegroundService.startProtectionMode(getApplication())
+                _statusMessage.value = if (started) {
+                    "24/7 Protection ON: This device stays locatable & ringable even when closed."
+                } else {
+                    "24/7 Protection saved — grant Location permission to start background listener."
+                }
+            } else {
+                _statusMessage.value = "24/7 Protection enabled — sign in with Google to activate."
+            }
+        } else {
+            com.geotrace.service.LocationForegroundService.stopProtectionMode(getApplication())
+            _statusMessage.value = "24/7 Protection OFF: Background sync & Remote Ring paused when closed."
+        }
+    }
+
+    fun ensureProtectionStartedIfEligible() {
+        if (repository.isBackgroundProtectionActiveAndSignedIn() && locationRepository.activeSession.value == null) {
+            com.geotrace.service.LocationForegroundService.startProtectionMode(getApplication())
+        }
     }
 
     fun updateOfflineCallsign(callsign: String) {
@@ -296,7 +335,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         if (newEnabled) {
             val myName = repository.getCurrentUserDisplayName()
             repository.startP2PMesh(myName)
-            _statusMessage.value = if (_isGhostMode.value) {
+            _statusMessage.value = if (isGhostMode.value) {
                 "Off-Grid P2P Finder ON (Ghost Mode: coordinates hidden)"
             } else {
                 "Off-Grid P2P Device Finder ON"
@@ -420,7 +459,8 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                 val group = _activeGroup.value
                 val p2pActive = _isP2PEnabled.value
                 val isSignedIn = auth.currentUser != null
-                if (loc != null && (group != null || p2pActive || isSignedIn)) {
+                val elapsedSinceLastSync = System.currentTimeMillis() - (repository.lastSyncTimestampMs.value ?: 0L)
+                if (loc != null && (group != null || p2pActive || isSignedIn) && elapsedSinceLastSync >= 9_000L) {
                     performBroadcast(group, loc)
                 }
 
@@ -471,18 +511,15 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                 batteryPercent = batteryLevel,
                 isCharging = isCharging,
                 trackingMode = mode,
-                isSharingEnabled = !_isGhostMode.value
+                isSharingEnabled = !isGhostMode.value
             )
             if (groupRes.isSuccess) anySucceeded = true
-        } else if (_isP2PEnabled.value && !_isGhostMode.value) {
+        } else if (_isP2PEnabled.value && !isGhostMode.value) {
             repository.broadcastP2PLocationDirect(loc, displayName, batteryLevel)
             lastP2PLocationPushMs = System.currentTimeMillis()
             anySucceeded = true
         }
 
-        if (anySucceeded) {
-            _lastSyncTimestampMs.value = System.currentTimeMillis()
-        }
         return anySucceeded
     }
 

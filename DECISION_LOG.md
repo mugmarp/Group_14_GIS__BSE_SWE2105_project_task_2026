@@ -202,15 +202,15 @@ When recording a decision, use this format:
 3. **Foreground Service with User-Selectable Tiers (`HIGH_ACCURACY`, `BALANCED`, `POWER_SAVER`) + WakeLock**
 4. **WorkManager periodic** — Not real-time (~15 min minimum interval)
 
-**Decision:** **Foreground Service (`LocationForegroundService.kt`) with `PARTIAL_WAKE_LOCK` and three selectable tiers**: `High Accuracy (1s GNSS)`, `Balanced Fused (5s)`, and `Power Saver (10s cell telemetry)`. Debug builds default to `Balanced` via `autoBalancedTestMode` to preserve tester battery.
+**Decision:** **Foreground Service (`LocationForegroundService.kt`) with `PARTIAL_WAKE_LOCK` during active trail recording, three user-selectable tiers (`High Accuracy (1s GNSS)`, `Balanced Fused (5s)`, `Power Saver (Cell Only)`), and a lightweight 24/7 Protection Mode (`ACTION_START_PROTECTION`)**.
 
-**Rationale:** Gives evaluators full high-frequency precision when needed while preventing desk jitter and battery drain during prolonged testing or low-battery conditions.
+**Rationale:** Gives evaluators full high-frequency precision when recording trails while keeping idle background locating & remote ring alerts battery-light (`PRIORITY_BALANCED_POWER_ACCURACY`, 60s/25m, no WakeLock). An earlier debug-only `autoBalancedTestMode` override was discarded so user-selected modes and persisted preferences remain 100% predictable across Debug and Release builds.
 
-**Consequences:** Telemetry engine tracks active tier transitions cleanly and cancels superseded cell diagnostics jobs.
+**Consequences:** Telemetry engine tracks active tier transitions cleanly, persists all `TrackerSettings` in `geotrace_prefs`, downgrades seamlessly from `REC` to 24/7 Protection Mode on stop, and auto-restarts Protection Mode on `BOOT_COMPLETED` when signed in with background location granted.
 
 **Action Items:**
-- [x] Implement `LocationForegroundService` with `PARTIAL_WAKE_LOCK` and three tracking modes
-- [x] Expose tier selector chip on Map HUD and `autoBalancedTestMode` in Settings
+- [x] Implement `LocationForegroundService` with `PARTIAL_WAKE_LOCK` (active recording) and lightweight 24/7 Protection Mode (idle)
+- [x] Expose tier selector chip on Map HUD and persist all `TrackerSettings` in `LocationRepository`
 - [x] Guard `LocationRepository.recordLocation` & `stopCurrentSession` against `"cellular"` ↔ GNSS transition spikes
 
 ---
@@ -229,11 +229,12 @@ When recording a decision, use this format:
 
 **Rationale:** Gives evaluators Google Maps-grade Satellite/Hybrid aerial clarity and true off-grid map regions with zero external API keys, zero `OutOfMemoryError` estimation risk, and full respect for OpenStreetMap tile usage policy.
 
-**Consequences:** Users can pre-cache `Map View`, `2 km`, or `5 km` zones around field sites before entering dead zones; switching layers automatically clamps zoom (`newSource.maximumZoomLevel`) so Topo (Z17 max) never renders blank tiles.
+**Consequences:** Users can pre-cache `Map View`, `2 km`, or `5 km` zones around field sites before entering dead zones; switching layers automatically clamps zoom (`newSource.maximumZoomLevel`) so Topo (Z17 max) never renders blank tiles; users can also tap Esri Satellite directly via `"Pick on Map"` inside `GeofenceEditDialog` to align Safe Zone centers with exact rooftops and gates.
 
 **Action Items:**
 - [x] Implement `MapTileSources.kt` (Esri Satellite, Carto Hybrid overlay, OpenTopoMap, Humanitarian HOT)
 - [x] Implement `OfflineMapManager.kt`, `OfflineMapsDialog.kt`, and `LocationDbHelper` `v3` `offline_map_regions`
+- [x] Implement `"Pick on Map"` geofence coordinate picker and `Reset Sample Zones`
 
 ---
 
@@ -246,8 +247,8 @@ When recording a decision, use this format:
 | 2026-11-04 | Map Library | **Accepted** (osmdroid + 512 MB internal cache) |
 | 2026-11-04 | Local Database | **Accepted** (SQLite `LocationDbHelper` v3 + DataStore) |
 | 2026-11-09 | Backend / Sync | **Accepted** (Cloud Firestore + Credential Manager + Nearby P2P) |
-| 2026-11-08 | Background Tracking Strategy | **Accepted** (`LocationForegroundService` 3-tier modes + transition guard) |
-| 2026-11-14 | Multi-Layer & Offline Cartography | **Accepted** (Esri Satellite, Hybrid Overlay, HOT, `OfflineMapManager`) |
+| 2026-11-08 | Background Tracking Strategy | **Accepted** (`LocationForegroundService` 3-tier `REC` + 24/7 Protection Mode) |
+| 2026-11-14 | Multi-Layer & Offline Cartography | **Accepted** (Esri Satellite, Hybrid Overlay, HOT, `OfflineMapManager`, Map Pick) |
 
 ---
 

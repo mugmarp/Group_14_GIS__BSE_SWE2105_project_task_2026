@@ -31,18 +31,26 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         val isEnabled = prefs.getBoolean("geofence_notifications_enabled", false)
 
         if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
-            if (!isEnabled) return
+            val protectionEnabled = prefs.getBoolean("background_protection_enabled", true)
+            if (!isEnabled && !protectionEnabled) return
             val pendingResult = goAsync()
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     val app = context.applicationContext as? LocationTrackerApp
-                    if (app != null) {
+                    if (isEnabled && app != null) {
                         app.repository.loadGeofences()
                         val zones = app.repository.geofenceZones.value
                         GeofenceManager(context.applicationContext).syncGeofences(zones, enabled = true)
                     }
+                    if (protectionEnabled &&
+                        com.google.firebase.auth.FirebaseAuth.getInstance().currentUser != null &&
+                        LocationForegroundService.hasLocationPermission(context.applicationContext) &&
+                        LocationForegroundService.hasBackgroundLocationPermission(context.applicationContext)
+                    ) {
+                        LocationForegroundService.startProtectionMode(context.applicationContext)
+                    }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Failed to re-register geofences on boot: ${e.message}")
+                    Log.w(TAG, "Failed to restore services on boot: ${e.message}")
                 } finally {
                     pendingResult.finish()
                 }

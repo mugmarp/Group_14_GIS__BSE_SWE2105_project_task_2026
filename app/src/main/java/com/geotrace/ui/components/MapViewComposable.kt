@@ -59,6 +59,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.geotrace.model.LocationPoint
 import com.geotrace.ui.theme.LocalCustomColors
+import androidx.compose.runtime.rememberUpdatedState
+import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.events.MapListener
 import org.osmdroid.events.ScrollEvent
 import org.osmdroid.events.ZoomEvent
@@ -66,6 +68,7 @@ import org.osmdroid.tileprovider.MapTileProviderBasic
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
@@ -91,10 +94,14 @@ fun MapViewComposable(
     onToggleCellTowerPin: ((Boolean) -> Unit)? = null,
     onOpenOfflineMaps: (() -> Unit)? = null,
     onMapBoundsChanged: ((BoundingBox) -> Unit)? = null,
+    isMapPickMode: Boolean = false,
+    onMapCoordinatePicked: ((Double, Double) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val currentOnMapCoordinatePicked by rememberUpdatedState(onMapCoordinatePicked)
+    val currentIsMapPickMode by rememberUpdatedState(isMapPickMode)
 
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
@@ -543,6 +550,22 @@ fun MapViewComposable(
                         icon = peerIcon
                     }
                     map.overlays.add(peerMarker)
+                }
+
+                // 7. Interactive single-tap coordinate picker when choosing Safe Zone center on Map
+                if (isMapPickMode) {
+                    val eventsOverlay = MapEventsOverlay(object : MapEventsReceiver {
+                        override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
+                            if (currentIsMapPickMode && p != null) {
+                                currentOnMapCoordinatePicked?.invoke(p.latitude, p.longitude)
+                                return true
+                            }
+                            return false
+                        }
+
+                        override fun longPressHelper(p: GeoPoint?): Boolean = false
+                    })
+                    map.overlays.add(0, eventsOverlay)
                 }
 
                 map.invalidate()

@@ -93,6 +93,7 @@ fun MapScreen(
     groupViewModel: GroupViewModel? = null,
     onOpenMenu: () -> Unit,
     onNavigateToGroups: (() -> Unit)? = null,
+    onReturnToGeofence: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -109,6 +110,8 @@ fun MapScreen(
     val allCellTowers by viewModel.allCellTowerLocations.collectAsState()
     val offlineMapRegions by viewModel.offlineMapRegions.collectAsState()
     val currentMapBounds by viewModel.currentMapBoundingBox.collectAsState()
+    val isPickingGeofenceCenter by viewModel.isPickingGeofenceCenter.collectAsState()
+    val geofencePickDraft by viewModel.geofencePickDraft.collectAsState()
 
     val activeGroup by (groupViewModel?.activeGroup ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
     val groupMembers by (groupViewModel?.groupMembers ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsState()
@@ -166,6 +169,12 @@ fun MapScreen(
             },
             onMapBoundsChanged = { bounds ->
                 viewModel.updateMapViewportBounds(bounds)
+            },
+            isMapPickMode = isPickingGeofenceCenter,
+            onMapCoordinatePicked = { lat, lon ->
+                groupViewModel?.clearMapFocusTarget()
+                viewModel.completeMapPick(lat, lon)
+                onReturnToGeofence?.invoke()
             }
         )
 
@@ -598,7 +607,53 @@ fun MapScreen(
                 }
             }
 
-            if (mapFocusTarget != null) {
+            if (isPickingGeofenceCenter) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = colorScheme.tertiaryContainer,
+                    shadowElevation = 4.dp,
+                    border = BorderStroke(1.5.dp, colorScheme.tertiary),
+                    modifier = Modifier.testTag("map_pick_geofence_banner")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "TAP MAP TO SET SAFE ZONE CENTER",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onTertiaryContainer
+                            )
+                            Text(
+                                text = "Target: ${geofencePickDraft?.name ?: "Safe Zone"} • Switch to Satellite for rooftop precision",
+                                fontSize = 10.sp,
+                                color = colorScheme.onTertiaryContainer.copy(alpha = 0.85f)
+                            )
+                        }
+                        TextButton(
+                            onClick = {
+                                groupViewModel?.clearMapFocusTarget()
+                                viewModel.cancelMapPick()
+                                onReturnToGeofence?.invoke()
+                            },
+                            modifier = Modifier.testTag("cancel_map_pick_btn")
+                        ) {
+                            Text(
+                                text = "Cancel",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.error
+                            )
+                        }
+                    }
+                }
+            } else if (mapFocusTarget != null) {
                 val target = mapFocusTarget!!
                 Spacer(modifier = Modifier.height(6.dp))
                 Surface(
@@ -650,7 +705,7 @@ fun MapScreen(
         }
 
         // Bottom Multi-Device, Group Member & Offline P2P Peer Carousel (Situational Awareness)
-        if ((activeGroup != null && groupMembers.isNotEmpty()) || remotePersonalDevices.isNotEmpty() || nearbyPeers.isNotEmpty()) {
+        if (!isPickingGeofenceCenter && ((activeGroup != null && groupMembers.isNotEmpty()) || remotePersonalDevices.isNotEmpty() || nearbyPeers.isNotEmpty())) {
             val memberScrollState = rememberScrollState()
             Row(
                 modifier = Modifier
@@ -887,7 +942,7 @@ fun MapScreen(
         }
 
         // Floating Recording Action Pill (Centered, Compact, Clean Spatial Viewport)
-        if (activeSession == null) {
+        if (!isPickingGeofenceCenter && activeSession == null) {
             Surface(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
@@ -943,7 +998,7 @@ fun MapScreen(
                     }
                 }
             }
-        } else {
+        } else if (!isPickingGeofenceCenter) {
             // Floating Recording Action Pill (Active Recording State)
             Surface(
                 modifier = Modifier
@@ -1047,10 +1102,10 @@ fun MapScreen(
 
                     ProfileOptionCard(
                         title = "Balanced Fused (5 sec)",
-                        subtitle = "Hybrid GNSS + Network duty cycling (Testing default)",
+                        subtitle = "Hybrid GNSS + Network duty cycling",
                         accuracy = "±5 – 15m",
                         power = "~8 mA",
-                        description = "Cycles positioning receiver every 5s. Ideal for testing and conserving battery while logging full trails.",
+                        description = "Cycles positioning receiver every 5s. Ideal for conserving battery while logging full trails.",
                         isSelected = trackingMode == TrackingMode.BALANCED,
                         color = colorScheme.secondary,
                         onClick = {

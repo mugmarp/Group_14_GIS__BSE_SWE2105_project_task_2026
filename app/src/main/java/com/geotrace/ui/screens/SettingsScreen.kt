@@ -503,46 +503,6 @@ fun SettingsScreen(
             }
         }
 
-        // Section: Testing & Power Optimization (QA & Field Testing)
-        item {
-            SettingsCard(
-                title = "TESTING & POWER OPTIMIZATION",
-                icon = { Icon(Icons.Default.Tune, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(18.dp)) },
-                accentColor = colorScheme.primary
-            ) {
-                SettingToggleRow(
-                    title = "Auto-Balanced GPS for Testing",
-                    subtitle = "Defaults tracking to 5s balanced updates (saves battery & reduces stationary jitter during QA/testing). Full trails and coordinates are still recorded to SQLite.",
-                    checked = settings.autoBalancedTestMode,
-                    onCheckedChange = { viewModel.toggleAutoBalancedTestMode(it) }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                androidx.compose.material3.Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = customColors.surfaceContainerLow,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier.padding(10.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (settings.autoBalancedTestMode)
-                                "⚡ Active Default: 5s interval (~8 mA) — Preserves battery for prolonged QA testing while logging complete breadcrumbs."
-                            else
-                                "🎯 Standard Default: 1s continuous GNSS satellite lock (~25 mA high accuracy precision).",
-                            fontSize = 11.sp,
-                            color = if (settings.autoBalancedTestMode) colorScheme.primary else colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-            }
-        }
-
         // Section 4: Cellular Positioning Engine (OpenCellID Uganda Live Tower Pinning)
         item {
             var apiKeyInput by androidx.compose.runtime.remember(settings.openCellIdApiKey) {

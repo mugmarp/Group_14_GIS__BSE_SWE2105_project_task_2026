@@ -141,13 +141,20 @@ fun MainAppScreen(
     val isRingingAlarm by groupViewModel.isRingingAlarm.collectAsState()
     val ringCallerName by groupViewModel.ringCallerName.collectAsState()
 
-    // Handle Back Press: Close menu bottom sheet if open, or return to Map screen
+    // Handle Back Press: Close menu bottom sheet if open, cancel geofence pick if active, or return to Map screen
+    val isPickingGeofenceCenter by viewModel.isPickingGeofenceCenter.collectAsState()
     if (showMenuSheet) {
         BackHandler {
             scope.launch {
                 sheetState.hide()
                 showMenuSheet = false
             }
+        }
+    } else if (currentScreen == Screen.MAP && isPickingGeofenceCenter) {
+        BackHandler {
+            groupViewModel.clearMapFocusTarget()
+            viewModel.cancelMapPick()
+            currentScreen = Screen.GEOFENCE
         }
     } else if (currentScreen != Screen.MAP) {
         BackHandler {
@@ -169,6 +176,7 @@ fun MainAppScreen(
         if (fineGranted || coarseGranted) {
             viewModel.startStandbyLocationUpdates()
             viewModel.refreshCellTowers()
+            groupViewModel.ensureProtectionStartedIfEligible()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
@@ -195,6 +203,7 @@ fun MainAppScreen(
                 viewModel.startStandbyLocationUpdates()
             }
             viewModel.refreshCellTowers()
+            groupViewModel.ensureProtectionStartedIfEligible()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
@@ -291,6 +300,9 @@ fun MainAppScreen(
                     },
                     onNavigateToGroups = {
                         currentScreen = Screen.GROUPS
+                    },
+                    onReturnToGeofence = {
+                        currentScreen = Screen.GEOFENCE
                     }
                 )
                 Screen.CELLULAR -> CellularDiagnosticScreen(
@@ -314,7 +326,21 @@ fun MainAppScreen(
                 )
                 Screen.GEOFENCE -> GeofenceScreen(
                     viewModel = viewModel,
-                    onNavigateBack = { currentScreen = Screen.MAP }
+                    onNavigateBack = { currentScreen = Screen.MAP },
+                    onPickOnMap = { draft ->
+                        viewModel.toggleFollowUser(false)
+                        viewModel.beginMapPickForGeofence(draft)
+                        groupViewModel.focusMapOnTarget(
+                            com.geotrace.model.MapFocusTarget(
+                                id = draft.zoneId ?: "draft_pick",
+                                label = draft.name,
+                                latitude = draft.latitude,
+                                longitude = draft.longitude,
+                                subtitle = "Tap exact rooftop or gate to update coordinates"
+                            )
+                        )
+                        currentScreen = Screen.MAP
+                    }
                 )
                 Screen.HISTORY -> HistoryScreen(
                     viewModel = viewModel,
