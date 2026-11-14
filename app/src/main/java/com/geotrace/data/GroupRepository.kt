@@ -88,6 +88,13 @@ class GroupRepository(
     private val _offlineCallsign = MutableStateFlow(loadOrInitOfflineCallsign())
     val offlineCallsign = _offlineCallsign.asStateFlow()
 
+    private val _firestoreError = MutableStateFlow<String?>(null)
+    val firestoreError = _firestoreError.asStateFlow()
+
+    fun clearFirestoreError() {
+        _firestoreError.value = null
+    }
+
     private val discoveredEndpoints = ConcurrentHashMap<String, String>()
     private val pendingConnections = ConcurrentHashMap.newKeySet<String>()
     private val connectedEndpoints = ConcurrentHashMap<String, String>()
@@ -157,13 +164,13 @@ class GroupRepository(
     fun getCurrentUserDisplayName(): String {
         val customDevice = _offlineCallsign.value.takeIf { it.isNotBlank() }
         val accountName = auth.currentUser?.displayName?.takeIf { it.isNotBlank() }
-            ?: auth.currentUser?.email?.substringBefore("@")
-        return when {
-            !customDevice.isNullOrBlank() && !accountName.isNullOrBlank() -> customDevice
+            ?: auth.currentUser?.email?.substringBefore("@")?.takeIf { it.isNotBlank() }
+        val raw = when {
             !customDevice.isNullOrBlank() -> customDevice
             !accountName.isNullOrBlank() -> accountName
             else -> "GeoTrace Device"
         }
+        return raw.take(50)
     }
 
     /**
@@ -248,12 +255,19 @@ class GroupRepository(
             .whereArrayContains("memberIds", uid)
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
-                    Log.e(TAG, "Error observing user groups: ${error.message}")
-                    close(error)
+                    Log.e(TAG, "Error observing user groups: ${error.code} ${error.message}", error)
+                    _firestoreError.value = "Cloud groups sync error (${error.code.name}): ${error.localizedMessage ?: "Check connection & Firestore rules"}"
+                    trySend(emptyList())
+                    close()
                     return@addSnapshotListener
                 }
                 val groups = snapshot?.documents?.mapNotNull { doc ->
-                    doc.toObject(Group::class.java)?.copy(id = doc.id)
+                    try {
+                        doc.toObject(Group::class.java)?.copy(id = doc.id)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Skipping malformed group doc ${doc.id}: ${e.message}")
+                        null
+                    }
                 } ?: emptyList()
                 trySend(groups)
             }
@@ -348,12 +362,19 @@ class GroupRepository(
             .collection("live_locations")
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
-                    Log.e(TAG, "Error observing group locations: ${error.message}")
-                    close(error)
+                    Log.e(TAG, "Error observing group locations: ${error.code} ${error.message}", error)
+                    _firestoreError.value = "Group location sync error (${error.code.name}): ${error.localizedMessage ?: "Unavailable"}"
+                    trySend(emptyList())
+                    close()
                     return@addSnapshotListener
                 }
                 val locations = snapshot?.documents?.mapNotNull { doc ->
-                    doc.toObject(MemberLocation::class.java)?.copy(id = doc.id)
+                    try {
+                        doc.toObject(MemberLocation::class.java)?.copy(id = doc.id)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Skipping malformed member location doc ${doc.id}: ${e.message}")
+                        null
+                    }
                 }?.filter { it.isSharingEnabled } ?: emptyList()
 
                 trySend(locations)
@@ -416,13 +437,20 @@ class GroupRepository(
             .collection("devices")
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
-                    Log.e(TAG, "Error observing personal devices: ${error.message}")
-                    close(error)
+                    Log.e(TAG, "Error observing personal devices: ${error.code} ${error.message}", error)
+                    _firestoreError.value = "My Devices sync error (${error.code.name}): ${error.localizedMessage ?: "Check Firestore rules deployment"}"
+                    trySend(emptyList())
+                    close()
                     return@addSnapshotListener
                 }
 
                 val devices = snapshot?.documents?.mapNotNull { doc ->
-                    doc.toObject(PersonalDevice::class.java)?.copy(id = doc.id)
+                    try {
+                        doc.toObject(PersonalDevice::class.java)?.copy(id = doc.id)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Skipping malformed personal device doc ${doc.id}: ${e.message}")
+                        null
+                    }
                 } ?: emptyList()
 
                 // Check if another one of our devices requested THIS device to ring

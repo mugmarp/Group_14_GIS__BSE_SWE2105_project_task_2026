@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
@@ -43,20 +44,38 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     val currentUser: StateFlow<FirebaseUser?> = _currentUser.asStateFlow()
 
     private val authListener = FirebaseAuth.AuthStateListener { fbAuth ->
+        val wasSignedOut = _currentUser.value == null
         _currentUser.value = fbAuth.currentUser
+        if (wasSignedOut && fbAuth.currentUser != null) {
+            triggerImmediateBroadcast()
+        }
     }
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val userGroups: StateFlow<List<Group>> = _currentUser
         .flatMapLatest { user ->
-            if (user != null) repository.observeUserGroups() else flowOf(emptyList())
+            if (user != null) {
+                repository.observeUserGroups().catch { e ->
+                    _errorMessage.value = e.localizedMessage ?: "Failed to sync tracking groups."
+                    emit(emptyList())
+                }
+            } else {
+                flowOf(emptyList())
+            }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val personalDevices: StateFlow<List<PersonalDevice>> = _currentUser
         .flatMapLatest { user ->
-            if (user != null) repository.observePersonalDevices() else flowOf(emptyList())
+            if (user != null) {
+                repository.observePersonalDevices().catch { e ->
+                    _errorMessage.value = e.localizedMessage ?: "Failed to sync personal devices."
+                    emit(emptyList())
+                }
+            } else {
+                flowOf(emptyList())
+            }
         }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
@@ -67,7 +86,10 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     val groupMembers: StateFlow<List<MemberLocation>> = _activeGroup
         .flatMapLatest { group ->
             if (group != null) {
-                repository.observeGroupLocations(group.id)
+                repository.observeGroupLocations(group.id).catch { e ->
+                    _errorMessage.value = e.localizedMessage ?: "Failed to load group member locations."
+                    emit(emptyList())
+                }
             } else {
                 flowOf(emptyList())
             }
@@ -111,6 +133,14 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                 if (_activeGroup.value == null && groups.isNotEmpty()) {
                     _activeGroup.value = groups.first()
                     triggerImmediateBroadcast()
+                }
+            }
+        }
+        viewModelScope.launch {
+            repository.firestoreError.collect { err ->
+                if (!err.isNullOrBlank()) {
+                    _errorMessage.value = err
+                    repository.clearFirestoreError()
                 }
             }
         }
@@ -325,7 +355,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val colorPalette = listOf("#2563EB", "#059669", "#D97706", "#DC2626", "#7C3AED", "#DB2777", "#0891B2")
-        val avatarColor = colorPalette[Math.abs((auth.currentUser?.uid ?: "").hashCode()) % colorPalette.size]
+        val avatarColor = colorPalette[((auth.currentUser?.uid ?: "").hashCode() and 0x7fffffff) % colorPalette.size]
 
         if (group != null) {
             repository.publishLocation(

@@ -64,6 +64,7 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -87,6 +88,7 @@ import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.GetCredentialInterruptedException
 import androidx.credentials.exceptions.NoCredentialException
 import com.geotrace.R
 import com.geotrace.model.Group
@@ -96,6 +98,7 @@ import com.geotrace.model.P2PPeer
 import com.geotrace.model.PersonalDevice
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.GroupViewModel
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.Companion.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
@@ -196,14 +199,18 @@ fun GroupScreen(
         }
     }
 
-    // Toast feedback
-    statusMessage?.let { msg ->
-        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-        groupViewModel.clearStatusMessage()
+    // Side-effect safe Toast feedback
+    LaunchedEffect(statusMessage) {
+        statusMessage?.let { msg ->
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            groupViewModel.clearStatusMessage()
+        }
     }
-    errorMessage?.let { err ->
-        Toast.makeText(context, err, Toast.LENGTH_LONG).show()
-        groupViewModel.clearErrorMessage()
+    LaunchedEffect(errorMessage) {
+        errorMessage?.let { err ->
+            Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+            groupViewModel.clearErrorMessage()
+        }
     }
 
     LazyColumn(
@@ -587,8 +594,10 @@ fun GroupScreen(
                                     .background(colorScheme.primary),
                                 contentAlignment = Alignment.Center
                             ) {
-                                val initial = (currentUser?.displayName ?: currentUser?.email ?: "U")
-                                    .firstOrNull()?.uppercase() ?: "U"
+                                val displayTitle = currentUser?.displayName?.takeIf { it.isNotBlank() }
+                                    ?: currentUser?.email?.takeIf { it.isNotBlank() }
+                                    ?: "Field Operator"
+                                val initial = displayTitle.firstOrNull()?.uppercase() ?: "U"
                                 Text(
                                     text = initial,
                                     color = colorScheme.onPrimary,
@@ -599,13 +608,15 @@ fun GroupScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
-                                    text = currentUser?.displayName ?: "Field Operator",
+                                    text = currentUser?.displayName?.takeIf { it.isNotBlank() } ?: "Field Operator",
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = colorScheme.onSurface
                                 )
                                 Text(
-                                    text = currentUser?.email ?: currentUser?.uid?.take(12) ?: "",
+                                    text = currentUser?.email?.takeIf { it.isNotBlank() }
+                                        ?: currentUser?.uid?.take(12)
+                                        ?: "",
                                     fontSize = 11.sp,
                                     color = colorScheme.onSurfaceVariant
                                 )
@@ -1452,7 +1463,7 @@ private tailrec fun Context.findActivity(): Activity? = when (this) {
     else -> null
 }
 
-// Credential Manager Google Sign-In Implementation
+// Credential Manager Google Sign-In Implementation with fallback & non-cancellable Firebase handoff
 private fun performGoogleSignIn(
     context: Context,
     scope: CoroutineScope,
@@ -1472,17 +1483,37 @@ private fun performGoogleSignIn(
         return
     }
 
-    val signInOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
-    val request = GetCredentialRequest.Builder().addCredentialOption(signInOption).build()
+    val signInWithGoogleOption = GetSignInWithGoogleOption.Builder(serverClientId = clientId).build()
+    val primaryRequest = GetCredentialRequest.Builder()
+        .addCredentialOption(signInWithGoogleOption)
+        .build()
 
     scope.launch {
         try {
-            val result = credentialManager.getCredential(activity, request)
+            val result = try {
+                credentialManager.getCredential(activity, primaryRequest)
+            } catch (interrupted: GetCredentialInterruptedException) {
+                Log.w("GroupScreen", "Primary CredentialManager interrupted, retrying once: ${interrupted.errorMessage}")
+                credentialManager.getCredential(activity, primaryRequest)
+            } catch (noCred: NoCredentialException) {
+                Log.w("GroupScreen", "GetSignInWithGoogleOption had no credential, falling back to GetGoogleIdOption: ${noCred.errorMessage}")
+                val googleIdOption = GetGoogleIdOption.Builder()
+                    .setFilterByAuthorizedAccounts(false)
+                    .setServerClientId(clientId)
+                    .build()
+                val fallbackRequest = GetCredentialRequest.Builder()
+                    .addCredentialOption(googleIdOption)
+                    .build()
+                credentialManager.getCredential(activity, fallbackRequest)
+            }
+
             val credential = result.credential
             if (credential is CustomCredential && credential.type == TYPE_GOOGLE_ID_TOKEN_CREDENTIAL) {
                 val googleIdToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
                 val authCredential = GoogleAuthProvider.getCredential(googleIdToken, null)
-                Firebase.auth.signInWithCredential(authCredential).await()
+                withContext(NonCancellable) {
+                    Firebase.auth.signInWithCredential(authCredential).await()
+                }
                 onSuccess()
             } else {
                 onError("Unexpected credential response type: ${credential.type}")
