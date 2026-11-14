@@ -131,6 +131,10 @@ class GroupRepository(
         return _isBackgroundProtectionEnabled.value && auth.currentUser != null
     }
 
+    private fun isValidCoordinate(lat: Double, lng: Double): Boolean {
+        return lat.isFinite() && lng.isFinite() && lat in -90.0..90.0 && lng in -180.0..180.0
+    }
+
     private val discoveredEndpoints = ConcurrentHashMap<String, String>()
     private val pendingConnections = ConcurrentHashMap.newKeySet<String>()
     private val connectedEndpoints = ConcurrentHashMap<String, String>()
@@ -451,7 +455,7 @@ class GroupRepository(
                         Log.w(TAG, "Skipping malformed member location doc ${doc.id}: ${e.message}")
                         null
                     }
-                }?.filter { it.isSharingEnabled } ?: emptyList()
+                }?.filter { it.isSharingEnabled && isValidCoordinate(it.latitude, it.longitude) } ?: emptyList()
 
                 trySend(locations)
             }
@@ -580,7 +584,7 @@ class GroupRepository(
                             Log.w(TAG, "Skipping malformed personal device doc ${doc.id}: ${e.message}")
                             null
                         }
-                    } ?: emptyList()
+                    }?.filter { isValidCoordinate(it.latitude, it.longitude) } ?: emptyList()
 
                     _personalDevices.value = devices
 
@@ -589,7 +593,7 @@ class GroupRepository(
                     if (selfDoc != null) {
                         val reqAt = selfDoc.ringRequestedAt
                         val ageMs = System.currentTimeMillis() - reqAt
-                        if (reqAt > 0L && reqAt > lastHandledRingTimestampMs && ageMs in -5000L..60_000L) {
+                        if (reqAt > 0L && reqAt > lastHandledRingTimestampMs && ageMs in -120_000L..120_000L) {
                             lastHandledRingTimestampMs = reqAt
                             prefs.edit().putLong("last_handled_ring_ms", reqAt).apply()
                             val caller = selfDoc.ringRequestedBy.ifBlank { "Your GeoTrace Device" }
@@ -966,7 +970,7 @@ class GroupRepository(
                     null
                 }
 
-                if (peer != null) {
+                if (peer != null && isValidCoordinate(peer.latitude, peer.longitude)) {
                     connectedEndpoints.putIfAbsent(endpointId, peer.displayName)
                     activePeers[endpointId] = peer
                     _nearbyPeers.value = activePeers.values.toList()

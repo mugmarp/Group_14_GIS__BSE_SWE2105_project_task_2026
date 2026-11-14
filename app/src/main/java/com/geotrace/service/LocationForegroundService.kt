@@ -53,6 +53,8 @@ class LocationForegroundService : Service() {
         const val ACTION_START_PROTECTION = "ACTION_START_PROTECTION"
         const val ACTION_STOP_PROTECTION = "ACTION_STOP_PROTECTION"
         const val EXTRA_MODE = "EXTRA_MODE"
+        const val EXTRA_PERSIST_DISABLE = "EXTRA_PERSIST_DISABLE"
+        const val EXTRA_STARTED_AS_FOREGROUND = "EXTRA_STARTED_AS_FOREGROUND"
 
         fun hasLocationPermission(context: Context): Boolean {
             val fine = ContextCompat.checkSelfPermission(
@@ -115,9 +117,10 @@ class LocationForegroundService : Service() {
             return safeStartForegroundService(context, intent)
         }
 
-        fun stopProtectionMode(context: Context) {
+        fun stopProtectionMode(context: Context, disablePreference: Boolean = true) {
             val intent = Intent(context, LocationForegroundService::class.java).apply {
                 action = ACTION_STOP_PROTECTION
+                putExtra(EXTRA_PERSIST_DISABLE, disablePreference)
             }
             try {
                 context.startService(intent)
@@ -133,6 +136,7 @@ class LocationForegroundService : Service() {
         private fun safeStartForegroundService(context: Context, intent: Intent): Boolean {
             return try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    intent.putExtra(EXTRA_STARTED_AS_FOREGROUND, true)
                     context.startForegroundService(intent)
                 } else {
                     context.startService(intent)
@@ -170,6 +174,7 @@ class LocationForegroundService : Service() {
         val app = application as LocationTrackerApp
         val repo = app.repository
         val groupRepo = app.groupRepository
+        val startedAsForeground = intent?.getBooleanExtra(EXTRA_STARTED_AS_FOREGROUND, false) == true
 
         when (intent?.action) {
             ACTION_START -> {
@@ -187,14 +192,26 @@ class LocationForegroundService : Service() {
                 if (isRecordingSession || repo.activeSession.value != null) {
                     ensureForeground(buildStatusNotification(mode))
                     requestLocationUpdates(mode)
+                } else if (isProtectionActive || (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this))) {
+                    ensureForeground(buildStatusNotification(mode))
+                } else {
+                    if (startedAsForeground && !isForegroundStarted && hasLocationPermission(this)) {
+                        ensureForeground(buildStatusNotification(mode))
+                    }
+                    stopForegroundAndSelf()
+                    return START_NOT_STICKY
                 }
             }
             ACTION_START_PROTECTION -> {
                 if (!groupRepo.isBackgroundProtectionActiveAndSignedIn() || !hasLocationPermission(this)) {
                     if (!isRecordingSession && repo.activeSession.value == null) {
+                        if (startedAsForeground && !isForegroundStarted && hasLocationPermission(this)) {
+                            ensureForeground(buildStatusNotification(currentMode))
+                        }
                         stopForegroundAndSelf()
                         return START_NOT_STICKY
                     }
+                    ensureForeground(buildStatusNotification(currentMode))
                     return START_STICKY
                 }
                 isProtectionActive = true
@@ -206,7 +223,10 @@ class LocationForegroundService : Service() {
                 }
             }
             ACTION_STOP_PROTECTION -> {
-                groupRepo.setBackgroundProtectionEnabled(false)
+                val persistDisable = intent.getBooleanExtra(EXTRA_PERSIST_DISABLE, true)
+                if (persistDisable) {
+                    groupRepo.setBackgroundProtectionEnabled(false)
+                }
                 isProtectionActive = false
                 protectionHeartbeatJob?.cancel()
                 protectionHeartbeatJob = null
@@ -273,12 +293,16 @@ class LocationForegroundService : Service() {
         requestProtectionLocationUpdates()
         startProtectionHeartbeat()
 
-        // Seed immediate device visibility using existing fix or lastLocation
+        // Seed immediate device visibility using existing fix or lastLocation (deduped against recent VM sync)
         serviceScope.launch {
+            val latestRepoSync = groupRepo.lastSyncTimestampMs.value ?: 0L
             val existing = repo.currentLocation.value
             if (existing != null) {
-                lastCloudSyncMs = System.currentTimeMillis()
-                groupRepo.syncDeviceAndGroupTelemetry(existing, repo.trackingMode.value.name)
+                val now = System.currentTimeMillis()
+                if (now - maxOf(lastCloudSyncMs, latestRepoSync) >= 10_000L) {
+                    lastCloudSyncMs = now
+                    groupRepo.syncDeviceAndGroupTelemetry(existing, repo.trackingMode.value.name)
+                }
             } else {
                 try {
                     fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
@@ -296,8 +320,12 @@ class LocationForegroundService : Service() {
                             )
                             serviceScope.launch {
                                 repo.recordLocation(point)
-                                lastCloudSyncMs = System.currentTimeMillis()
-                                groupRepo.syncDeviceAndGroupTelemetry(point, repo.trackingMode.value.name)
+                                val now = System.currentTimeMillis()
+                                val latest = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
+                                if (now - latest >= 10_000L) {
+                                    lastCloudSyncMs = now
+                                    groupRepo.syncDeviceAndGroupTelemetry(point, repo.trackingMode.value.name)
+                                }
                             }
                         }
                     }
@@ -478,7 +506,8 @@ class LocationForegroundService : Service() {
             if (groupRepo.getCurrentUserId() != null) {
                 val throttleMs = if (isRecordingSession || activeSession != null) 15_000L else 45_000L
                 val now = System.currentTimeMillis()
-                if (now - lastCloudSyncMs >= throttleMs) {
+                val latestSync = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
+                if (now - latestSync >= throttleMs) {
                     lastCloudSyncMs = now
                     groupRepo.syncDeviceAndGroupTelemetry(point, repo.trackingMode.value.name)
                 }
@@ -510,7 +539,8 @@ class LocationForegroundService : Service() {
                 if (isRecordingSession || repo.activeSession.value != null) continue
                 val loc = repo.currentLocation.value ?: continue
                 val now = System.currentTimeMillis()
-                if (now - lastCloudSyncMs >= 85_000L) {
+                val latestSync = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
+                if (now - latestSync >= 85_000L) {
                     lastCloudSyncMs = now
                     groupRepo.syncDeviceAndGroupTelemetry(loc, repo.trackingMode.value.name)
                 }
@@ -606,8 +636,11 @@ class LocationForegroundService : Service() {
         cellDiagnosticsJob?.cancel()
         cellDiagnosticsJob = null
         stopProtectionHeartbeat()
+        val wasForeground = isForegroundStarted
         isForegroundStarted = false
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        if (wasForeground) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        }
         stopSelf()
     }
 

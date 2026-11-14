@@ -35,6 +35,7 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 | **GT-ISSUE-16** | Offline Maps / Perf | **High** | Offline estimator `OutOfMemoryError` risk on wide zoom, main-thread disk cache scan, and `Clear Cache` SQLite desync (`v3`) | **Resolved** |
 | **GT-ISSUE-17** | Multi-Device / Bg | **Critical** | Devices unreachable / Remote Ring silent when `MainActivity` is closed or after device reboot | **Resolved** |
 | **GT-ISSUE-18** | Geofencing / GIS | **High** | Kakoba Hostels coordinate offset, lack of interactive map coordinate picking, and non-persisted Settings flags | **Resolved** |
+| **GT-ISSUE-19** | Lifecycle / Audit | **Critical** | ForegroundService early-stop crash risk, sign-out resetting 24/7 toggle, cold-start `selected_group_id` wipe, Pick-on-Map tap swallowing, & Remote Ring clock skew | **Resolved** |
 
 ---
 
@@ -272,6 +273,23 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 
 ---
 
+### GT-ISSUE-19: Background Lifecycle, Preference Preservation & Map Tap Hardening
+- **Discovered:** November 14, 2026
+- **Files Affected:** `LocationForegroundService.kt`, `GroupViewModel.kt`, `GroupRepository.kt`, `MapViewComposable.kt`, `GeofenceScreen.kt`, `SettingsScreen.kt`, `MainActivity.kt`
+- **Symptoms & Risks:**
+  1. Calling `startForegroundService()` right before auth/permission revocation could execute `stopForegroundAndSelf()` without invoking `startForeground()`, risking `ForegroundServiceDidNotStartInTimeException`.
+  2. Signing out of Google triggered `ACTION_STOP_PROTECTION`, which unconditionally overwrote `"background_protection_enabled"` to `false` for future sign-ins.
+  3. On cold startup, `GroupViewModel` observed the initial empty list emission before Firestore responded and overwrote `selected_group_id` with `null`.
+  4. In `"Pick on Map"` mode, `MapEventsOverlay` was inserted at index `0` below geofence `Polygon` overlays, letting existing zone circles swallow single taps.
+  5. Both `LocationForegroundService` and `GroupViewModel` tracked separate sync timestamps causing duplicate Firestore writes; Remote Ring rejected >5s clock skew between devices; geofence edit inputs lacked `remember(...)` keys; and 24/7 Background Protection was missing a mirror switch in `SettingsScreen`.
+- **Resolution:**
+  1. Added `EXTRA_STARTED_AS_FOREGROUND` and `EXTRA_PERSIST_DISABLE` in `LocationForegroundService.kt` so early exits call `ensureForeground()` safely when required, while sign-out pauses the service (`disablePreference = false`) without erasing the user's ON-by-default preference.
+  2. Fixed `GroupViewModel` cold-start collection to preserve `selected_group_id` until Firestore delivers groups, and unified service/VM cloud throttling via `GroupRepository.lastSyncTimestampMs`.
+  3. Moved `MapEventsOverlay` to the top of `map.overlays`, added finite coordinate validation (`-90..90`, `-180..180`) across cloud/P2P streams and `GeoPoint` plots, keyed `GeofenceEditDialog` states, widened Remote Ring clock-skew tolerance to `±120s`, and mirrored the **24/7 Background Protection** switch inside `SettingsScreen`.
+- **Outcome:** Crash-proof foreground service transitions, persistent user group/protection preferences, reliable rooftop map picking, and consistent Settings/Devices controls.
+
+---
+
 ## 3. Verification & Compliance Checklist
 
 - [x] **FileProvider Export**: Verified `.gpx`, `.kml`, and `.csv` generate valid URIs without Binder overflow.
@@ -285,6 +303,6 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 - [x] **Safe Menu & Updates UI**: Verified auto-expanded scrollable bottom-sheet menu, Settings update button layout, and 404/install-permission handling.
 - [x] **Google Sign-In & CI Keystore**: Verified `findActivity()` context unwrapping and `debug.keystore.base64` CI decode step.
 - [x] **5-Layer Cartography & Offline Maps**: Verified Esri Satellite, Carto Hybrid overlay, Humanitarian HOT, Topo zoom clamping, and $O(\text{zoomLevels})$ offline region downloads.
-- [x] **24/7 Background Protection & Map Pick**: Verified `ACTION_START_PROTECTION`, boot recovery, process-wide Remote Ring listener, Kakoba preset fix, and `"Pick on Map"`.
+- [x] **24/7 Background Protection & Map Pick**: Verified `ACTION_START_PROTECTION`, boot recovery, process-wide Remote Ring listener, Kakoba preset fix, `"Pick on Map"` overlay z-order, and synchronized Settings/Devices 24/7 switches.
 - [x] **Gradle Build**: Verified project builds cleanly (`compile_applet` PASS).
 

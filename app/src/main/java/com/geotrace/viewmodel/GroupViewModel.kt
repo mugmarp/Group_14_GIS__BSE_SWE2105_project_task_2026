@@ -57,7 +57,10 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
             }
         } else {
             if (locationRepository.activeSession.value == null) {
-                com.geotrace.service.LocationForegroundService.stopProtectionMode(getApplication())
+                com.geotrace.service.LocationForegroundService.stopProtectionMode(
+                    getApplication(),
+                    disablePreference = false
+                )
             }
         }
     }
@@ -150,7 +153,11 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                     else -> groups.firstOrNull()
                 }
                 _activeGroup.value = nextGroup
-                repository.saveSelectedGroupId(nextGroup?.id)
+                if (nextGroup != null) {
+                    repository.saveSelectedGroupId(nextGroup.id)
+                } else if (current != null && _currentUser.value != null) {
+                    repository.saveSelectedGroupId(null)
+                }
                 if (current == null && nextGroup != null) {
                     triggerImmediateBroadcast()
                 }

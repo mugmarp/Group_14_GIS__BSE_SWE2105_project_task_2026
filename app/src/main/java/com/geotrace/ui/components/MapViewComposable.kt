@@ -480,6 +480,7 @@ fun MapViewComposable(
                 // 5. Draw Tracking Group Devices (excluding self device to avoid overlapping User pin)
                 for (member in groupMembers) {
                     if (currentDeviceId.isNotBlank() && member.deviceId == currentDeviceId) continue
+                    if (!isValidCoordinate(member.latitude, member.longitude)) continue
                     val memberGeoPoint = GeoPoint(member.latitude, member.longitude)
                     val memberColor = try {
                         android.graphics.Color.parseColor(member.avatarColor)
@@ -518,6 +519,7 @@ fun MapViewComposable(
                 val violetColor = android.graphics.Color.parseColor("#7C3AED")
                 for (device in personalDevices) {
                     if (device.deviceId == currentDeviceId || device.id == currentDeviceId) continue
+                    if (!isValidCoordinate(device.latitude, device.longitude)) continue
                     if (device.latitude == 0.0 && device.longitude == 0.0) continue
                     val devPoint = GeoPoint(device.latitude, device.longitude)
                     val devKey = "${device.deviceName.trim().take(2).uppercase()}:$violetColor"
@@ -536,6 +538,7 @@ fun MapViewComposable(
 
                 // 6. Draw P2P Wilderness Peers (Phase 2 Nearby Connections)
                 for (peer in nearbyPeers) {
+                    if (!isValidCoordinate(peer.latitude, peer.longitude)) continue
                     val peerGeoPoint = GeoPoint(peer.latitude, peer.longitude)
                     val peerColor = android.graphics.Color.parseColor("#059669")
                     val peerKey = "${peer.displayName.trim().take(2).uppercase()}:$peerColor"
@@ -552,7 +555,7 @@ fun MapViewComposable(
                     map.overlays.add(peerMarker)
                 }
 
-                // 7. Interactive single-tap coordinate picker when choosing Safe Zone center on Map
+                // 7. Interactive single-tap coordinate picker on TOP of overlays so geofence circles do not swallow taps
                 if (isMapPickMode) {
                     val eventsOverlay = MapEventsOverlay(object : MapEventsReceiver {
                         override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
@@ -565,7 +568,7 @@ fun MapViewComposable(
 
                         override fun longPressHelper(p: GeoPoint?): Boolean = false
                     })
-                    map.overlays.add(0, eventsOverlay)
+                    map.overlays.add(eventsOverlay)
                 }
 
                 map.invalidate()
@@ -802,6 +805,10 @@ fun MapViewComposable(
             }
         }
     }
+}
+
+private fun isValidCoordinate(lat: Double, lng: Double): Boolean {
+    return lat.isFinite() && lng.isFinite() && lat in -90.0..90.0 && lng in -180.0..180.0
 }
 
 private fun computeCircleGeoPoints(center: GeoPoint, radiusMeters: Double, pointsCount: Int = 36): List<GeoPoint> {

@@ -1051,41 +1051,41 @@ private fun GeofenceEditDialog(
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
-    var name by remember {
+    var name by remember(draft?.latitude, draft?.longitude, preset?.name, initialZone?.id, isNew) {
         mutableStateOf(
             draft?.name ?: preset?.name ?: initialZone?.name ?: "MUST Safe Perimeter"
         )
     }
 
-    var radius by remember {
+    var radius by remember(draft?.latitude, draft?.longitude, preset?.name, initialZone?.id, isNew) {
         mutableFloatStateOf(
             draft?.radiusMeters ?: preset?.radiusMeters ?: initialZone?.radiusMeters ?: 250f
         )
     }
 
-    var selectedCategory by remember {
+    var selectedCategory by remember(draft?.latitude, draft?.longitude, preset?.name, initialZone?.id, isNew) {
         mutableStateOf(
             draft?.category ?: preset?.category ?: initialZone?.category ?: GeofenceCategory.CAMPUS
         )
     }
 
-    var lat by remember {
+    var lat by remember(draft?.latitude, draft?.longitude, preset?.name, initialZone?.id, isNew) {
         mutableStateOf(
             String.format(Locale.US, "%.5f", draft?.latitude ?: preset?.latitude ?: initialZone?.latitude ?: currentLat)
         )
     }
 
-    var lon by remember {
+    var lon by remember(draft?.latitude, draft?.longitude, preset?.name, initialZone?.id, isNew) {
         mutableStateOf(
             String.format(Locale.US, "%.5f", draft?.longitude ?: preset?.longitude ?: initialZone?.longitude ?: currentLon)
         )
     }
 
-    var alertOnEntry by remember {
+    var alertOnEntry by remember(draft?.latitude, draft?.longitude, preset?.name, initialZone?.id, isNew) {
         mutableStateOf(draft?.alertOnEntry ?: initialZone?.alertOnEntry ?: true)
     }
 
-    var alertOnExit by remember {
+    var alertOnExit by remember(draft?.latitude, draft?.longitude, preset?.name, initialZone?.id, isNew) {
         mutableStateOf(draft?.alertOnExit ?: initialZone?.alertOnExit ?: true)
     }
 

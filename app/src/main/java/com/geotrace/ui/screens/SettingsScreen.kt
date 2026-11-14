@@ -59,12 +59,14 @@ import com.geotrace.model.MapTileType
 import com.geotrace.model.SpeedUnit
 import com.geotrace.ui.components.OfflineMapsDialog
 import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.viewmodel.GroupViewModel
 import com.geotrace.viewmodel.TrackerViewModel
 
 @Composable
 fun SettingsScreen(
     viewModel: TrackerViewModel,
     onNavigateBack: () -> Unit,
+    groupViewModel: GroupViewModel? = null,
     onJumpToOfflineRegion: ((MapFocusTarget) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -103,6 +105,34 @@ fun SettingsScreen(
             ) != android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {
             settingsBgPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        }
+    }
+
+    val protectionBgPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
+    val protectionPermissionsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        val fineOrCoarse = (grants[android.Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
+            (grants[android.Manifest.permission.ACCESS_COARSE_LOCATION] == true)
+        if (fineOrCoarse) {
+            groupViewModel?.toggleBackgroundProtection(true)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                protectionBgPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            }
+        } else {
+            android.widget.Toast.makeText(
+                context,
+                "Location permission is required for 24/7 Background Device Protection.",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
         }
     }
 
@@ -500,6 +530,61 @@ fun SettingsScreen(
                     checked = settings.keepScreenOn,
                     onCheckedChange = { viewModel.toggleKeepScreenOn(it) }
                 )
+
+                if (groupViewModel != null) {
+                    val isProtectionEnabled by groupViewModel.isBackgroundProtectionEnabled.collectAsState()
+                    val currentUser by groupViewModel.currentUser.collectAsState()
+                    val hasBgLocation = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                        androidx.core.content.ContextCompat.checkSelfPermission(
+                            context,
+                            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                    } else true
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    SettingToggleRow(
+                        title = "24/7 Background Protection (Locate & Ring)",
+                        subtitle = when {
+                            !isProtectionEnabled -> "OFF — Only syncs location & rings while GeoTrace is open"
+                            currentUser == null -> "ON by default • Sign in on Devices tab to activate"
+                            !hasBgLocation -> "Active • Grant 'Allow all the time' location for reboot auto-start"
+                            else -> "ON — Locatable & Remote Ring active even when app is closed"
+                        },
+                        checked = isProtectionEnabled,
+                        switchTestTag = "settings_background_protection_switch",
+                        onCheckedChange = { enable ->
+                            if (!enable) {
+                                groupViewModel.toggleBackgroundProtection(false)
+                            } else {
+                                val needed = mutableListOf<String>()
+                                if (androidx.core.content.ContextCompat.checkSelfPermission(
+                                        context,
+                                        android.Manifest.permission.ACCESS_FINE_LOCATION
+                                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    needed.add(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                                }
+                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
+                                    androidx.core.content.ContextCompat.checkSelfPermission(
+                                        context,
+                                        android.Manifest.permission.POST_NOTIFICATIONS
+                                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                                ) {
+                                    needed.add(android.Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                                if (needed.isNotEmpty()) {
+                                    protectionPermissionsLauncher.launch(needed.toTypedArray())
+                                } else {
+                                    groupViewModel.toggleBackgroundProtection(true)
+                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q && !hasBgLocation) {
+                                        protectionBgPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                    }
+                                }
+                            }
+                        }
+                    )
+                }
             }
         }
 
@@ -840,6 +925,7 @@ private fun SettingToggleRow(
     title: String,
     subtitle: String,
     checked: Boolean,
+    switchTestTag: String? = null,
     onCheckedChange: (Boolean) -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -865,6 +951,7 @@ private fun SettingToggleRow(
         Switch(
             checked = checked,
             onCheckedChange = onCheckedChange,
+            modifier = if (switchTestTag != null) Modifier.testTag(switchTestTag) else Modifier,
             colors = SwitchDefaults.colors(
                 checkedThumbColor = colorScheme.onPrimary,
                 checkedTrackColor = colorScheme.primary,
