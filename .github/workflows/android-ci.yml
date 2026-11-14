@@ -36,12 +36,12 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up JDK 21 (Temurin)
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           java-version: '21'
           distribution: 'temurin'
@@ -50,15 +50,20 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Ensure Debug Keystore Exists
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_BASE64 }}
         run: |
           if [ -f debug.keystore ]; then
             echo "Using existing debug.keystore"
           elif [ -f debug.keystore.base64 ]; then
-            echo "Decoding debug.keystore from debug.keystore.base64..."
+            echo "Decoding debug.keystore from committed debug.keystore.base64..."
             tr -d '[:space:]' < debug.keystore.base64 | base64 -d > debug.keystore
+          elif [ -n "$DEBUG_KEYSTORE_B64" ]; then
+            echo "Decoding debug.keystore from GitHub Secret (DEBUG_KEYSTORE_BASE64)..."
+            printf '%s' "$DEBUG_KEYSTORE_B64" | tr -d '[:space:]' | base64 -d > debug.keystore
           else
-            echo "::warning::debug.keystore.base64 not found in repo; generating random debug.keystore. Google Sign-In will fail unless this runner SHA-1 is in Firebase!"
-            echo "⚠️ **Keystore Warning:** \`debug.keystore.base64\` was missing, so CI generated an ephemeral keystore (Google Sign-In SHA-1 will not match Firebase)." >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::Neither debug.keystore.base64 in repo nor DEBUG_KEYSTORE_BASE64 secret found; generating random debug.keystore. Google Sign-In and in-place APK upgrades will fail!"
+            echo "⚠️ **Keystore Warning:** \`debug.keystore.base64\` and \`DEBUG_KEYSTORE_BASE64\` were both missing, so CI generated a random keystore (Google Sign-In SHA-1 will NOT match Firebase and APK cannot update previous builds)." >> "$GITHUB_STEP_SUMMARY"
             keytool -genkey -v \
               -keystore debug.keystore \
               -storepass android \
@@ -152,7 +157,7 @@ jobs:
         run: ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Upload Debug APK Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: success()
         with:
           name: geotrace-debug-apk
@@ -192,7 +197,7 @@ jobs:
         run: ./gradlew assembleRelease --no-daemon --stacktrace
 
       - name: Upload Release APK Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: success()
         with:
           name: geotrace-release-apk
@@ -210,13 +215,13 @@ jobs:
 
     steps:
       - name: Download Debug APK
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: geotrace-debug-apk
           path: ./artifacts/debug
 
       - name: Download Release APK
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: geotrace-release-apk
           path: ./artifacts/release
@@ -229,7 +234,7 @@ jobs:
           ls -la ./release-assets/
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.build.outputs.version_name }}
           name: GeoTrace v${{ needs.build.outputs.version_name }}
