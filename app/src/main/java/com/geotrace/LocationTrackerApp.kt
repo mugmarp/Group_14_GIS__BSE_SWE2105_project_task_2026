@@ -19,9 +19,20 @@ class LocationTrackerApp : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        // Initialize OpenStreetMap (osmdroid) configuration
-        org.osmdroid.config.Configuration.getInstance().load(this, android.preference.PreferenceManager.getDefaultSharedPreferences(this))
-        org.osmdroid.config.Configuration.getInstance().userAgentValue = packageName
+        // Initialize OpenStreetMap (osmdroid) configuration with persistent internal tile storage
+        val osmCfg = Configuration.getInstance()
+        osmCfg.load(this, getSharedPreferences("osmdroid_prefs", MODE_PRIVATE))
+        val osmBasePath = java.io.File(filesDir, "osmdroid")
+        val osmTileCache = java.io.File(osmBasePath, "tiles")
+        osmBasePath.mkdirs()
+        osmTileCache.mkdirs()
+        osmCfg.osmdroidBasePath = osmBasePath
+        osmCfg.osmdroidTileCache = osmTileCache
+        osmCfg.userAgentValue = "$packageName/${BuildConfig.VERSION_NAME}"
+        osmCfg.tileFileSystemCacheMaxBytes = 512L * 1024L * 1024L
+        osmCfg.tileFileSystemCacheTrimBytes = 450L * 1024L * 1024L
+        osmCfg.tileDownloadThreads = 2
+        osmCfg.tileDownloadMaxQueueSize = 40
 
         repository = LocationRepository(this)
         cellManager = CellularDiagnosticManager(this)

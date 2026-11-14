@@ -11,6 +11,9 @@ import com.geotrace.model.CellTowerInfo
 import com.geotrace.model.GeofenceCategory
 import com.geotrace.model.GeofenceZone
 import com.geotrace.model.LocationPoint
+import com.geotrace.model.MapTileType
+import com.geotrace.model.OfflineDownloadProgress
+import com.geotrace.model.OfflineMapRegion
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
 import com.geotrace.service.LocationForegroundService
@@ -50,6 +53,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     private val _settings = MutableStateFlow(
         com.geotrace.model.TrackerSettings(
+            mapTileType = repository.getSavedMapTileType(),
             openCellIdApiKey = repository.getSavedOpenCellIdApiKey(),
             autoBalancedTestMode = repository.trackingMode.value == TrackingMode.BALANCED,
             geofenceNotificationEnabled = repository.geofenceNotificationsEnabled
@@ -62,6 +66,14 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     val appUpdateManager = com.geotrace.service.AppUpdateManager(application)
     val updateStatus = appUpdateManager.updateStatus
+
+    val offlineMapManager = com.geotrace.service.OfflineMapManager(application)
+    val offlineMapRegions: StateFlow<List<OfflineMapRegion>> = repository.offlineMapRegions
+    val offlineDownloadProgress: StateFlow<OfflineDownloadProgress> = offlineMapManager.downloadProgress
+    val offlineCacheSizeMb: StateFlow<Float> = offlineMapManager.cacheSizeMb
+
+    private val _currentMapBoundingBox = MutableStateFlow<org.osmdroid.util.BoundingBox?>(null)
+    val currentMapBoundingBox: StateFlow<org.osmdroid.util.BoundingBox?> = _currentMapBoundingBox.asStateFlow()
 
     private val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(application)
     private var standbyCallback: com.google.android.gms.location.LocationCallback? = null
@@ -359,7 +371,70 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun updateMapTileType(tileType: com.geotrace.model.MapTileType) {
+        repository.saveMapTileType(tileType)
         _settings.value = _settings.value.copy(mapTileType = tileType)
+    }
+
+    fun updateMapViewportBounds(box: org.osmdroid.util.BoundingBox) {
+        _currentMapBoundingBox.value = box
+    }
+
+    fun computeBoundingBoxAround(lat: Double, lng: Double, radiusKm: Double): org.osmdroid.util.BoundingBox {
+        return offlineMapManager.computeBoundingBoxAround(lat, lng, radiusKm)
+    }
+
+    fun estimateOfflineRegion(
+        box: org.osmdroid.util.BoundingBox,
+        tileType: MapTileType,
+        minZoom: Int,
+        maxZoom: Int
+    ): Pair<Int, Float> {
+        return offlineMapManager.estimateRegionTilesAndMb(box, tileType, minZoom, maxZoom)
+    }
+
+    fun startOfflineRegionDownload(
+        name: String,
+        box: org.osmdroid.util.BoundingBox,
+        tileType: MapTileType,
+        minZoom: Int,
+        maxZoom: Int
+    ) {
+        offlineMapManager.startRegionDownload(
+            name = name,
+            box = box,
+            tileType = tileType,
+            minZoom = minZoom,
+            maxZoom = maxZoom,
+            onCompleted = { region ->
+                viewModelScope.launch {
+                    repository.saveOfflineMapRegion(region)
+                }
+            }
+        )
+    }
+
+    fun cancelOfflineRegionDownload() {
+        offlineMapManager.cancelActiveDownload()
+    }
+
+    fun clearOfflineDownloadError() {
+        offlineMapManager.clearDownloadError()
+    }
+
+    fun deleteOfflineMapRegion(id: String) {
+        viewModelScope.launch {
+            repository.deleteOfflineMapRegion(id)
+        }
+    }
+
+    fun clearAllTileCache() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            offlineMapManager.clearAllTileCache()
+        }
+    }
+
+    fun refreshTileCacheSize() {
+        offlineMapManager.refreshCacheSize()
     }
 
     fun toggleAccuracyRing(show: Boolean) {

@@ -323,7 +323,10 @@ fun MainAppScreen(
                 )
                 Screen.SETTINGS -> SettingsScreen(
                     viewModel = viewModel,
-                    onNavigateBack = { currentScreen = Screen.MAP }
+                    onNavigateBack = { currentScreen = Screen.MAP },
+                    onJumpToOfflineRegion = { target ->
+                        groupViewModel.focusMapOnTarget(target)
+                    }
                 )
             }
 

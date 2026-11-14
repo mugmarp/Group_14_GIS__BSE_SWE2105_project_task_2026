@@ -78,6 +78,7 @@ import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MapTileType
 import com.geotrace.model.TrackingMode
 import com.geotrace.ui.components.MapViewComposable
+import com.geotrace.ui.components.OfflineMapsDialog
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.GroupViewModel
 import com.geotrace.viewmodel.TrackerViewModel
@@ -106,6 +107,8 @@ fun MapScreen(
     val settings by viewModel.settings.collectAsState()
     val cellTowerLocation by viewModel.cellTowerLocation.collectAsState()
     val allCellTowers by viewModel.allCellTowerLocations.collectAsState()
+    val offlineMapRegions by viewModel.offlineMapRegions.collectAsState()
+    val currentMapBounds by viewModel.currentMapBoundingBox.collectAsState()
 
     val activeGroup by (groupViewModel?.activeGroup ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
     val groupMembers by (groupViewModel?.groupMembers ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsState()
@@ -121,6 +124,7 @@ fun MapScreen(
 
     var showStartDialog by remember { mutableStateOf(false) }
     var showProfileDialog by remember { mutableStateOf(false) }
+    var showOfflineMapsDialog by remember { mutableStateOf(false) }
     var sessionNameInput by remember { mutableStateOf("") }
     var isHeaderExpanded by remember { mutableStateOf(true) }
 
@@ -149,12 +153,19 @@ fun MapScreen(
             currentDeviceId = currentDeviceId,
             nearbyPeers = nearbyPeers,
             focusedTarget = mapFocusTarget,
+            offlineRegionsCount = offlineMapRegions.size,
             settings = settings,
             onSelectTileLayer = { selectedTile ->
                 viewModel.updateMapTileType(selectedTile)
             },
             onToggleCellTowerPin = { enabled ->
                 viewModel.toggleCellTowerPin(enabled)
+            },
+            onOpenOfflineMaps = {
+                showOfflineMapsDialog = true
+            },
+            onMapBoundsChanged = { bounds ->
+                viewModel.updateMapViewportBounds(bounds)
             }
         )
 
@@ -1135,6 +1146,20 @@ fun MapScreen(
             },
             shape = RoundedCornerShape(16.dp),
             containerColor = colorScheme.surface
+        )
+    }
+
+    // Offline Maps Manager Dialog
+    if (showOfflineMapsDialog) {
+        OfflineMapsDialog(
+            viewModel = viewModel,
+            currentLocation = currentLocation,
+            currentMapBounds = currentMapBounds,
+            onJumpToRegion = { _, target ->
+                viewModel.toggleFollowUser(false)
+                groupViewModel?.focusMapOnTarget(target)
+            },
+            onDismiss = { showOfflineMapsDialog = false }
         )
     }
 }

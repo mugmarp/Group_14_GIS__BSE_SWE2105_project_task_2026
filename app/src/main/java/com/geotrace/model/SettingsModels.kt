@@ -11,11 +11,40 @@ enum class CoordinateFormat(val label: String) {
     DMS("Degrees Minutes Seconds (DMS)")
 }
 
-enum class MapTileType(val label: String, val description: String) {
-    STANDARD("OpenStreetMap Standard", "High-clarity streets & place names (MAPNIK)"),
-    TOPO("Topographic Relief", "Contour terrain and topological features"),
-    HUMANITARIAN("Humanitarian (HOT)", "High-contrast road & infrastructure markers")
+enum class MapTileType(val label: String, val description: String, val supportsOfflineBulkDownload: Boolean = true) {
+    STANDARD("OSM Streets", "OpenStreetMap roads & places (auto-cached)", supportsOfflineBulkDownload = false),
+    SATELLITE("Satellite Imagery", "Physical aerial imagery (Esri World Imagery)", supportsOfflineBulkDownload = true),
+    HYBRID("Satellite + Labels", "Aerial imagery with street & place labels", supportsOfflineBulkDownload = true),
+    TOPO("Topographic Relief", "Contour terrain and topological features", supportsOfflineBulkDownload = true),
+    HUMANITARIAN("Humanitarian (HOT)", "High-contrast roads, buildings & campus paths", supportsOfflineBulkDownload = true)
 }
+
+data class OfflineMapRegion(
+    val id: String,
+    val name: String,
+    val northLat: Double,
+    val southLat: Double,
+    val eastLng: Double,
+    val westLng: Double,
+    val tileType: MapTileType,
+    val minZoom: Int,
+    val maxZoom: Int,
+    val tileCount: Int,
+    val estimatedSizeMb: Float,
+    val downloadedAtMs: Long = System.currentTimeMillis()
+) {
+    val centerLat: Double get() = (northLat + southLat) / 2.0
+    val centerLng: Double get() = (eastLng + westLng) / 2.0
+}
+
+data class OfflineDownloadProgress(
+    val isDownloading: Boolean = false,
+    val regionName: String = "",
+    val completedTiles: Int = 0,
+    val totalTiles: Int = 0,
+    val currentZoom: Int = 0,
+    val errorMessage: String? = null
+)
 
 data class TrackerSettings(
     val speedUnit: SpeedUnit = SpeedUnit.KMH,

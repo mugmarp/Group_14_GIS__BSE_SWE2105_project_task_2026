@@ -8,6 +8,8 @@ import com.geotrace.model.GeofenceAlert
 import com.geotrace.model.GeofenceCategory
 import com.geotrace.model.GeofenceZone
 import com.geotrace.model.LocationPoint
+import com.geotrace.model.MapTileType
+import com.geotrace.model.OfflineMapRegion
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
 import kotlinx.coroutines.CoroutineScope
@@ -49,6 +51,9 @@ class LocationRepository(private val context: Context) {
     private val _cellTowers = MutableStateFlow<List<CellTowerInfo>>(emptyList())
     val cellTowers: StateFlow<List<CellTowerInfo>> = _cellTowers.asStateFlow()
 
+    private val _offlineMapRegions = MutableStateFlow<List<OfflineMapRegion>>(emptyList())
+    val offlineMapRegions: StateFlow<List<OfflineMapRegion>> = _offlineMapRegions.asStateFlow()
+
     private val prefs = context.getSharedPreferences("geotrace_prefs", Context.MODE_PRIVATE)
 
     private val _trackingMode = MutableStateFlow(loadInitialTrackingMode())
@@ -73,6 +78,19 @@ class LocationRepository(private val context: Context) {
 
     fun saveOpenCellIdApiKey(apiKey: String) {
         prefs.edit().putString("opencellid_api_key", apiKey.trim()).apply()
+    }
+
+    fun getSavedMapTileType(): MapTileType {
+        val raw = prefs.getString("map_tile_type", null) ?: return MapTileType.STANDARD
+        return try {
+            MapTileType.valueOf(raw)
+        } catch (_: Exception) {
+            MapTileType.STANDARD
+        }
+    }
+
+    fun saveMapTileType(tileType: MapTileType) {
+        prefs.edit().putString("map_tile_type", tileType.name).apply()
     }
 
     private fun loadInitialTrackingMode(): TrackingMode {
@@ -103,6 +121,7 @@ class LocationRepository(private val context: Context) {
             loadGeofences()
             loadSessions()
             loadAlerts()
+            loadOfflineMapRegions()
         }
     }
 
@@ -737,6 +756,78 @@ class LocationRepository(private val context: Context) {
             }
         }
         _recentAlerts.value = list
+    }
+
+    suspend fun loadOfflineMapRegions() = withContext(Dispatchers.IO) {
+        val db = dbHelper.readableDatabase
+        val list = mutableListOf<OfflineMapRegion>()
+        val cursor = db.query(
+            LocationDbHelper.TABLE_OFFLINE_MAPS,
+            null,
+            null,
+            null,
+            null,
+            null,
+            "downloaded_at DESC"
+        )
+        cursor.use { c ->
+            while (c.moveToNext()) {
+                val tileTypeStr = c.getString(c.getColumnIndexOrThrow("tile_type"))
+                val tileType = try {
+                    MapTileType.valueOf(tileTypeStr)
+                } catch (_: Exception) {
+                    MapTileType.SATELLITE
+                }
+                list.add(
+                    OfflineMapRegion(
+                        id = c.getString(c.getColumnIndexOrThrow("id")),
+                        name = c.getString(c.getColumnIndexOrThrow("name")),
+                        northLat = c.getDouble(c.getColumnIndexOrThrow("north_lat")),
+                        southLat = c.getDouble(c.getColumnIndexOrThrow("south_lat")),
+                        eastLng = c.getDouble(c.getColumnIndexOrThrow("east_lng")),
+                        westLng = c.getDouble(c.getColumnIndexOrThrow("west_lng")),
+                        tileType = tileType,
+                        minZoom = c.getInt(c.getColumnIndexOrThrow("min_zoom")),
+                        maxZoom = c.getInt(c.getColumnIndexOrThrow("max_zoom")),
+                        tileCount = c.getInt(c.getColumnIndexOrThrow("tile_count")),
+                        estimatedSizeMb = c.getFloat(c.getColumnIndexOrThrow("estimated_size_mb")),
+                        downloadedAtMs = c.getLong(c.getColumnIndexOrThrow("downloaded_at"))
+                    )
+                )
+            }
+        }
+        _offlineMapRegions.value = list
+    }
+
+    suspend fun saveOfflineMapRegion(region: OfflineMapRegion) = withContext(Dispatchers.IO) {
+        val db = dbHelper.writableDatabase
+        val cv = ContentValues().apply {
+            put("id", region.id)
+            put("name", region.name)
+            put("north_lat", region.northLat)
+            put("south_lat", region.southLat)
+            put("east_lng", region.eastLng)
+            put("west_lng", region.westLng)
+            put("tile_type", region.tileType.name)
+            put("min_zoom", region.minZoom)
+            put("max_zoom", region.maxZoom)
+            put("tile_count", region.tileCount)
+            put("estimated_size_mb", region.estimatedSizeMb)
+            put("downloaded_at", region.downloadedAtMs)
+        }
+        db.insertWithOnConflict(
+            LocationDbHelper.TABLE_OFFLINE_MAPS,
+            null,
+            cv,
+            android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
+        )
+        loadOfflineMapRegions()
+    }
+
+    suspend fun deleteOfflineMapRegion(id: String) = withContext(Dispatchers.IO) {
+        val db = dbHelper.writableDatabase
+        db.delete(LocationDbHelper.TABLE_OFFLINE_MAPS, "id = ?", arrayOf(id))
+        loadOfflineMapRegions()
     }
 
     fun calculateDistanceMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {

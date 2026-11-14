@@ -15,13 +15,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Remove
@@ -55,12 +59,17 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.geotrace.model.LocationPoint
 import com.geotrace.ui.theme.LocalCustomColors
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.events.MapListener
+import org.osmdroid.events.ScrollEvent
+import org.osmdroid.events.ZoomEvent
+import org.osmdroid.tileprovider.MapTileProviderBasic
+import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
+import org.osmdroid.views.overlay.TilesOverlay
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -76,9 +85,12 @@ fun MapViewComposable(
     currentDeviceId: String = "",
     nearbyPeers: List<com.geotrace.model.P2PPeer> = emptyList(),
     focusedTarget: com.geotrace.model.MapFocusTarget? = null,
+    offlineRegionsCount: Int = 0,
     settings: com.geotrace.model.TrackerSettings = com.geotrace.model.TrackerSettings(),
     onSelectTileLayer: ((com.geotrace.model.MapTileType) -> Unit)? = null,
     onToggleCellTowerPin: ((Boolean) -> Unit)? = null,
+    onOpenOfflineMaps: (() -> Unit)? = null,
+    onMapBoundsChanged: ((BoundingBox) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -95,15 +107,41 @@ fun MapViewComposable(
     var hasCenteredOnFirstFix by remember { mutableStateOf(false) }
     var showLayerMenu by remember { mutableStateOf(false) }
 
-    // Update Tile Source dynamically when user switches in Settings
-    LaunchedEffect(settings.mapTileType) {
+    // Reusable GIS icon drawables (cached once per composition to avoid per-fix Bitmap churn)
+    val gpsChevronDrawable = remember(context) {
+        createUserChevronDrawable(context, android.graphics.Color.parseColor("#006194"))
+    }
+    val cellChevronDrawable = remember(context) {
+        createUserChevronDrawable(context, android.graphics.Color.parseColor("#D97706"))
+    }
+    val servingTowerDrawable = remember(context) {
+        createCellTowerDrawable(context, isServing = true)
+    }
+    val neighborTowerDrawable = remember(context) {
+        createCellTowerDrawable(context, isServing = false)
+    }
+    val trailStartDrawable = remember(context) {
+        createPinBadgeDrawable(context, "S", android.graphics.Color.parseColor("#059669"))
+    }
+    val trailEndDrawable = remember(context) {
+        createPinBadgeDrawable(context, "E", android.graphics.Color.parseColor("#DC2626"))
+    }
+
+    // Transparent street/place labels overlay for Satellite Hybrid mode
+    val hybridLabelsProvider = remember(context) {
+        MapTileProviderBasic(context.applicationContext, MapTileSources.hybridLabelsOverlay)
+    }
+    val hybridLabelsOverlay = remember(context, hybridLabelsProvider) {
+        TilesOverlay(hybridLabelsProvider, context.applicationContext).apply {
+            loadingBackgroundColor = android.graphics.Color.TRANSPARENT
+            loadingLineColor = android.graphics.Color.TRANSPARENT
+        }
+    }
+
+    // Update Tile Source dynamically when user switches in Settings or Layer Menu
+    LaunchedEffect(settings.mapTileType, mapViewRef) {
         mapViewRef?.let { map ->
-            val tileSource = when (settings.mapTileType) {
-                com.geotrace.model.MapTileType.STANDARD -> TileSourceFactory.MAPNIK
-                com.geotrace.model.MapTileType.TOPO -> TileSourceFactory.OpenTopo
-                com.geotrace.model.MapTileType.HUMANITARIAN -> TileSourceFactory.DEFAULT_TILE_SOURCE
-            }
-            map.setTileSource(tileSource)
+            map.setTileSource(MapTileSources.baseTileSourceFor(settings.mapTileType))
             map.invalidate()
         }
     }
@@ -148,6 +186,7 @@ fun MapViewComposable(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            hybridLabelsProvider.detach()
             mapViewRef?.onDetach()
         }
     }
@@ -157,16 +196,11 @@ fun MapViewComposable(
             .fillMaxSize()
             .testTag("map_canvas_container")
     ) {
-        // Genuine OpenStreetMap Viewport (Persistent Spatial Foundation)
+        // Genuine OpenStreetMap / Esri Satellite Viewport (Persistent Spatial Foundation)
         AndroidView(
             factory = { ctx ->
                 MapView(ctx).apply {
-                    val initialTile = when (settings.mapTileType) {
-                        com.geotrace.model.MapTileType.STANDARD -> TileSourceFactory.MAPNIK
-                        com.geotrace.model.MapTileType.TOPO -> TileSourceFactory.OpenTopo
-                        com.geotrace.model.MapTileType.HUMANITARIAN -> TileSourceFactory.DEFAULT_TILE_SOURCE
-                    }
-                    setTileSource(initialTile)
+                    setTileSource(MapTileSources.baseTileSourceFor(settings.mapTileType))
                     setMultiTouchControls(true)
                     isTilesScaledToDpi = true
                     zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
@@ -182,11 +216,30 @@ fun MapViewComposable(
                         controller.setCenter(GeoPoint(0.0, 0.0))
                         controller.setZoom(3.0)
                     }
+                    addMapListener(object : MapListener {
+                        override fun onScroll(event: ScrollEvent?): Boolean {
+                            onMapBoundsChanged?.invoke(boundingBox)
+                            return false
+                        }
+
+                        override fun onZoom(event: ZoomEvent?): Boolean {
+                            onMapBoundsChanged?.invoke(boundingBox)
+                            return false
+                        }
+                    })
+                    post {
+                        onMapBoundsChanged?.invoke(boundingBox)
+                    }
                     mapViewRef = this
                 }
             },
             update = { map ->
                 map.overlays.clear()
+
+                // 0. Hybrid street & place labels overlay on top of Esri Satellite imagery
+                if (settings.mapTileType == com.geotrace.model.MapTileType.HYBRID) {
+                    map.overlays.add(hybridLabelsOverlay)
+                }
 
                 // 1. Draw Real GPS Trail (segmented to prevent teleportation jumps)
                 if (trailPoints.size >= 2) {
@@ -225,6 +278,27 @@ fun MapViewComposable(
                         }
                         map.overlays.add(polyline)
                     }
+
+                    // Trail Start & Latest End Badges
+                    val startPt = trailPoints.first()
+                    val endPt = trailPoints.last()
+                    val startMarker = Marker(map).apply {
+                        position = GeoPoint(startPt.latitude, startPt.longitude)
+                        title = "Trail Start"
+                        snippet = "First logged coordinate"
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                        icon = trailStartDrawable
+                    }
+                    map.overlays.add(startMarker)
+
+                    val endMarker = Marker(map).apply {
+                        position = GeoPoint(endPt.latitude, endPt.longitude)
+                        title = "Trail End"
+                        snippet = "Latest logged waypoint"
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                        icon = trailEndDrawable
+                    }
+                    map.overlays.add(endMarker)
                 }
 
                 // 2. Draw Current User Location Marker & Accuracy Circle
@@ -244,14 +318,16 @@ fun MapViewComposable(
                         map.overlays.add(accuracyPolygon)
                     }
 
-                    // User Marker
+                    // Custom Rotated Directional Chevron (Cyan = GNSS/Fused, Amber = Cellular fallback)
+                    val isCellularFix = currentLocation.provider == "cellular"
                     val userMarker = Marker(map).apply {
                         position = GeoPoint(currentLocation.latitude, currentLocation.longitude)
                         rotation = currentLocation.bearing
-                        title = "Current Position"
+                        title = if (isCellularFix) "Current Position (Cellular Fix)" else "Current Position (GNSS)"
                         val convertedSpeed = currentLocation.speed * settings.speedUnit.multiplier
                         snippet = "Speed: ${String.format("%.1f", convertedSpeed)} ${settings.speedUnit.label} (${currentLocation.gaitLabel}) | Acc: ±${currentLocation.accuracy.toInt()}m"
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                        icon = if (isCellularFix) cellChevronDrawable else gpsChevronDrawable
                     }
                     map.overlays.add(userMarker)
                 }
@@ -315,39 +391,53 @@ fun MapViewComposable(
                             // Muted neighbor marker
                             val neighborMarker = Marker(map).apply {
                                 position = neighborGeoPoint
-                                title = "🗼 Idle/Neighbor Tower: ${tower.operatorName}"
+                                title = "Idle/Neighbor Tower: ${tower.operatorName}"
                                 snippet = "CID: ${tower.cellId} | Standby Sector (Not In Use)"
-                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = neighborTowerDrawable
                             }
                             map.overlays.add(neighborMarker)
                         }
                     }
 
-                    // Second pass: Draw Active Serving Tower (Vibrant Amber/Gold, In Use)
+                    // Second pass: Draw Active Serving Tower (Signal-strength coded ray + Gold Mast Icon)
                     if (servingTower != null) {
                         val towerGeoPoint = GeoPoint(servingTower.latitude, servingTower.longitude)
+                        val dbm = servingTower.signalDbm
+                        val signalColor = when {
+                            dbm == null -> android.graphics.Color.rgb(217, 119, 6) // Amber default
+                            dbm >= -85 -> android.graphics.Color.rgb(5, 150, 105)  // Strong Emerald
+                            dbm >= -102 -> android.graphics.Color.rgb(217, 119, 6) // Moderate Amber
+                            else -> android.graphics.Color.rgb(220, 38, 38)        // Weak Red
+                        }
+                        val signalLabel = when {
+                            dbm == null -> "Signal N/A"
+                            dbm >= -85 -> "$dbm dBm (Strong)"
+                            dbm >= -102 -> "$dbm dBm (Moderate)"
+                            else -> "$dbm dBm (Weak)"
+                        }
 
                         // Serving Cell Tower Coverage / Uncertainty Radius Circle
                         val towerCirclePoints = computeCircleGeoPoints(towerGeoPoint, servingTower.rangeMeters)
                         val towerCoveragePolygon = Polygon(map).apply {
                             points = towerCirclePoints
-                            fillPaint.color = android.graphics.Color.argb(40, 217, 119, 6) // Amber/Gold translucent
-                            outlinePaint.color = android.graphics.Color.argb(220, 217, 119, 6)
+                            fillPaint.color = android.graphics.Color.argb(38, android.graphics.Color.red(signalColor), android.graphics.Color.green(signalColor), android.graphics.Color.blue(signalColor))
+                            outlinePaint.color = android.graphics.Color.argb(220, android.graphics.Color.red(signalColor), android.graphics.Color.green(signalColor), android.graphics.Color.blue(signalColor))
                             outlinePaint.strokeWidth = 2.8f
                             outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(12f, 10f), 0f)
-                            title = "📡 ACTIVE SERVING BASE STATION: ${servingTower.operatorName}"
-                            snippet = "CID: ${servingTower.cellId} | LAC: ${servingTower.lac} | Coverage: ±${servingTower.rangeMeters.toInt()}m"
+                            title = "ACTIVE SERVING BASE STATION: ${servingTower.operatorName}"
+                            snippet = "CID: ${servingTower.cellId} | LAC: ${servingTower.lac} | $signalLabel | ±${servingTower.rangeMeters.toInt()}m"
                         }
                         map.overlays.add(towerCoveragePolygon)
 
-                        // Connecting Vector Ray (from Phone location to Active Serving Tower)
+                        // Connecting Vector Ray (color-coded by live dBm RF signal strength)
                         if (currentLocation != null) {
                             val vectorRay = Polyline(map).apply {
-                                outlinePaint.color = android.graphics.Color.argb(230, 217, 119, 6)
-                                outlinePaint.strokeWidth = 3.5f
+                                outlinePaint.color = android.graphics.Color.argb(235, android.graphics.Color.red(signalColor), android.graphics.Color.green(signalColor), android.graphics.Color.blue(signalColor))
+                                outlinePaint.strokeWidth = 4.0f
                                 outlinePaint.strokeCap = Paint.Cap.ROUND
                                 outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 10f), 0f)
-                                title = "Active Radio Link (Phone ↔ Serving Tower)"
+                                title = "Radio Link • $signalLabel"
                                 setPoints(listOf(
                                     GeoPoint(currentLocation.latitude, currentLocation.longitude),
                                     towerGeoPoint
@@ -359,9 +449,10 @@ fun MapViewComposable(
                         // Serving Cell Tower Marker
                         val towerMarker = Marker(map).apply {
                             position = towerGeoPoint
-                            title = "📡 ACTIVE SERVING MAST: ${servingTower.operatorName}"
-                            snippet = "${servingTower.addressEstimate ?: "Active Sector"} | CID: ${servingTower.cellId} | Range: ±${servingTower.rangeMeters.toInt()}m"
-                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            title = "ACTIVE SERVING MAST: ${servingTower.operatorName}"
+                            snippet = "${servingTower.addressEstimate ?: "Active Sector"} | CID: ${servingTower.cellId} | $signalLabel | ±${servingTower.rangeMeters.toInt()}m"
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            icon = servingTowerDrawable
                         }
                         map.overlays.add(towerMarker)
                     }
@@ -449,9 +540,17 @@ fun MapViewComposable(
                     color = colorScheme.surface,
                     shadowElevation = 6.dp,
                     border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant),
-                    modifier = Modifier.padding(bottom = 4.dp).testTag("layer_selection_popup")
+                    modifier = Modifier
+                        .padding(bottom = 4.dp)
+                        .heightIn(max = 380.dp)
+                        .testTag("layer_selection_popup")
                 ) {
-                    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         Text(
                             text = "MAP LAYER",
                             fontSize = 9.sp,
@@ -536,7 +635,47 @@ fun MapViewComposable(
                                             color = if (settings.showCellTowerPin) colorScheme.primary else colorScheme.onSurface
                                         )
                                         Text(
-                                            text = "OpenCellID Mast Pin & Ray",
+                                            text = "OpenCellID Mast Pin & Signal Ray",
+                                            fontSize = 9.sp,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (onOpenOfflineMaps != null) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = colorScheme.tertiary.copy(alpha = 0.12f),
+                                modifier = Modifier
+                                    .clickable {
+                                        showLayerMenu = false
+                                        onOpenOfflineMaps()
+                                    }
+                                    .testTag("open_offline_maps_btn")
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CloudDownload,
+                                        contentDescription = "Offline Maps Manager",
+                                        tint = colorScheme.tertiary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column {
+                                        Text(
+                                            text = if (offlineRegionsCount > 0) "Offline Maps ($offlineRegionsCount saved)" else "Download Offline Maps",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.tertiary
+                                        )
+                                        Text(
+                                            text = "Cache Satellite, Hybrid or Topo areas",
                                             fontSize = 9.sp,
                                             color = colorScheme.onSurfaceVariant
                                         )
@@ -672,5 +811,123 @@ private fun createMemberAvatarDrawable(context: Context, name: String, colorInt:
 
 private fun createP2PPeerDrawable(context: Context, name: String): android.graphics.drawable.Drawable {
     return createMemberAvatarDrawable(context, name, android.graphics.Color.parseColor("#059669"))
+}
+
+private fun createUserChevronDrawable(context: Context, colorInt: Int): android.graphics.drawable.Drawable {
+    val size = 84
+    val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val cx = size / 2f
+    val cy = size / 2f
+
+    val haloPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.argb(65, android.graphics.Color.red(colorInt), android.graphics.Color.green(colorInt), android.graphics.Color.blue(colorInt))
+        style = android.graphics.Paint.Style.FILL
+    }
+    canvas.drawCircle(cx, cy, cx - 2f, haloPaint)
+
+    val circleFill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = colorInt
+        style = android.graphics.Paint.Style.FILL
+    }
+    val circleStroke = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 5f
+    }
+    canvas.drawCircle(cx, cy, 24f, circleFill)
+    canvas.drawCircle(cx, cy, 24f, circleStroke)
+
+    val chevronPath = android.graphics.Path().apply {
+        moveTo(cx, cy - 14f)
+        lineTo(cx + 11f, cy + 10f)
+        lineTo(cx, cy + 4f)
+        lineTo(cx - 11f, cy + 10f)
+        close()
+    }
+    val arrowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = android.graphics.Paint.Style.FILL
+    }
+    canvas.drawPath(chevronPath, arrowPaint)
+    return android.graphics.drawable.BitmapDrawable(context.resources, bitmap)
+}
+
+private fun createCellTowerDrawable(context: Context, isServing: Boolean): android.graphics.drawable.Drawable {
+    val size = if (isServing) 82 else 60
+    val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val cx = size / 2f
+    val cy = size / 2f
+
+    val bgColor = if (isServing) android.graphics.Color.parseColor("#D97706") else android.graphics.Color.parseColor("#64748B")
+    val alpha = if (isServing) 255 else 185
+
+    val fillPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = bgColor
+        this.alpha = alpha
+        style = android.graphics.Paint.Style.FILL
+    }
+    val strokePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        this.alpha = alpha
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = if (isServing) 4.5f else 3f
+    }
+    val r = (size / 2f) - 5f
+    canvas.drawCircle(cx, cy, r, fillPaint)
+    canvas.drawCircle(cx, cy, r, strokePaint)
+
+    val mastPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        this.alpha = alpha
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = if (isServing) 4f else 2.8f
+        strokeCap = Paint.Cap.ROUND
+    }
+    val topY = cy - r * 0.48f
+    val botY = cy + r * 0.48f
+    canvas.drawLine(cx, topY + 4f, cx - r * 0.34f, botY, mastPaint)
+    canvas.drawLine(cx, topY + 4f, cx + r * 0.34f, botY, mastPaint)
+    canvas.drawLine(cx - r * 0.2f, cy + r * 0.14f, cx + r * 0.2f, cy + r * 0.14f, mastPaint)
+
+    val tipPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        this.alpha = alpha
+        style = android.graphics.Paint.Style.FILL
+    }
+    canvas.drawCircle(cx, topY + 3f, if (isServing) 4.5f else 3.2f, tipPaint)
+
+    return android.graphics.drawable.BitmapDrawable(context.resources, bitmap)
+}
+
+private fun createPinBadgeDrawable(context: Context, label: String, colorInt: Int): android.graphics.drawable.Drawable {
+    val size = 54
+    val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
+    val canvas = android.graphics.Canvas(bitmap)
+    val cx = size / 2f
+    val cy = size / 2f
+
+    val fillPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = colorInt
+        style = android.graphics.Paint.Style.FILL
+    }
+    val strokePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        style = android.graphics.Paint.Style.STROKE
+        strokeWidth = 4f
+    }
+    val textPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE
+        textSize = 22f
+        typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        textAlign = android.graphics.Paint.Align.CENTER
+    }
+    val r = (size / 2f) - 4f
+    canvas.drawCircle(cx, cy, r, fillPaint)
+    canvas.drawCircle(cx, cy, r, strokePaint)
+    val yPos = cy - ((textPaint.descent() + textPaint.ascent()) / 2f)
+    canvas.drawText(label, cx, yPos, textPaint)
+    return android.graphics.drawable.BitmapDrawable(context.resources, bitmap)
 }
 

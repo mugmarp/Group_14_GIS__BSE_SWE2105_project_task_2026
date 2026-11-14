@@ -15,12 +15,13 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
 
     companion object {
         const val DATABASE_NAME = "gis_tracker.db"
-        const val DATABASE_VERSION = 2
+        const val DATABASE_VERSION = 3
 
         const val TABLE_POINTS = "location_points"
         const val TABLE_SESSIONS = "tracking_sessions"
         const val TABLE_GEOFENCES = "geofence_zones"
         const val TABLE_ALERTS = "geofence_alerts"
+        const val TABLE_OFFLINE_MAPS = "offline_map_regions"
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -89,11 +90,50 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
             )
             """.trimIndent()
         )
+
+        db.execSQL(
+            """
+            CREATE TABLE $TABLE_OFFLINE_MAPS (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                north_lat REAL NOT NULL,
+                south_lat REAL NOT NULL,
+                east_lng REAL NOT NULL,
+                west_lng REAL NOT NULL,
+                tile_type TEXT NOT NULL,
+                min_zoom INTEGER NOT NULL,
+                max_zoom INTEGER NOT NULL,
+                tile_count INTEGER NOT NULL,
+                estimated_size_mb REAL NOT NULL,
+                downloaded_at INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) {
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_points_session ON $TABLE_POINTS(session_id, timestamp)")
+        }
+        if (oldVersion < 3) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS $TABLE_OFFLINE_MAPS (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    north_lat REAL NOT NULL,
+                    south_lat REAL NOT NULL,
+                    east_lng REAL NOT NULL,
+                    west_lng REAL NOT NULL,
+                    tile_type TEXT NOT NULL,
+                    min_zoom INTEGER NOT NULL,
+                    max_zoom INTEGER NOT NULL,
+                    tile_count INTEGER NOT NULL,
+                    estimated_size_mb REAL NOT NULL,
+                    downloaded_at INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
         }
     }
 }

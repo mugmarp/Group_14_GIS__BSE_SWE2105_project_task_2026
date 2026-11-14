@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Speed
@@ -37,8 +38,11 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
@@ -50,8 +54,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.geotrace.model.CoordinateFormat
+import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MapTileType
 import com.geotrace.model.SpeedUnit
+import com.geotrace.ui.components.OfflineMapsDialog
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.TrackerViewModel
 
@@ -59,6 +65,7 @@ import com.geotrace.viewmodel.TrackerViewModel
 fun SettingsScreen(
     viewModel: TrackerViewModel,
     onNavigateBack: () -> Unit,
+    onJumpToOfflineRegion: ((MapFocusTarget) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     BackHandler { onNavigateBack() }
@@ -69,6 +76,15 @@ fun SettingsScreen(
     val settings by viewModel.settings.collectAsState()
     val activeSession by viewModel.activeSession.collectAsState()
     val geofenceApiStatus by viewModel.geofenceApiStatus.collectAsState()
+    val currentLocation by viewModel.currentLocation.collectAsState()
+    val offlineMapRegions by viewModel.offlineMapRegions.collectAsState()
+    val offlineCacheSizeMb by viewModel.offlineCacheSizeMb.collectAsState()
+    val currentMapBounds by viewModel.currentMapBoundingBox.collectAsState()
+    var showOfflineMapsDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshTileCacheSize()
+    }
 
     val settingsBgPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
@@ -262,6 +278,60 @@ fun SettingsScreen(
                                     selectedLabelColor = colorScheme.onPrimary
                                 )
                             )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Offline Maps & Persistent Tile Cache Manager Row
+                androidx.compose.material3.Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = customColors.surfaceContainerLow,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                Icons.Default.CloudDownload,
+                                contentDescription = "Offline Maps",
+                                tint = colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "Offline Maps & Tile Cache",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "${offlineMapRegions.size} saved regions • ${String.format(java.util.Locale.US, "%.1f", offlineCacheSizeMb)} / 512 MB",
+                                    fontSize = 10.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        OutlinedButton(
+                            onClick = { showOfflineMapsDialog = true },
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("settings_open_offline_maps_btn")
+                        ) {
+                            Text("Manage", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -753,6 +823,20 @@ fun SettingsScreen(
                 }
             }
         }
+    }
+
+    if (showOfflineMapsDialog) {
+        OfflineMapsDialog(
+            viewModel = viewModel,
+            currentLocation = currentLocation,
+            currentMapBounds = currentMapBounds,
+            onJumpToRegion = { _, target ->
+                viewModel.toggleFollowUser(false)
+                onJumpToOfflineRegion?.invoke(target)
+                onNavigateBack()
+            },
+            onDismiss = { showOfflineMapsDialog = false }
+        )
     }
 }
 
