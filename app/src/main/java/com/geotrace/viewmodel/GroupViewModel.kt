@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import com.geotrace.LocationTrackerApp
 import com.geotrace.model.Group
 import com.geotrace.model.LocationPoint
+import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MemberLocation
 import com.geotrace.model.P2PMeshState
 import com.geotrace.model.P2PPeer
@@ -112,6 +113,15 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     private val _isActionLoading = MutableStateFlow(false)
     val isActionLoading: StateFlow<Boolean> = _isActionLoading.asStateFlow()
 
+    private val _isSyncing = MutableStateFlow(false)
+    val isSyncing: StateFlow<Boolean> = _isSyncing.asStateFlow()
+
+    private val _lastSyncTimestampMs = MutableStateFlow<Long?>(null)
+    val lastSyncTimestampMs: StateFlow<Long?> = _lastSyncTimestampMs.asStateFlow()
+
+    private val _mapFocusTarget = MutableStateFlow<MapFocusTarget?>(null)
+    val mapFocusTarget: StateFlow<MapFocusTarget?> = _mapFocusTarget.asStateFlow()
+
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
 
@@ -130,7 +140,11 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         observeLocationForP2P()
         viewModelScope.launch {
             userGroups.collect { groups ->
-                if (_activeGroup.value == null && groups.isNotEmpty()) {
+                val current = _activeGroup.value
+                if (current != null) {
+                    val refreshed = groups.firstOrNull { it.id == current.id }
+                    _activeGroup.value = refreshed ?: groups.firstOrNull()
+                } else if (groups.isNotEmpty()) {
                     _activeGroup.value = groups.first()
                     triggerImmediateBroadcast()
                 }
@@ -242,10 +256,26 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun deleteActiveGroup() {
+        val group = _activeGroup.value ?: return
+        viewModelScope.launch {
+            _isActionLoading.value = true
+            val result = repository.deleteGroup(group.id)
+            _isActionLoading.value = false
+
+            result.onSuccess {
+                _activeGroup.value = null
+                _statusMessage.value = "Deleted group '${group.name}'."
+            }.onFailure { e ->
+                _errorMessage.value = e.localizedMessage ?: "Failed to delete group."
+            }
+        }
+    }
+
     fun toggleGhostMode() {
         val newMode = !_isGhostMode.value
         _isGhostMode.value = newMode
-        _statusMessage.value = if (newMode) "Ghost Mode ON: Location hidden from group" else "Ghost Mode OFF: Sharing location"
+        _statusMessage.value = if (newMode) "Ghost Mode ON: Location sharing paused" else "Ghost Mode OFF: Live sharing resumed"
         triggerImmediateBroadcast()
     }
 
@@ -278,6 +308,14 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun rescanP2PMesh() {
+        if (!_isP2PEnabled.value) return
+        val myName = repository.getCurrentUserDisplayName()
+        repository.rescanP2PMesh(myName)
+        _statusMessage.value = "Restarting Off-Grid P2P scan..."
+        triggerImmediateBroadcast()
+    }
+
     fun ringPersonalDevice(device: PersonalDevice) {
         viewModelScope.launch {
             val result = repository.sendRingCommandToDevice(device.deviceId.ifBlank { device.id })
@@ -287,6 +325,71 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                 _errorMessage.value = e.localizedMessage ?: "Failed to ring ${device.deviceName}."
             }
         }
+    }
+
+    fun cancelRingOnPersonalDevice(device: PersonalDevice) {
+        viewModelScope.launch {
+            val result = repository.cancelRingCommandForDevice(device.deviceId.ifBlank { device.id })
+            result.onSuccess {
+                _statusMessage.value = "Cancelled ring alert for ${device.deviceName}."
+            }.onFailure { e ->
+                _errorMessage.value = e.localizedMessage ?: "Failed to cancel ring alert."
+            }
+        }
+    }
+
+    fun removePersonalDevice(device: PersonalDevice) {
+        viewModelScope.launch {
+            _isActionLoading.value = true
+            val result = repository.removePersonalDevice(device.deviceId.ifBlank { device.id })
+            _isActionLoading.value = false
+            result.onSuccess {
+                _statusMessage.value = "Removed '${device.deviceName.ifBlank { device.deviceModel }}' from My Devices."
+            }.onFailure { e ->
+                _errorMessage.value = e.localizedMessage ?: "Failed to remove device."
+            }
+        }
+    }
+
+    fun testSelfRing() {
+        FindDeviceAlarmManager.startRinging(
+            getApplication(),
+            "Self Test (${offlineCallsign.value})"
+        )
+        _statusMessage.value = "Testing local device alarm. Tap Stop Alarm to silence."
+    }
+
+    fun syncNow() {
+        val loc = locationRepository.currentLocation.value
+        if (loc == null) {
+            _errorMessage.value = "Waiting for GPS or cellular fix before syncing."
+            return
+        }
+        val group = _activeGroup.value
+        val p2pActive = _isP2PEnabled.value
+        val isSignedIn = auth.currentUser != null
+        if (group == null && !p2pActive && !isSignedIn) {
+            _errorMessage.value = "Sign in or enable Off-Grid P2P to broadcast your location."
+            return
+        }
+        viewModelScope.launch {
+            _isSyncing.value = true
+            val ok = performBroadcast(group, loc)
+            _isSyncing.value = false
+            if (ok) {
+                _statusMessage.value = "Live telemetry synced."
+            } else {
+                _errorMessage.value = "Sync incomplete — check network connection."
+            }
+        }
+    }
+
+    fun focusMapOnTarget(target: MapFocusTarget) {
+        _mapFocusTarget.value = target.copy(requestedAtMs = System.currentTimeMillis())
+    }
+
+    fun clearMapFocusTarget() {
+        _mapFocusTarget.value = null
     }
 
     fun ringP2PPeer(endpointId: String, peerName: String) {
@@ -338,27 +441,29 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun performBroadcast(group: Group?, loc: LocationPoint) {
+    private suspend fun performBroadcast(group: Group?, loc: LocationPoint): Boolean {
         val context = getApplication<Application>()
         val (batteryLevel, isCharging) = getBatteryInfo(context)
         val mode = locationRepository.trackingMode.value.name
         val displayName = repository.getCurrentUserDisplayName()
+        var anySucceeded = false
 
         // Always update personal device fleet doc when signed in so multi-device tracking & Find works out of the box
         if (auth.currentUser != null) {
-            repository.publishPersonalDevice(
+            val fleetRes = repository.publishPersonalDevice(
                 location = loc,
                 batteryPercent = batteryLevel,
                 isCharging = isCharging,
                 trackingMode = mode
             )
+            if (fleetRes.isSuccess) anySucceeded = true
         }
 
         val colorPalette = listOf("#2563EB", "#059669", "#D97706", "#DC2626", "#7C3AED", "#DB2777", "#0891B2")
         val avatarColor = colorPalette[((auth.currentUser?.uid ?: "").hashCode() and 0x7fffffff) % colorPalette.size]
 
         if (group != null) {
-            repository.publishLocation(
+            val groupRes = repository.publishLocation(
                 groupId = group.id,
                 location = loc,
                 displayName = displayName,
@@ -368,10 +473,17 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                 trackingMode = mode,
                 isSharingEnabled = !_isGhostMode.value
             )
+            if (groupRes.isSuccess) anySucceeded = true
         } else if (_isP2PEnabled.value && !_isGhostMode.value) {
             repository.broadcastP2PLocationDirect(loc, displayName, batteryLevel)
             lastP2PLocationPushMs = System.currentTimeMillis()
+            anySucceeded = true
         }
+
+        if (anySucceeded) {
+            _lastSyncTimestampMs.value = System.currentTimeMillis()
+        }
+        return anySucceeded
     }
 
     private fun getBatteryInfo(context: Context): Pair<Int, Boolean> {

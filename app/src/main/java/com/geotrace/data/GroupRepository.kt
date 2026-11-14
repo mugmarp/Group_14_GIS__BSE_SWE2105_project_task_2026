@@ -299,6 +299,27 @@ class GroupRepository(
     }
 
     /**
+     * Permanently delete a tracking group created by the signed-in user.
+     */
+    suspend fun deleteGroup(groupId: String): Result<Unit> {
+        val uid = auth.currentUser?.uid
+            ?: return Result.failure(IllegalStateException("Must be signed in to delete a group."))
+
+        return try {
+            try {
+                val locCol = db.collection("groups").document(groupId).collection("live_locations")
+                locCol.document("${uid}_${currentDeviceId}").delete().await()
+                locCol.document(uid).delete().await()
+            } catch (_: Exception) {}
+            db.collection("groups").document(groupId).delete().await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to delete group: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Publish current device's live location & telemetry to a group's live_locations collection
      * using `{uid}_{deviceId}` so multiple devices under one account never overwrite each other.
      */
@@ -509,6 +530,43 @@ class GroupRepository(
         } catch (_: Exception) {}
     }
 
+    suspend fun cancelRingCommandForDevice(targetDeviceId: String): Result<Unit> {
+        val uid = auth.currentUser?.uid
+            ?: return Result.failure(IllegalStateException("Sign in to manage device ring alerts."))
+
+        return try {
+            db.collection("users").document(uid)
+                .collection("devices").document(targetDeviceId)
+                .update(
+                    mapOf(
+                        "ringRequestedAt" to 0L,
+                        "ringRequestedBy" to ""
+                    )
+                )
+                .await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to cancel ring command: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun removePersonalDevice(targetDeviceId: String): Result<Unit> {
+        val uid = auth.currentUser?.uid
+            ?: return Result.failure(IllegalStateException("Sign in to remove linked devices."))
+
+        return try {
+            db.collection("users").document(uid)
+                .collection("devices").document(targetDeviceId)
+                .delete()
+                .await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to remove personal device: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
     // -----------------------------------------------------------------------------------------
     // Nearby Connections P2P Mesh (Off-Grid Location Exchange & Remote Ring)
     // -----------------------------------------------------------------------------------------
@@ -520,6 +578,12 @@ class GroupRepository(
         updateMeshState()
         startAdvertising(myName)
         startDiscovery(myName)
+    }
+
+    fun rescanP2PMesh(displayName: String) {
+        val myName = displayName.ifBlank { getCurrentUserDisplayName() }
+        stopP2PMesh()
+        startP2PMesh(myName)
     }
 
     fun stopP2PMesh() {

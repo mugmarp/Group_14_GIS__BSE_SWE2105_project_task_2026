@@ -74,6 +74,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.geotrace.model.CoordinateFormat
+import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MapTileType
 import com.geotrace.model.TrackingMode
 import com.geotrace.ui.components.MapViewComposable
@@ -112,6 +113,7 @@ fun MapScreen(
     val nearbyPeers by (groupViewModel?.nearbyPeers ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsState()
     val isGhostMode by (groupViewModel?.isGhostMode ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
     val isP2PEnabled by (groupViewModel?.isP2PEnabled ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
+    val mapFocusTarget by (groupViewModel?.mapFocusTarget ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
     val currentDeviceId = groupViewModel?.currentDeviceId ?: ""
     val remotePersonalDevices = remember(personalDevices, currentDeviceId) {
         personalDevices.filter { it.deviceId != currentDeviceId && it.id != currentDeviceId }
@@ -146,6 +148,7 @@ fun MapScreen(
             personalDevices = remotePersonalDevices,
             currentDeviceId = currentDeviceId,
             nearbyPeers = nearbyPeers,
+            focusedTarget = mapFocusTarget,
             settings = settings,
             onSelectTileLayer = { selectedTile ->
                 viewModel.updateMapTileType(selectedTile)
@@ -583,6 +586,56 @@ fun MapScreen(
                     }
                 }
             }
+
+            if (mapFocusTarget != null) {
+                val target = mapFocusTarget!!
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(18.dp),
+                    color = colorScheme.primaryContainer,
+                    shadowElevation = 4.dp,
+                    border = BorderStroke(1.dp, colorScheme.primary),
+                    modifier = Modifier.testTag("map_focus_banner")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "LOCATING: ${target.label}",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onPrimaryContainer
+                            )
+                            if (target.subtitle.isNotBlank()) {
+                                Text(
+                                    text = target.subtitle,
+                                    fontSize = 10.sp,
+                                    color = colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                                )
+                            }
+                        }
+                        TextButton(
+                            onClick = {
+                                groupViewModel?.clearMapFocusTarget()
+                                viewModel.toggleFollowUser(true)
+                            },
+                            modifier = Modifier.testTag("recenter_self_btn")
+                        ) {
+                            Text(
+                                text = "Re-center Me",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         // Bottom Multi-Device, Group Member & Offline P2P Peer Carousel (Situational Awareness)
@@ -610,7 +663,22 @@ fun MapScreen(
                         shadowElevation = 4.dp,
                         border = BorderStroke(1.dp, Color(0xFF7C3AED).copy(alpha = 0.7f)),
                         modifier = Modifier
-                            .clickable { onNavigateToGroups?.invoke() }
+                            .clickable {
+                                if (device.latitude != 0.0 || device.longitude != 0.0) {
+                                    viewModel.toggleFollowUser(false)
+                                    groupViewModel?.focusMapOnTarget(
+                                        MapFocusTarget(
+                                            id = device.deviceId,
+                                            label = device.deviceName.ifBlank { device.deviceModel },
+                                            latitude = device.latitude,
+                                            longitude = device.longitude,
+                                            subtitle = "$distStr • ${device.batteryPercent}%"
+                                        )
+                                    )
+                                } else {
+                                    onNavigateToGroups?.invoke()
+                                }
+                            }
                             .testTag("carousel_device_${device.deviceId}")
                     ) {
                         Row(
@@ -667,7 +735,20 @@ fun MapScreen(
                             border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f)),
                             modifier = Modifier
                                 .clickable {
-                                    onNavigateToGroups?.invoke()
+                                    if (member.latitude != 0.0 || member.longitude != 0.0) {
+                                        viewModel.toggleFollowUser(false)
+                                        groupViewModel?.focusMapOnTarget(
+                                            MapFocusTarget(
+                                                id = member.id.ifBlank { member.userId },
+                                                label = member.displayName,
+                                                latitude = member.latitude,
+                                                longitude = member.longitude,
+                                                subtitle = "$distStr • ${member.batteryPercent}%"
+                                            )
+                                        )
+                                    } else {
+                                        onNavigateToGroups?.invoke()
+                                    }
                                 }
                                 .testTag("carousel_member_${member.userId}")
                         ) {
@@ -727,7 +808,18 @@ fun MapScreen(
                         shadowElevation = 4.dp,
                         border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.7f)),
                         modifier = Modifier
-                            .clickable { onNavigateToGroups?.invoke() }
+                            .clickable {
+                                viewModel.toggleFollowUser(false)
+                                groupViewModel?.focusMapOnTarget(
+                                    MapFocusTarget(
+                                        id = peer.endpointId,
+                                        label = peer.displayName,
+                                        latitude = peer.latitude,
+                                        longitude = peer.longitude,
+                                        subtitle = "P2P • $distText • ${peer.batteryPercent}%"
+                                    )
+                                )
+                            }
                             .testTag("carousel_p2p_${peer.endpointId}")
                     ) {
                         Row(

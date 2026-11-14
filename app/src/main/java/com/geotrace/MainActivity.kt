@@ -303,7 +303,12 @@ fun MainAppScreen(
                 )
                 Screen.GROUPS -> GroupScreen(
                     groupViewModel = groupViewModel,
-                    currentLocation = currentLocation
+                    currentLocation = currentLocation,
+                    onLocateOnMap = { target ->
+                        viewModel.toggleFollowUser(false)
+                        groupViewModel.focusMapOnTarget(target)
+                        currentScreen = Screen.MAP
+                    }
                 )
                 Screen.GEOFENCE -> GeofenceScreen(
                     viewModel = viewModel,

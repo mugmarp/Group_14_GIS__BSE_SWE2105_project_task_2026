@@ -29,18 +29,23 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.NearMe
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.VolumeUp
@@ -93,6 +98,7 @@ import androidx.credentials.exceptions.NoCredentialException
 import com.geotrace.R
 import com.geotrace.model.Group
 import com.geotrace.model.LocationPoint
+import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MemberLocation
 import com.geotrace.model.P2PPeer
 import com.geotrace.model.PersonalDevice
@@ -107,6 +113,7 @@ import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.auth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -116,6 +123,7 @@ import java.util.Locale
 fun GroupScreen(
     groupViewModel: GroupViewModel,
     currentLocation: LocationPoint?,
+    onLocateOnMap: (MapFocusTarget) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -135,16 +143,28 @@ fun GroupScreen(
     val isGhostMode by groupViewModel.isGhostMode.collectAsState()
     val isP2PEnabled by groupViewModel.isP2PEnabled.collectAsState()
     val isActionLoading by groupViewModel.isActionLoading.collectAsState()
+    val isSyncing by groupViewModel.isSyncing.collectAsState()
+    val lastSyncTimestampMs by groupViewModel.lastSyncTimestampMs.collectAsState()
     val statusMessage by groupViewModel.statusMessage.collectAsState()
     val errorMessage by groupViewModel.errorMessage.collectAsState()
 
     var showCreateDialog by remember { mutableStateOf(false) }
     var showJoinDialog by remember { mutableStateOf(false) }
     var showCallsignDialog by remember { mutableStateOf(false) }
+    var showDeleteGroupDialog by remember { mutableStateOf(false) }
+    var devicePendingRemoval by remember { mutableStateOf<PersonalDevice?>(null) }
     var newGroupName by remember { mutableStateOf("") }
     var inviteCodeInput by remember { mutableStateOf("") }
     var callsignInput by remember(offlineCallsign) { mutableStateOf(offlineCallsign) }
     var isAuthSigningIn by remember { mutableStateOf(false) }
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(5_000L)
+            nowMs = System.currentTimeMillis()
+        }
+    }
 
     // Nearby Connections Off-Grid P2P runtime permissions launcher (Android 8 - 15)
     val radioPermissionsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -237,6 +257,209 @@ fun GroupScreen(
             }
         }
 
+        // Always-Visible Ghost Mode Warning Banner when sharing is paused
+        if (isGhostMode) {
+            item {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFFD97706).copy(alpha = 0.14f),
+                    border = BorderStroke(1.dp, Color(0xFFD97706)),
+                    modifier = Modifier.fillMaxWidth().testTag("ghost_mode_banner")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                Icons.Default.VisibilityOff,
+                                contentDescription = "Ghost Mode Active",
+                                tint = Color(0xFFD97706),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "Ghost Mode Active",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFB45309)
+                                )
+                                Text(
+                                    text = "Your live GPS is hidden from cloud groups & P2P peers.",
+                                    fontSize = 11.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        TextButton(
+                            onClick = { groupViewModel.toggleGhostMode() },
+                            modifier = Modifier.testTag("resume_sharing_btn")
+                        ) {
+                            Text("Resume", fontWeight = FontWeight.Bold, color = Color(0xFFB45309))
+                        }
+                    }
+                }
+            }
+        }
+
+        // This Device & Quick Hub Controls Card (Works signed-in & offline)
+        item {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                border = BorderStroke(1.dp, colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth().testTag("this_device_controls_card")
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "THIS DEVICE & PRIVACY",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.05.sp,
+                                color = colorScheme.primary
+                            )
+                            Text(
+                                text = offlineCallsign,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onSurface
+                            )
+                            val syncLabel = if (lastSyncTimestampMs != null) {
+                                val (ageText, _) = formatFreshness(lastSyncTimestampMs, nowMs, staleAfterMs = 90_000L)
+                                "Last synced: $ageText"
+                            } else if (currentUser != null) {
+                                "Cloud sync ready"
+                            } else {
+                                "Offline ready • Sign in below for cloud fleet"
+                            }
+                            Text(
+                                text = "${android.os.Build.MODEL} • $syncLabel",
+                                fontSize = 11.sp,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                        }
+                        TextButton(
+                            onClick = {
+                                callsignInput = offlineCallsign
+                                showCallsignDialog = true
+                            },
+                            modifier = Modifier.testTag("edit_callsign_btn")
+                        ) {
+                            Icon(
+                                Icons.Default.Edit,
+                                contentDescription = "Edit Device Name",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Rename", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { groupViewModel.testSelfRing() },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("test_self_ring_btn")
+                        ) {
+                            Icon(
+                                Icons.Default.VolumeUp,
+                                contentDescription = "Test Device Alarm",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Test Ring", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        if (currentUser != null || isP2PEnabled) {
+                            FilledTonalButton(
+                                onClick = { groupViewModel.syncNow() },
+                                enabled = !isSyncing,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("sync_now_btn")
+                            ) {
+                                if (isSyncing) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.Default.Sync,
+                                        contentDescription = "Sync Live Telemetry Now",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Sync Now", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                if (isGhostMode) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = null,
+                                tint = if (isGhostMode) Color(0xFFD97706) else colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "Ghost Mode (Pause Sharing)",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = if (isGhostMode) "Receive-only mode active" else "Sharing live coordinates",
+                                    fontSize = 11.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = isGhostMode,
+                            onCheckedChange = { groupViewModel.toggleGhostMode() },
+                            colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFD97706)),
+                            modifier = Modifier.testTag("ghost_mode_switch")
+                        )
+                    }
+                }
+            }
+        }
+
         // Top-Level Offline P2P Device Finder Card (Works WITHOUT Sign-In or Internet)
         item {
             Card(
@@ -299,59 +522,13 @@ fun GroupScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Offline Callsign / Device Identity Row (Editable offline & when signed in)
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = customColors.surfaceContainerLow,
-                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "THIS DEVICE NAME",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 0.04.sp,
-                                    color = colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = offlineCallsign,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.onSurface
-                                )
-                            }
-                            TextButton(
-                                onClick = {
-                                    callsignInput = offlineCallsign
-                                    showCallsignDialog = true
-                                },
-                                modifier = Modifier.testTag("edit_callsign_btn")
-                            ) {
-                                Icon(
-                                    Icons.Default.Edit,
-                                    contentDescription = "Edit Device Name",
-                                    modifier = Modifier.size(15.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Rename", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-
-                    // Diagnostics Pills when P2P active
+                    // Diagnostics Pills & Rescan button when P2P active
                     if (isP2PEnabled) {
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
@@ -363,7 +540,7 @@ fun GroupScreen(
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = if (p2pMeshState.isAdvertising) successColor else colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                                 )
                             }
                             Surface(
@@ -376,9 +553,28 @@ fun GroupScreen(
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.SemiBold,
                                     color = colorScheme.primary,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                                 )
                             }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedButton(
+                            onClick = { groupViewModel.rescanP2PMesh() },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(48.dp)
+                                .testTag("p2p_rescan_btn")
+                        ) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Rescan Nearby P2P Peers",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Rescan Nearby P2P Mesh", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
 
                         if (p2pMeshState.errorText != null) {
@@ -405,38 +601,6 @@ fun GroupScreen(
                                         color = colorScheme.onErrorContainer
                                     )
                                 }
-                            }
-                        }
-
-                        // Allow Ghost Mode privacy control offline even if no cloud group exists
-                        if (activeGroup == null) {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        if (isGhostMode) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                        contentDescription = null,
-                                        tint = if (isGhostMode) Color(0xFFD97706) else colorScheme.primary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = if (isGhostMode) "Ghost Mode ON (Receive Only)" else "Share My GPS with P2P Peers",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = colorScheme.onSurface
-                                    )
-                                }
-                                Switch(
-                                    checked = isGhostMode,
-                                    onCheckedChange = { groupViewModel.toggleGhostMode() },
-                                    colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFD97706)),
-                                    modifier = Modifier.testTag("offline_ghost_mode_switch")
-                                )
                             }
                         }
                     }
@@ -479,10 +643,22 @@ fun GroupScreen(
                     }
                 }
             } else {
-                items(nearbyPeers) { peer ->
+                items(nearbyPeers, key = { it.endpointId }) { peer ->
                     P2PPeerCard(
                         peer = peer,
                         userLocation = currentLocation,
+                        nowMs = nowMs,
+                        onLocatePeer = {
+                            onLocateOnMap(
+                                MapFocusTarget(
+                                    id = peer.endpointId,
+                                    label = peer.displayName,
+                                    latitude = peer.latitude,
+                                    longitude = peer.longitude,
+                                    subtitle = "Nearby P2P • ${peer.batteryPercent}%"
+                                )
+                            )
+                        },
                         onRingPeer = { groupViewModel.ringP2PPeer(peer.endpointId, peer.displayName) }
                     )
                 }
@@ -688,7 +864,21 @@ fun GroupScreen(
                     PersonalDeviceCard(
                         device = device,
                         userLocation = currentLocation,
-                        onRingClick = { groupViewModel.ringPersonalDevice(device) }
+                        nowMs = nowMs,
+                        onLocateClick = {
+                            onLocateOnMap(
+                                MapFocusTarget(
+                                    id = device.deviceId.ifBlank { device.id },
+                                    label = device.deviceName.ifBlank { device.deviceModel },
+                                    latitude = device.latitude,
+                                    longitude = device.longitude,
+                                    subtitle = "${device.deviceModel} • ${device.batteryPercent}%"
+                                )
+                            )
+                        },
+                        onRingClick = { groupViewModel.ringPersonalDevice(device) },
+                        onCancelRingClick = { groupViewModel.cancelRingOnPersonalDevice(device) },
+                        onRemoveClick = { devicePendingRemoval = device }
                     )
                 }
             }
@@ -707,7 +897,10 @@ fun GroupScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
                                 Box(
                                     modifier = Modifier
                                         .size(10.dp)
@@ -725,11 +918,26 @@ fun GroupScreen(
                             }
 
                             if (activeGroup != null) {
-                                TextButton(
-                                    onClick = { groupViewModel.leaveActiveGroup() },
-                                    modifier = Modifier.testTag("leave_group_btn")
-                                ) {
-                                    Text("Leave", color = colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    TextButton(
+                                        onClick = { groupViewModel.leaveActiveGroup() },
+                                        modifier = Modifier.testTag("leave_group_btn")
+                                    ) {
+                                        Text("Leave", color = colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    if (activeGroup?.createdBy == currentUser?.uid) {
+                                        IconButton(
+                                            onClick = { showDeleteGroupDialog = true },
+                                            modifier = Modifier.size(48.dp).testTag("delete_group_btn")
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = "Delete Group",
+                                                tint = colorScheme.error,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -816,43 +1024,12 @@ fun GroupScreen(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Ghost Mode Toggle
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        if (isGhostMode) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                        contentDescription = null,
-                                        tint = if (isGhostMode) Color(0xFFD97706) else colorScheme.primary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text(
-                                            text = "Ghost Mode (Freeze Location)",
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = colorScheme.onSurface
-                                        )
-                                        Text(
-                                            text = if (isGhostMode) "Location paused; group sees last known point" else "Actively streaming live coordinates",
-                                            fontSize = 11.sp,
-                                            color = colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                Switch(
-                                    checked = isGhostMode,
-                                    onCheckedChange = { groupViewModel.toggleGhostMode() },
-                                    colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFFD97706)),
-                                    modifier = Modifier.testTag("ghost_mode_switch")
-                                )
-                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "${activeGroup!!.memberIds.size} account(s) • ${groupMembers.size} live device(s) broadcasting",
+                                fontSize = 11.sp,
+                                color = colorScheme.onSurfaceVariant
+                            )
                         } else {
                             Text(
                                 text = "Join or create a group to coordinate shared devices, teammates, or household members.",
@@ -936,7 +1113,19 @@ fun GroupScreen(
                         MemberCard(
                             member = member,
                             userLocation = currentLocation,
-                            isSelf = isSelfDevice
+                            isSelf = isSelfDevice,
+                            nowMs = nowMs,
+                            onLocateClick = {
+                                onLocateOnMap(
+                                    MapFocusTarget(
+                                        id = member.id.ifBlank { member.userId },
+                                        label = member.displayName,
+                                        latitude = member.latitude,
+                                        longitude = member.longitude,
+                                        subtitle = "${member.gait} • ${member.batteryPercent}%"
+                                    )
+                                )
+                            }
                         )
                     }
                 }
@@ -1140,8 +1329,74 @@ fun GroupScreen(
                     Text("Save")
                 }
             },
-            dismissButton = {
+                    dismissButton = {
                 TextButton(onClick = { showCallsignDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Confirm Remove Linked Device Dialog
+    if (devicePendingRemoval != null) {
+        val dev = devicePendingRemoval!!
+        AlertDialog(
+            onDismissRequest = { devicePendingRemoval = null },
+            title = { Text("Remove Linked Device?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Remove '${dev.deviceName.ifBlank { dev.deviceModel }}' from My Devices? If GeoTrace is still signed in on that phone, it will re-register automatically when opened again.",
+                    fontSize = 13.sp,
+                    color = colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        groupViewModel.removePersonalDevice(dev)
+                        devicePendingRemoval = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = colorScheme.error),
+                    modifier = Modifier.testTag("confirm_remove_device_btn")
+                ) {
+                    Text("Remove")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { devicePendingRemoval = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Confirm Delete Tracking Group Dialog
+    if (showDeleteGroupDialog && activeGroup != null) {
+        val grp = activeGroup!!
+        AlertDialog(
+            onDismissRequest = { showDeleteGroupDialog = false },
+            title = { Text("Delete '${grp.name}'?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "This permanently deletes the tracking group '${grp.name}' and its invite code '${grp.inviteCode}' for all members.",
+                    fontSize = 13.sp,
+                    color = colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        groupViewModel.deleteActiveGroup()
+                        showDeleteGroupDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = colorScheme.error),
+                    modifier = Modifier.testTag("confirm_delete_group_btn")
+                ) {
+                    Text("Delete Group")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteGroupDialog = false }) {
                     Text("Cancel")
                 }
             }
@@ -1153,21 +1408,26 @@ fun GroupScreen(
 fun MemberCard(
     member: MemberLocation,
     userLocation: LocationPoint?,
-    isSelf: Boolean
+    isSelf: Boolean,
+    nowMs: Long,
+    onLocateClick: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val customColors = LocalCustomColors.current
 
-    val distanceMeters = if (userLocation != null) {
-        member.distanceToMeters(userLocation.latitude, userLocation.longitude)
-    } else null
-
+    val hasValidCoords = member.latitude != 0.0 || member.longitude != 0.0
     val distanceText = when {
         isSelf -> "You (Current Device)"
-        distanceMeters == null -> "--"
-        distanceMeters < 1000 -> "${distanceMeters.toInt()} m away"
-        else -> String.format(Locale.US, "%.1f km away", distanceMeters / 1000.0)
+        userLocation != null && hasValidCoords -> {
+            val d = member.distanceToMeters(userLocation.latitude, userLocation.longitude)
+            val compass = toCompassCardinal(member.bearingFrom(userLocation.latitude, userLocation.longitude))
+            val distPart = if (d < 1000) "${d.toInt()} m" else String.format(Locale.US, "%.1f km", d / 1000.0)
+            "$distPart $compass"
+        }
+        else -> "--"
     }
+
+    val updatedMs = member.lastUpdated?.toDate()?.time
+    val (freshnessText, isStale) = formatFreshness(updatedMs, nowMs, staleAfterMs = 90_000L)
 
     val parsedAvatarColor = try {
         Color(android.graphics.Color.parseColor(member.avatarColor))
@@ -1241,17 +1501,41 @@ fun MemberCard(
                 ) {
                     val successColor = colorScheme.tertiary
                     Icon(
-                        Icons.Default.BatteryChargingFull,
-                        contentDescription = "Battery",
+                        if (member.isCharging) Icons.Default.Bolt else Icons.Default.BatteryChargingFull,
+                        contentDescription = if (member.isCharging) "Charging" else "Battery",
                         tint = if (member.batteryPercent > 20) successColor else Color(0xFFDC2626),
                         modifier = Modifier.size(13.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "${member.batteryPercent}% • ${member.trackingMode}",
+                        text = "${member.batteryPercent}% • ${member.trackingMode} • ",
                         fontSize = 10.sp,
                         color = colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        text = freshnessText,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isStale) Color(0xFFD97706) else successColor,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+
+            if (!isSelf && hasValidCoords) {
+                Spacer(modifier = Modifier.width(6.dp))
+                IconButton(
+                    onClick = onLocateClick,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("locate_member_${member.id.ifBlank { member.userId }}")
+                ) {
+                    Icon(
+                        Icons.Default.MyLocation,
+                        contentDescription = "Locate ${member.displayName} on Map",
+                        tint = colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
@@ -1263,13 +1547,18 @@ fun MemberCard(
 fun PersonalDeviceCard(
     device: PersonalDevice,
     userLocation: LocationPoint?,
-    onRingClick: () -> Unit
+    nowMs: Long,
+    onLocateClick: () -> Unit,
+    onRingClick: () -> Unit,
+    onCancelRingClick: () -> Unit,
+    onRemoveClick: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val accentViolet = Color(0xFF7C3AED)
     val successColor = colorScheme.tertiary
+    val hasValidCoords = device.latitude != 0.0 || device.longitude != 0.0
 
-    val distanceText = if (userLocation != null && (device.latitude != 0.0 || device.longitude != 0.0)) {
+    val distanceText = if (userLocation != null && hasValidCoords) {
         val distanceMeters = device.distanceToMeters(userLocation.latitude, userLocation.longitude)
         val bearingDeg = device.bearingFrom(userLocation.latitude, userLocation.longitude)
         val compass = toCompassCardinal(bearingDeg)
@@ -1279,78 +1568,146 @@ fun PersonalDeviceCard(
         "Position syncing..."
     }
 
+    val updatedMs = device.lastUpdated?.toDate()?.time
+    val (freshnessText, isStale) = formatFreshness(updatedMs, nowMs, staleAfterMs = 90_000L)
+    val isRingPending = device.ringRequestedAt > 0L && (nowMs - device.ringRequestedAt) in -5_000L..60_000L
+
     Card(
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, accentViolet.copy(alpha = 0.45f)),
         modifier = Modifier.fillMaxWidth().testTag("personal_device_card_${device.deviceId}")
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(accentViolet.copy(alpha = 0.14f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Default.Devices,
-                    contentDescription = "Linked Device",
-                    tint = accentViolet,
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = device.deviceName.ifBlank { device.deviceModel.ifBlank { "GeoTrace Device" } },
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colorScheme.onSurface
-                )
-                Text(
-                    text = "${device.deviceModel} • $distanceText",
-                    fontSize = 11.sp,
-                    color = colorScheme.onSurfaceVariant
-                )
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(CircleShape)
+                        .background(accentViolet.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
                     Icon(
-                        Icons.Default.BatteryChargingFull,
-                        contentDescription = "Battery",
-                        tint = if (device.batteryPercent > 20) successColor else Color(0xFFDC2626),
-                        modifier = Modifier.size(13.dp)
+                        Icons.Default.Devices,
+                        contentDescription = "Linked Device",
+                        tint = accentViolet,
+                        modifier = Modifier.size(22.dp)
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "${device.batteryPercent}% • ${device.trackingMode}",
-                        fontSize = 10.sp,
-                        color = colorScheme.onSurfaceVariant,
-                        fontFamily = FontFamily.Monospace
+                        text = device.deviceName.ifBlank { device.deviceModel.ifBlank { "GeoTrace Device" } },
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.onSurface
+                    )
+                    Text(
+                        text = "${device.deviceModel} • $distanceText",
+                        fontSize = 11.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                        Icon(
+                            if (device.isCharging) Icons.Default.Bolt else Icons.Default.BatteryChargingFull,
+                            contentDescription = if (device.isCharging) "Charging" else "Battery",
+                            tint = if (device.batteryPercent > 20) successColor else Color(0xFFDC2626),
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "${device.batteryPercent}% • ${device.trackingMode} • ",
+                            fontSize = 10.sp,
+                            color = colorScheme.onSurfaceVariant,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = freshnessText,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isStale) Color(0xFFD97706) else successColor,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+
+                IconButton(
+                    onClick = onRemoveClick,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("remove_device_${device.deviceId}")
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Remove ${device.deviceName}",
+                        tint = colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            FilledTonalButton(
-                onClick = onRingClick,
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier
-                    .height(48.dp)
-                    .testTag("ring_device_${device.deviceId}")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(
-                    Icons.Default.VolumeUp,
-                    contentDescription = "Ring Device",
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Ring", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                OutlinedButton(
+                    onClick = onLocateClick,
+                    enabled = hasValidCoords,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .testTag("locate_device_${device.deviceId}")
+                ) {
+                    Icon(
+                        Icons.Default.MyLocation,
+                        contentDescription = "Locate on Map",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Locate", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+
+                if (isRingPending) {
+                    Button(
+                        onClick = onCancelRingClick,
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD97706)),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("cancel_ring_${device.deviceId}")
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Cancel Pending Ring",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Cancel Ring", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    FilledTonalButton(
+                        onClick = onRingClick,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("ring_device_${device.deviceId}")
+                    ) {
+                        Icon(
+                            Icons.Default.VolumeUp,
+                            contentDescription = "Ring Device",
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Ring", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
         }
     }
@@ -1360,6 +1717,8 @@ fun PersonalDeviceCard(
 fun P2PPeerCard(
     peer: P2PPeer,
     userLocation: LocationPoint?,
+    nowMs: Long,
+    onLocatePeer: () -> Unit,
     onRingPeer: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -1375,79 +1734,115 @@ fun P2PPeerCard(
         "GPS pending"
     }
 
-    val ageSec = ((System.currentTimeMillis() - peer.lastSeenTimestamp).coerceAtLeast(0L) / 1000L)
-    val ageText = when {
-        ageSec < 5 -> "Live"
-        ageSec < 60 -> "${ageSec}s ago"
-        else -> "${ageSec / 60}m ago"
-    }
+    val (ageText, isStale) = formatFreshness(peer.lastSeenTimestamp, nowMs, staleAfterMs = 30_000L)
 
     Card(
         shape = RoundedCornerShape(14.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-        border = BorderStroke(1.dp, successColor.copy(alpha = 0.5f)),
+        border = BorderStroke(
+            1.dp,
+            if (isStale) Color(0xFFD97706).copy(alpha = 0.6f) else successColor.copy(alpha = 0.5f)
+        ),
         modifier = Modifier.fillMaxWidth().testTag("p2p_peer_card_${peer.endpointId}")
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(successColor.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    Icons.Default.NearMe,
-                    contentDescription = "P2P Peer",
-                    tint = successColor,
-                    modifier = Modifier.size(20.dp)
-                )
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(if (isStale) Color(0xFFD97706).copy(alpha = 0.15f) else successColor.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.NearMe,
+                        contentDescription = "P2P Peer",
+                        tint = if (isStale) Color(0xFFD97706) else successColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = peer.displayName,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.onSurface
+                    )
+                    Text(
+                        text = "$distanceText • ${String.format(Locale.US, "%.1f", peer.speed * 3.6f)} km/h",
+                        fontSize = 11.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "Battery: ${peer.batteryPercent}% • Direct BLE/Wi-Fi • $ageText",
+                        fontSize = 10.sp,
+                        color = if (isStale) Color(0xFFD97706) else successColor,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = peer.displayName,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colorScheme.onSurface
-                )
-                Text(
-                    text = "$distanceText • ${String.format(Locale.US, "%.1f", peer.speed * 3.6f)} km/h",
-                    fontSize = 11.sp,
-                    color = colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "Battery: ${peer.batteryPercent}% • Direct BLE/Wi-Fi • $ageText",
-                    fontSize = 10.sp,
-                    color = successColor,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            FilledTonalButton(
-                onClick = onRingPeer,
-                shape = RoundedCornerShape(10.dp),
-                modifier = Modifier
-                    .height(48.dp)
-                    .testTag("ring_p2p_${peer.endpointId}")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(
-                    Icons.Default.NotificationsActive,
-                    contentDescription = "Ring Peer Device",
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Ring", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                OutlinedButton(
+                    onClick = onLocatePeer,
+                    enabled = peer.latitude != 0.0 || peer.longitude != 0.0,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .testTag("locate_p2p_${peer.endpointId}")
+                ) {
+                    Icon(
+                        Icons.Default.MyLocation,
+                        contentDescription = "Locate Peer on Map",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Locate", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+
+                FilledTonalButton(
+                    onClick = onRingPeer,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp)
+                        .testTag("ring_p2p_${peer.endpointId}")
+                ) {
+                    Icon(
+                        Icons.Default.NotificationsActive,
+                        contentDescription = "Ring Peer Device",
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Ring", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
     }
+}
+
+private fun formatFreshness(timestampMs: Long?, nowMs: Long, staleAfterMs: Long): Pair<String, Boolean> {
+    if (timestampMs == null || timestampMs <= 0L) return "Syncing" to false
+    val ageMs = (nowMs - timestampMs).coerceAtLeast(0L)
+    val ageSec = ageMs / 1000L
+    val label = when {
+        ageSec < 8L -> "Live"
+        ageSec < 60L -> "${ageSec}s ago"
+        ageSec < 3600L -> "${ageSec / 60L}m ago"
+        ageSec < 86_400L -> "Offline • ${ageSec / 3600L}h ago"
+        else -> "Offline • ${ageSec / 86_400L}d ago"
+    }
+    return label to (ageMs > staleAfterMs)
 }
 
 private fun toCompassCardinal(bearingDegrees: Float): String {

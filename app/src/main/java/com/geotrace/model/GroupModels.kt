@@ -165,3 +165,17 @@ data class P2PMeshState(
     val statusText: String = "Off-grid P2P scanner idle",
     val errorText: String? = null
 )
+
+/**
+ * Target coordinates requested from the Devices & Tracking Groups hub or map carousel
+ * so the Map tab pans/zooms directly onto a selected device, group member, or P2P peer.
+ */
+data class MapFocusTarget(
+    val id: String,
+    val label: String,
+    val latitude: Double,
+    val longitude: Double,
+    val subtitle: String = "",
+    val requestedAtMs: Long = System.currentTimeMillis()
+)
+

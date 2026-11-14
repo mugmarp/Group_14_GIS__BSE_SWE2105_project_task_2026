@@ -75,6 +75,7 @@ fun MapViewComposable(
     personalDevices: List<com.geotrace.model.PersonalDevice> = emptyList(),
     currentDeviceId: String = "",
     nearbyPeers: List<com.geotrace.model.P2PPeer> = emptyList(),
+    focusedTarget: com.geotrace.model.MapFocusTarget? = null,
     settings: com.geotrace.model.TrackerSettings = com.geotrace.model.TrackerSettings(),
     onSelectTileLayer: ((com.geotrace.model.MapTileType) -> Unit)? = null,
     onToggleCellTowerPin: ((Boolean) -> Unit)? = null,
@@ -107,9 +108,9 @@ fun MapViewComposable(
         }
     }
 
-    // Auto-center map when first genuine location fix arrives, or if followUserLocation is enabled
-    LaunchedEffect(currentLocation, settings.followUserLocation) {
-        if (currentLocation != null) {
+    // Auto-center map when first genuine location fix arrives, or if followUserLocation is enabled (and not locked on another device)
+    LaunchedEffect(currentLocation, settings.followUserLocation, focusedTarget) {
+        if (focusedTarget == null && currentLocation != null) {
             if (!hasCenteredOnFirstFix || settings.followUserLocation) {
                 mapViewRef?.controller?.animateTo(
                     GeoPoint(currentLocation.latitude, currentLocation.longitude),
@@ -118,6 +119,19 @@ fun MapViewComposable(
                 )
                 hasCenteredOnFirstFix = true
             }
+        }
+    }
+
+    // Pan & zoom smoothly onto a requested remote device, group member, or P2P peer
+    LaunchedEffect(focusedTarget?.requestedAtMs, mapViewRef) {
+        val target = focusedTarget ?: return@LaunchedEffect
+        if (target.latitude != 0.0 || target.longitude != 0.0) {
+            mapViewRef?.controller?.animateTo(
+                GeoPoint(target.latitude, target.longitude),
+                17.5,
+                750L
+            )
+            hasCenteredOnFirstFix = true
         }
     }
 
@@ -158,7 +172,10 @@ fun MapViewComposable(
                     zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
                     controller.setZoom(15.0)
 
-                    if (currentLocation != null) {
+                    if (focusedTarget != null && (focusedTarget.latitude != 0.0 || focusedTarget.longitude != 0.0)) {
+                        controller.setCenter(GeoPoint(focusedTarget.latitude, focusedTarget.longitude))
+                        controller.setZoom(17.5)
+                    } else if (currentLocation != null) {
                         controller.setCenter(GeoPoint(currentLocation.latitude, currentLocation.longitude))
                     } else {
                         // Global neutral view, awaiting genuine GNSS fix
