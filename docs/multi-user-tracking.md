@@ -1,6 +1,13 @@
 # Multi-User Location Sharing & Web Tracking Dashboard Architecture
 
-This document specifies the technical architecture, data contracts, security controls, and client implementation blueprints for extending **GeoTrace** with real-time multi-user location sharing and live web dashboard tracking.
+> **Implementation Status Note:** Sections 3–6 below document the original architecture & web dispatcher proposal. For the **actual implemented Android production schemas and security rules**, see [`firebase-blueprint.json`](../firebase-blueprint.json), [`firestore.rules`](../firestore.rules), and [`docs/team-guide.md`](team-guide.md). Specifically, GeoTrace currently implements:
+> - **Personal Multi-Device Fleet:** `/users/{userId}/devices/{deviceId}` (with `ringRequestedAt` / `ringRequestedBy` Remote Ring)
+> - **Shared Tracking Groups:** `/groups/{groupId}` + `/groups/{groupId}/live_locations/{userId}_{deviceId}`
+> - **Google Sign-In:** Jetpack Credential Manager + Firebase Auth (`GetSignInWithGoogleOption`)
+> - **Named Database:** All queries target `R.string.firestore_database_id` (never `(default)`)
+> - **Off-Grid P2P Mesh:** Google Nearby Connections (`Strategy.P2P_CLUSTER`, `com.geotrace.p2p.mesh`)
+
+This document specifies the technical architecture, data contracts, security controls, and client/web blueprints for real-time multi-user location sharing.
 
 ---
 
@@ -295,9 +302,9 @@ The web dispatcher can be deployed as a single, zero-build HTML/JS bundle hosted
 
 ---
 
-## 7. Migration Roadmap
+## 7. Implementation Status & Roadmap
 
-1. **Phase 1 (Completed)**: Local single-device GPS/GNSS recording, cell mast telemetry, GPX/KML export via `FileProvider`, background `WakeLock` protection, and balanced debug test modes.
-2. **Phase 2 (Next)**: Implement Firestore sync worker triggered when recording active tracks; add real-time device ping document.
-3. **Phase 3**: Deploy static Leaflet Web Dispatcher to GitHub Pages repository root (`docs/index.html` or dedicated web branch).
-4. **Phase 4**: Add cross-device group invitation tokens and team geofence synchronization.
+1. **Phase 1 (Completed):** Local single-device GNSS/Fused/Cellular recording, `TelephonyManager` + OpenCellID resolution, GPX/KML/CSV export via `FileProvider`, `WakeLock` protection, and deadband/EMA speed smoothing.
+2. **Phase 2 (Completed):** Named Cloud Firestore sync (`/users/{uid}/devices/{deviceId}` & `/groups/{groupId}/live_locations/{uid}_{deviceId}`), Google Sign-In via Credential Manager, Remote Ring alarm, invite-code groups, Ghost Mode, and off-grid Nearby Connections `P2P_CLUSTER` mesh.
+3. **Phase 3 (Planned / Optional):** Deploy the standalone Leaflet Web Dispatcher (Section 6) if a browser fleet dashboard is required alongside the Android app.
+4. **Phase 4 (Planned / Optional):** Shared cloud geofence synchronization across group members.

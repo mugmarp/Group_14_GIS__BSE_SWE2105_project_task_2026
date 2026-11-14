@@ -45,13 +45,10 @@ GeoTrace correlates local Android base station broadcasts with the **OpenCellID 
 }
 ```
 
-### Pre-Seeded Offline Cache
-When no internet connection is available or when the device runs in an offline testing zone, `OpenCellIdClient.kt` automatically falls back to bundled Ugandan base stations:
-- **MUST Kihumuro FAST Campus (MTN 4G LTE):** `-0.6182°S, 30.6551°E`, Range: $750\text{ m}$, CID: `41201`
-- **MUST Kihumuro Hill Sector (Airtel 4G LTE):** `-0.6198°S, 30.6575°E`, Range: $820\text{ m}$, CID: `41202`
-- **MUST Town Campus / Mbarara Regional Referral (MTN 4G):** `-0.6125°S, 30.6582°E`, Range: $500\text{ m}$, CID: `41101`
-- **Mbarara Central Roundabout (Airtel 4G):** `-0.6068°S, 30.6540°E`, Range: $650\text{ m}$, CID: `41102`
-- **Mbarara High Street / Kakoba (MTN 3G/4G):** `-0.6090°S, 30.6610°E`, Range: $900\text{ m`, CID: `41103`
+### Resolution Policy in `OpenCellIdClient.kt`
+- `OpenCellIdClient` resolves coordinates strictly from the live OpenCellID REST API using real `TelephonyManager` identifiers (`MCC`, `MNC`, `LAC`, `CID`).
+- An in-memory `ConcurrentHashMap` caches responses for the active session to avoid duplicate HTTP requests.
+- **No synthetic or hardcoded fallback tower coordinates** are returned when offline or when no API key is configured (`resolveCellLocation` returns `null`, while raw radio IDs remain visible in **Cellular Hub**).
 
 ---
 
@@ -67,15 +64,27 @@ GeoTrace checks for software updates and distribution binaries directly from the
   - `User-Agent: GeoTrace-Android-<versionName>`
 
 ### Response Mapping in `AppUpdateManager.kt`
-- `tag_name`: Semantic version tag (e.g., `v1.0.0`, `v1.0.1`) compared against local `BuildConfig.VERSION_NAME`.
+- `tag_name`: Semantic version tag (e.g., `v1.0.1`, stripping pre-release suffixes during numeric comparison) compared against local `BuildConfig.VERSION_NAME`.
 - `name`: Human-readable release title.
-- `body`: Markdown release notes and changelog rendered in the update prompt.
-- `assets[].browser_download_url`: Direct URL to `app-release.apk`.
-- Download handled via Android `DownloadManager` with installation delegated to `FileProvider` (`com.geotrace.fileprovider`).
+- `body`: Release notes rendered in the **Settings → Application Updates** card.
+- `assets[].browser_download_url`: Selects `.apk` asset (preferring release APKs such as `geotrace-release.apk`).
+- **404 / Permission Handling:** HTTP `404` maps cleanly to `UpdateStatus.NoReleasesPublished`; on Android 8+, `packageManager.canRequestPackageInstalls()` is verified before launching `FileProvider` (`com.geotrace.fileprovider`) installation, with direct **Open GitHub Releases in Browser** fallback.
 
 ---
 
-## 3. Spatial Data Export Schemas
+## 3. Cloud Firestore & Nearby P2P Data Contracts
+
+### Named Cloud Firestore Database (`R.string.firestore_database_id`)
+- **Personal Multi-Device Fleet:** `/users/{userId}/devices/{deviceId}` — stores `deviceName`, `deviceModel`, coordinates, accuracy, speed, bearing, battery, `trackingMode`, `ringRequestedAt`, `ringRequestedBy`, and `lastUpdated` (`SetOptions.merge()`).
+- **Shared Tracking Groups:** `/groups/{groupId}` (`name`, `inviteCode`, `createdBy`, `memberIds`) and `/groups/{groupId}/live_locations/{userId}_{deviceId}` (`isSharingEnabled` respects Ghost Mode).
+
+### Offline Nearby Connections (`com.geotrace.p2p.mesh`, `Strategy.P2P_CLUSTER`)
+- **Location Frame (`0x03` header):** `[1B version=3][8B lat][8B lng][4B speed][4B bearing][4B batteryPct][1B tagLen][N B tag][UTF-8 displayName]`
+- **Remote Ring Command (`0x0A` header):** `[1B cmd=10][UTF-8 callerName]` — triggers `FindDeviceAlarmManager` on the peer device offline.
+
+---
+
+## 4. Spatial Data Export Schemas
 
 ### 1. GPX 1.1 Specification (Topografix DTD)
 - Conforms to standard `http://www.topografix.com/GPX/1/1`.

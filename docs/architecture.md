@@ -7,25 +7,27 @@
 ## High-Level Architecture (Option 2 — Mobile Tracking)
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    MOBILE APP (Android)                 │
-├─────────────────────────────────────────────────────────┤
-│  UI Layer (Jetpack Compose + Material3)                 │
-│  └── Map View (MapLibre / osmdroid)                     │
-├─────────────────────────────────────────────────────────┤
-│  Domain Layer                                           │
-│  ├── Location Service (FusedLocationProviderClient)     │
-│  │   ├── Primary: GPS + WiFi + Cell fusion (adaptive)  │
-│  │   └── Educational: Raw CellInfo + OpenCellID API     │
-│  ├── Trail Recorder (adaptive intervals)                │
-│  ├── Geofence Manager (home/school/work/custom)         │
-│  └── Battery Optimizer (priority switching)             │
-├─────────────────────────────────────────────────────────┤
-│  Data Layer                                             │
-│  ├── Local DB (Room) — LocationPoint entities          │
-│  ├── Export (GPX / KML / CSV)                           │
-│  └── Sync (Firebase Realtime DB — multi-user sharing)  │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                       MOBILE APP (Android)                       │
+├──────────────────────────────────────────────────────────────────┤
+│  UI Layer (Jetpack Compose + Material 3)                         │
+│  ├── MapViewComposable (osmdroid: OSM / Carto / Satellite)       │
+│  └── Screens (Map, Cellular Hub, Devices, Geofence, History,     │
+│               Research, Settings)                                │
+├──────────────────────────────────────────────────────────────────┤
+│  ViewModel & Service Layer                                       │
+│  ├── TrackerViewModel & GroupViewModel                           │
+│  ├── LocationForegroundService (WakeLock + Adaptive Modes)       │
+│  ├── CellularDiagnosticManager + OpenCellIdClient                │
+│  ├── GeofenceManager + GeofenceBroadcastReceiver                 │
+│  ├── FindDeviceAlarmManager + AppUpdateManager                   │
+│  └── Nearby Connections P2P Mesh (Strategy.P2P_CLUSTER)          │
+├──────────────────────────────────────────────────────────────────┤
+│  Data & Cloud Layer                                              │
+│  ├── Local SQLite (LocationDbHelper / LocationRepository)        │
+│  ├── Export (TrackExporter: GPX / KML / CSV via FileProvider)    │
+│  └── Cloud Firestore (Named DB) + Credential Manager Google Auth │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Location Provider Strategy
@@ -49,43 +51,54 @@
 app/
 ├── src/main/
 │   ├── AndroidManifest.xml
-│   ├── java/com/gisgroup14/locationtracker/
+│   ├── java/com/geotrace/
 │   │   ├── MainActivity.kt
-│   │   ├── LocationTrackerApp.kt
+│   │   ├── LocationTrackerApp.kt               // App-level manual DI container
 │   │   ├── data/
-│   │   │   ├── db/ (Room entities, DAOs)
-│   │   │   ├── repository/ (LocationRepository)
-│   │   │   └── export/ (GpxExporter, KmlExporter)
+│   │   │   ├── LocationDbHelper.kt             // SQLite schema & indexes (gis_tracker.db v2)
+│   │   │   ├── LocationRepository.kt           // Trails, deadband/EMA filter, geofences
+│   │   │   ├── GroupRepository.kt              // Cloud Firestore (named DB) & Nearby P2P mesh
+│   │   │   └── export/TrackExporter.kt         // GPX 1.1, KML 2.2 & CSV generators
+│   │   ├── model/
+│   │   │   ├── LocationModels.kt               // TrackingMode, LocationPoint, TrackingSession
+│   │   │   ├── CellModels.kt                   // CellTowerInfo, CellTowerLocation
+│   │   │   ├── GeofenceModels.kt               // GeofenceZone, GeofenceAlert
+│   │   │   ├── GroupModels.kt                  // Group, MemberLocation, PersonalDevice, P2PPeer
+│   │   │   └── SettingsModels.kt               // TrackerSettings, SpeedUnit, CoordinateFormat
 │   │   ├── service/
-│   │   │   ├── LocationForegroundService.kt
-│   │   │   ├── BatteryOptimizer.kt
-│   │   │   └── CellDiagnosticService.kt      // Optional: raw cell + OpenCellID
+│   │   │   ├── LocationForegroundService.kt    // Foreground location + WakeLock
+│   │   │   ├── CellularDiagnosticManager.kt    // TelephonyManager radio scanner
+│   │   │   ├── OpenCellIdClient.kt             // Live OpenCellID REST API lookup
+│   │   │   ├── GeofenceManager.kt              // Google Play GeofencingClient + BroadcastReceiver
+│   │   │   ├── FindDeviceAlarmManager.kt       // Remote Ring audio/vibration alarm
+│   │   │   └── AppUpdateManager.kt             // GitHub Releases API + DownloadManager
 │   │   ├── ui/
-│   │   │   ├── map/ (MapScreen, MapViewModel)
-│   │   │   ├── tracking/ (TrackingScreen, TrackingViewModel)
-│   │   │   ├── geofence/ (GeofenceScreen)
-│   │   │   ├── sharing/ (SharingScreen)       // Family safety: share with contacts
-│   │   │   ├── settings/ (SettingsScreen)
-│   │   │   └── theme/ (Material3 theme)
-│   │   └── di/ (Hilt modules)
+│   │   │   ├── components/MapViewComposable.kt // osmdroid map + markers + polylines
+│   │   │   ├── screens/                        // MapScreen, CellularDiagnosticScreen, GroupScreen,
+│   │   │   │                                   // GeofenceScreen, HistoryScreen, ResearchAnalysisScreen, SettingsScreen
+│   │   │   └── theme/                          // Material 3 Theme, Color, Typography, Shape
+│   │   └── viewmodel/
+│   │       ├── TrackerViewModel.kt
+│   │       └── GroupViewModel.kt
 │   └── res/
-│       ├── values/strings.xml
-│       └── xml/network_security_config.xml
+│       ├── values/strings.xml & firebase_applet_config.xml
+│       └── xml/file_paths.xml
 └── build.gradle.kts
 ```
 
 ---
 
-## Key Technical Decisions (from DECISION_LOG.md)
+## Key Technical Decisions (Implemented)
 
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| **Tracking Approach** | Option 2: Mobile (GPS/WiFi/Cell) | Real-time capable, meter-level accuracy, meets task |
-| **Platform** | Android (Kotlin + Jetpack Compose) | Full sensor access, Uganda market dominant, free tooling |
-| **Map Library** | *Pending* (MapLibre vs osmdroid) | Compose-compatible, free, offline-capable |
-| **Local Database** | *Pending* (Room recommended) | Android standard, type-safe, coroutines/Flow |
-| **Backend/Sync** | *Pending* (Firebase Realtime DB recommended) | Free tier, real-time sync for family sharing, auth |
-| **Background Strategy** | *Pending* (Adaptive: HIGH_ACCURACY moving, BALANCED stationary) | Battery-efficient, meets Android 10+ requirements |
+| Decision | Implemented Choice | Rationale |
+|----------|-------------------|-----------|
+| **Tracking Approach** | Option 2: Mobile (GNSS / Fused / Cell) | Real-time capable, meter-level accuracy, battery-selectable modes |
+| **Platform** | Android (Kotlin + Jetpack Compose + Material 3) | Full hardware telemetry access, reactive UI |
+| **Map Library** | `osmdroid` (`6.1.18`) | Native Compose wrapper, OSM/Carto/Topo tiles, offline tile caching |
+| **Local Database** | SQLite (`LocationDbHelper`, indexed `v2`) | Lightweight, zero KSP overhead, fast `(session_id, timestamp)` index seeks |
+| **Cloud Backend / Auth** | Cloud Firestore (Named DB) + Firebase Auth + Credential Manager (Google Sign-In) | Zero server ops, real-time snapshot listeners, strict `firestore.rules` |
+| **Off-Grid Mesh** | Google Nearby Connections (`Strategy.P2P_CLUSTER`) | Zero-internet BLE + Wi-Fi Direct peer coordinates & Remote Ring |
+| **Background Strategy** | Adaptive (`HIGH_ACCURACY` 1s / `BALANCED` 5s / `POWER_SAVER` 30s) + `PARTIAL_WAKE_LOCK` | Battery-tunable while surviving Android Doze mode |
 
 ---
 

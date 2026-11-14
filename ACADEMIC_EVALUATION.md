@@ -25,13 +25,13 @@ GeoTrace implements a multi-tiered spatial architecture that bridges physical ra
                     |                                   |
 +-------------------v---------------+   +---------------v-------------------------+
 |     HARDWARE TELEMETRY CORE       |   |       DATA PERSISTENCE & EXPORT         |
-|  • FusedLocationProviderClient    |   |  • Room / SQLite Local Relational Store |
-|    (Multi-GNSS: GPS, GLONASS,     |   |    (Zero-Cloud Leakage, Offline-First)  |
-|     Galileo, BeiDou)              |   |  • GPX 1.1 Exporter (Topografix DTD)    |
-|  • TelephonyManager Hardware      |   |  • KML 2.2 Exporter (OGC Standard)      |
-|    (LTE/UMTS/GSM Cell Telemetry)  |   |  • CSV Telemetry Logger (WGS84 UTM)     |
-|  • OpenCellID Uganda Resolver     |   +-----------------------------------------+
-|    (MTN 641-10 & Airtel 641-22)   |
+|  • FusedLocationProviderClient    |   |  • SQLite (`LocationDbHelper` v2)       |
+|    (Multi-GNSS: GPS, GLONASS,     |   |    + Jetpack DataStore (Offline-First)  |
+|     Galileo, BeiDou)              |   |  • Opt-in Cloud Firestore + Auth        |
+|  • TelephonyManager Hardware      |   |    (Zero-Trust Rules + Ghost Mode)      |
+|    (LTE/UMTS/GSM Cell Telemetry)  |   |  • Google Nearby Connections P2P        |
+|  • OpenCellID Live API Resolver   |   |  • GPX 1.1 / KML 2.2 / CSV Exports      |
+|    (Requires User API Key)        |   +-----------------------------------------+
 |  • In-App Update Engine           |
 |    (GitHub Releases API + CI/CD)  |
 +-----------------------------------+
@@ -75,14 +75,14 @@ GeoTrace is architected to comply strictly with the legal statutes governing tel
 
 ### 1. Data Protection and Privacy Act, 2019 (Cap 97)
 - **Principle of Minimization (§3(1)(a)):** GeoTrace collects only coordinates, velocity, and cellular radio metrics necessary for GIS trajectory mapping.
-- **Principle of Data Sovereignty & Consent (§7):** No location telemetry is transmitted to third-party ad networks, telemetry trackers, or external cloud databases. All spatial histories remain strictly stored in local SQLite partitions (`/data/data/com.geotrace/databases/`).
+- **Principle of Data Sovereignty & Consent (§7):** Recorded trail histories remain strictly in on-device SQLite (`gis_tracker.db`) by default. Cloud Firestore sync (for *My Other Devices*, *Tracking Groups*, and *Remote Ring*) is strictly opt-in behind authenticated Google Sign-In (`CredentialManager` + zero-trust `firestore.rules`), and can be paused immediately via **Ghost Mode**. No third-party ad networks or analytics trackers exist.
 - **Right to Erasure (§24):** The user maintains total sovereignty to purge individual tracking sessions or delete all recorded trajectories directly from the History screen.
 
 ### 2. Uganda Communications Act, 2013 (Cap 106)
 - **Radio Frequency & Interception Compliance:** GeoTrace queries only standard Android OS passive radio cell identity broadcasts via standard `TelephonyManager.getAllCellInfo()` permissions (`android.permission.READ_PHONE_STATE`). It performs zero RF interception, IMSI catching, or unauthorized spectrum transmissions.
 
 ### 3. Electronic Signatures Act, 2011 (Cap 101) & Electronic Transactions Act (Cap 103)
-- Exported GPX and KML logs contain immutable ISO-8601 UTC timestamps, verifiable SHA-256 track integrity, and clear geodetic lineage, providing evidentiary validity for spatial survey records and academic audits.
+- Exported GPX and KML logs preserve ISO-8601 UTC timestamps, coordinate/elevation provenance, and accuracy metadata (`<hdop>`), providing auditable geodetic records via `FileProvider`.
 
 ---
 

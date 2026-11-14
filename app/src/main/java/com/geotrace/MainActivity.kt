@@ -382,7 +382,7 @@ fun MainAppScreen(
             }
         }
 
-        // Full-Height Scrollable Bottom Sheet for Secondary Utilities
+        // Auto-Expanded Scrollable Bottom Sheet for Secondary Utilities
         if (showMenuSheet) {
             ModalBottomSheet(
                 onDismissRequest = { showMenuSheet = false },
@@ -399,7 +399,7 @@ fun MainAppScreen(
                         Box(modifier = Modifier.size(width = 36.dp, height = 4.dp))
                     }
                 },
-                modifier = Modifier.testTag("partial_menu_sheet")
+                modifier = Modifier.testTag("geo_trace_menu_sheet")
             ) {
                 Column(
                     modifier = Modifier

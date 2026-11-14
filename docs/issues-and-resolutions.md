@@ -24,6 +24,12 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 | **GT-DECISION-05**| Cloud / Telemetry | **Strategic**| Multi-User Location Sharing & Web Dispatcher Cloud Backend Selection | **Adopted (Firebase)**|
 | **GT-ISSUE-06** | Telemetry / Math | **High** | Erratic pedestrian speeds (~4 km/h when shuffling, 0 km/h in balanced mode) due to Doppler noise & deadband decoupling | **Resolved** |
 | **GT-ISSUE-07** | UI / Responsiveness | **Medium** | HUD metrics overcrowding, sub-48dp touch targets, and speed unit inconsistencies | **Resolved** |
+| **GT-ISSUE-08** | Concurrency / Sync | **High** | Zombie cell diagnostics coroutines and SQLite mode desync on rapid mode switching | **Resolved** |
+| **GT-ISSUE-09** | UI / Ergonomics | **Low** | Cramped HUD collapse button and abrupt visibility jump | **Resolved** |
+| **GT-ISSUE-10** | Updates / UI | **High** | `"Check Updates"` action hidden by layout squeeze and GitHub HTTP 404 shown as generic error | **Resolved** |
+| **GT-ISSUE-11** | Navigation / Sheet | **Medium** | `GeoTrace Safe Menu` bottom sheet opening half-height and clipping bottom actions | **Resolved** |
+| **GT-ISSUE-12** | Scope / Architecture | **Medium** | Speculative Indoor BLE RSSI Radar and Background Beacon cluttering Devices UI | **Removed** |
+| **GT-ISSUE-13** | Auth / CI Signing | **Critical** | Google Sign-In `"cancelled"` on physical devices due to Activity context resolution & CI debug keystore mismatch | **Resolved** |
 
 ---
 
@@ -157,6 +163,53 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 
 ---
 
+### GT-ISSUE-10: Application Updates Button Hidden & 404 Release Handling
+- **Discovered:** November 13, 2026
+- **Files Affected:** `SettingsScreen.kt`, `AppUpdateManager.kt`, `SettingsViewModel.kt`, `AndroidManifest.xml`
+- **Symptom:** The `"Check Updates"` button in Settings disappeared on standard phone widths, un-published GitHub releases returned raw HTTP 404 errors, and `"Install Update"` lacked unknown-sources permission validation.
+- **Root Cause:**
+  1. Left text `Column` inside the Settings `Row` lacked `Modifier.weight(1f)`, pushing the action `Button` off-screen.
+  2. `AppUpdateManager.checkForUpdate()` did not distinguish HTTP `404` (`NoReleasesPublished`) when `github.com/mugmarp/Group_14_GIS__BSE_SWE2105_project_task_2026/releases/latest` had no published tags yet.
+  3. APK downloads did not inspect `DownloadManager.COLUMN_STATUS` or verify `PackageManager.canRequestPackageInstalls()`.
+- **Resolution:**
+  1. Added `Modifier.weight(1f)` to the update text column in `SettingsScreen.kt` plus an `"Open GitHub Releases"` browser fallback.
+  2. Added `UpdateCheckResult.NoReleasesPublished` in `AppUpdateManager.kt`, real `DownloadManager` status/reason polling, and `Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES` check before firing the APK installer intent.
+- **Outcome:** Reliable update checking with honest messaging before the first tagged release and safe APK installation once releases exist.
+
+---
+
+### GT-ISSUE-11: GeoTrace Safe Menu Partially Expanded & Clipped
+- **Discovered:** November 13, 2026
+- **Files Affected:** `MainActivity.kt`
+- **Symptom:** Opening the hamburger menu showed only a partial sheet (~50% height), clipping `"Telemetry & System Setup"` and the bottom footer on shorter screens.
+- **Resolution:** Configured `rememberModalBottomSheetState(skipPartiallyExpanded = true)` and wrapped sheet content in a scrollable `Column` with `Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding()`.
+- **Outcome:** Menu skips half-height collapse so all cards are immediately visible (~70–85% height on standard phones) and scrolls smoothly on shorter displays.
+
+---
+
+### GT-ISSUE-12: Scope Tightening — Removal of Indoor BLE RSSI Radar & Background Beacon
+- **Discovered:** November 13, 2026
+- **Files Affected:** Deleted `BleProximityFinder.kt`, updated `LocationForegroundService.kt`, `GroupScreen.kt`, `TrackerViewModel.kt`, `AndroidManifest.xml`, `strings.xml`
+- **Symptom:** The `Devices` tab included an Indoor BLE RSSI ("Warmer/Colder") Radar and Background Device Beacon toggle that sat outside the SWE2105 Option 2 scope and created false UX expectations.
+- **Resolution:** Removed `BleProximityFinder.kt` and all BLE radar/beacon UI cards and foreground service hooks, retaining the core Option 2 scope: **Off-Grid P2P Device Finder** (Nearby Connections `P2P_CLUSTER`), **Cloud Multi-Device Fleet** (`My Other Devices`), **Tracking Groups**, and **Remote Ring**.
+- **Outcome:** Clean, focused Devices hub with zero dead-end or out-of-scope toggles.
+
+---
+
+### GT-ISSUE-13: Google Sign-In Failures & CI Debug Keystore Fingerprint Drift
+- **Discovered:** November 13–14, 2026
+- **Files Affected:** `GroupScreen.kt`, `.github/workflows/android-ci.yml`
+- **Symptom:** Selecting a Google account in Credential Manager on a real phone returned `"Sign in cancelled"` or failed authentication in CI-built APKs.
+- **Root Cause:**
+  1. `LocalContext.current as? Activity` can return null when Compose wraps `ContextThemeWrapper`, and `GetCredentialException` subtypes needed clearer diagnostic surfacing.
+  2. `.github/workflows/android-ci.yml` ran `keytool -genkey` to create a fresh ephemeral `debug.keystore` whenever absent, producing a random SHA-1 different from `A2:50:90:0A:D4:A5:AE:0B:C2:AF:30:34:AE:23:2C:B4:C1:A0:9C:35` registered in Firebase / `app/google-services.json`.
+- **Resolution:**
+  1. Added `ContextWrapper.findActivity()` unwrapping and `rememberCoroutineScope()` launch with explicit `GetCredentialCancellationException` / `NoCredentialException` / `GetCredentialException` error handling in `GroupScreen.kt`.
+  2. Updated `.github/workflows/android-ci.yml` (`Ensure Debug Keystore Exists`) to decode `debug.keystore.base64` into `debug.keystore` first before falling back to `keytool -genkey`.
+- **Outcome:** CI-built and local debug APKs share the exact registered SHA-1/SHA-256 fingerprints required by Firebase Auth and Credential Manager Google Sign-In.
+
+---
+
 ## 3. Verification & Compliance Checklist
 
 - [x] **FileProvider Export**: Verified `.gpx`, `.kml`, and `.csv` generate valid URIs without Binder overflow.
@@ -167,5 +220,7 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 - [x] **Cross-Screen Responsiveness**: Verified 48dp touch targets, weighted telemetry columns, and speed unit consistency.
 - [x] **Mode Switching Concurrency**: Verified `cellDiagnosticsJob` cancellation, active session SQLite sync, and target mode standby propagation.
 - [x] **HUD Collapse Ergonomics**: Verified centered pull-tab handle and `AnimatedVisibility` expansion transitions.
-- [x] **Gradle Build**: Verified project builds cleanly (`compile_applet` PASS) and unit tests pass (`testDebugUnitTest` PASS).
+- [x] **Safe Menu & Updates UI**: Verified auto-expanded scrollable bottom-sheet menu, Settings update button layout, and 404/install-permission handling.
+- [x] **Google Sign-In & CI Keystore**: Verified `findActivity()` context unwrapping and `debug.keystore.base64` CI decode step.
+- [x] **Gradle Build**: Verified project builds cleanly (`compile_applet` PASS).
 

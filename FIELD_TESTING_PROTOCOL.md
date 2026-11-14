@@ -47,7 +47,7 @@ During each test run, the evaluators record telemetry at 1-second intervals via 
 | SWE2105 FIELD RUN LOG SHEET                                                                        |
 | Date: _______________   Time: __________   Evaluator: ____________________________________________ |
 | Site: [ ] A (Kihumuro Grounds)  [ ] B (FAST Block)  [ ] C (Hostel Indoor)                          |
-| Tracking Mode: [ ] High Accuracy (1s)  [ ] Balanced (5s)  [ ] Power Saver (15s)                    |
+| Tracking Mode: [ ] High Accuracy (1s)  [ ] Balanced (5s)  [ ] Power Saver (30s fused / 10s cell) |
 | Network Operator: [ ] MTN Uganda (641-10)  [ ] Airtel Uganda (641-22)                              |
 +-------+--------------+---------------+----------+--------+---------+-----------+---------+---------+
 | Sec   | GNSS Lat/Lon | Accuracy (m)  | Speed    | MCC/MNC| LAC/TAC | Cell ID   | RSSI    | Tower   |
@@ -70,8 +70,8 @@ During each test run, the evaluators record telemetry at 1-second intervals via 
    - **Velocity Scalar Unit:** Set to `km/h` or `m/s`.
    - **Stationary Deadband Filter:** Enabled at `1.5m (Std)`.
    - **Accuracy Confidence Ring:** Toggled **ON**.
-   - **Live Uganda Cell Tower Pinning:** Toggled **ON**.
-3. Verify that the **OpenCellID Engine** status shows bundled Uganda cache active for `641-10` (MTN) and `641-22` (Airtel).
+   - **Cell Tower Pinning on Map:** Toggled **ON** (with valid OpenCellID API key configured if physical tower coordinates on the map are required).
+3. Verify that **Cellular Hub** displays live hardware radio IDs (`MCC`, `MNC`, `LAC/TAC`, `CID/NCI`, `dBm`) via `TelephonyManager` for `641-10` (MTN) or `641-22` (Airtel). Note: GeoTrace uses zero synthetic/bundled tower coordinates—live coordinates require an OpenCellID API key.
 
 ### Phase 2: Open Sky Static Baseline Trial (Site A)
 1. Mount the device on a survey tripod at benchmark station `MUST-KH-01` (`-0.617120, 30.654810`).
@@ -80,7 +80,7 @@ During each test run, the evaluators record telemetry at 1-second intervals via 
 4. **Validation Criteria:**
    - Raw GNSS jitter must be suppressed by the deadband filter ($J_{rejected} > 0\text{ m}$ displayed on Settings counter).
    - Horizontal accuracy $E_{GPS} \le 4.5\text{ m}$.
-   - Serving cell tower pin rendered on map with distance ray connecting phone pin to MTN/Airtel tower.
+   - Serving cell tower pin rendered on map (when OpenCellID API key is configured) with distance ray connecting phone pin to MTN/Airtel tower.
 
 ### Phase 3: Dynamic Walking Perimeter & Geofence Boundary Test (Site B)
 1. Define a Geofence polygon around the FAST Engineering complex with radius $R = 40\text{ m}$.

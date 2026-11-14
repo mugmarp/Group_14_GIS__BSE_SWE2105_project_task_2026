@@ -30,36 +30,37 @@ The GeoTrace quality assurance architecture verifies both functional software be
 
 | Test Suite | Scope | Command / Tool | Success Criteria |
 | :--- | :--- | :--- | :--- |
-| **Unit Tests** | Haversine distance, deadband filter, formatting | `gradle testDebugUnitTest` | 100% pass, 0 regressions |
-| **Debug Compilation** | App compilation, resource linking, manifest | `gradle assembleDebug` | Produces `app-debug.apk` |
-| **Release Compilation** | ProGuard optimization, resource shrinking | `gradle assembleRelease` | Produces signed `app-release.apk` |
-| **OpenCellID Resolution** | API query & offline baseline fallback | `OpenCellIdClientTest` | Correct coordinates for `641-10` & `641-22` |
-| **In-App Update Engine** | GitHub Releases API parsing & install intent | `AppUpdateManagerTest` | Returns valid APK URI with `FileProvider` |
+| **Firestore Security Rules** | Auth gating, `/users/{uid}/devices` isolation, `/groups` invite/member rules | `FIRESTORE_EMULATOR_HOST="127.0.0.1:8085" node --test firestore.test.js` | All 6 rule assertions pass |
+| **Unit Tests** | Local JVM unit test pipeline | `./gradlew testDebugUnitTest` (`gradle testDebugUnitTest`) | Clean exit, 0 failures |
+| **Debug Compilation** | App compilation, Google Services processing, resource linking | `./gradlew assembleDebug` (`gradle assembleDebug`) | Produces `app-debug.apk` |
+| **Release Compilation** | Release packaging with project keystore config | `./gradlew assembleRelease` (`gradle assembleRelease`) | Produces signed `app-release.apk` |
+| **Real-Device Multi-Phone QA** | Google Sign-In, My Other Devices + Ring, Shared Groups, Off-Grid P2P, OTA Updates | Physical Android devices (see `docs/team-guide.md`) | Live telemetry, Ring alarm & offline P2P verified |
 
 ---
 
 ## 3. Automated Test Command Reference
 
-Run all automated unit tests directly from the workspace root:
+Verify Firestore security rules against the local emulator:
 ```bash
-gradle testDebugUnitTest
+FIRESTORE_EMULATOR_HOST="127.0.0.1:8085" node --test firestore.test.js
 ```
 
-Compile both release and debug installable packages:
+Run unit tests and compile both installable packages (decode `debug.keystore.base64` first if running locally outside CI):
 ```bash
-gradle assembleDebug assembleRelease
+base64 -d debug.keystore.base64 > debug.keystore
+./gradlew testDebugUnitTest assembleDebug assembleRelease
 ```
 
 ---
 
 ## 4. QA Testing Power Optimization (Auto-Balanced GPS)
 
-*Added: November 8–9, 2026 (Ref: `docs/issues-and-resolutions.md`)*
+*Ref: `docs/issues-and-resolutions.md`*
 
 To prevent rapid battery depletion and desk multipath jitter during prolonged QA testing:
 - **Debug Builds**: Default tracking profile is automatically set to **`TrackingMode.BALANCED`** (5-second update intervals, 10-meter displacement threshold, ~8 mA power draw).
 - **Settings Toggle**: Testers can switch between Auto-Balanced (5s) and High-Accuracy (1s GNSS) via the **Testing & Power Optimization** card in `SettingsScreen.kt`.
 - **Full Trail Integrity**: Balanced testing continues to log complete location points to SQLite, render real-time breadcrumbs on the map, and output identical GPX/KML/CSV exports.
 
-For full audit details on resolved issues and architecture decisions, see **[`docs/issues-and-resolutions.md`](issues-and-resolutions.md)**.
+For full audit details on resolved issues and architecture decisions, see **[`docs/issues-and-resolutions.md`](issues-and-resolutions.md)** and **[`docs/team-guide.md`](team-guide.md)**.
 

@@ -118,9 +118,9 @@ When recording a decision, use this format:
 
 ---
 
-### [DATE] Decision: Map Library
+### 2026-11-04 Decision: Map Library
 
-**Status:** Pending
+**Status:** Accepted
 
 **Context:** Need free, no-API-key map solution for student project.
 
@@ -130,21 +130,21 @@ When recording a decision, use this format:
 3. **Google Maps SDK** — Requires API key (free tier generous but needs billing account), best docs
 4. **Leaflet (Web) / React Leaflet** — Web only, simple, raster tiles
 
-**Decision:** [TO BE DECIDED]
+**Decision:** **osmdroid (`org.osmdroid:osmdroid-android`)** wrapped cleanly inside Jetpack Compose `AndroidView` (`MapViewComposable.kt`).
 
-**Rationale:** [TO BE FILLED]
+**Rationale:** Zero API key or billing account friction, mature offline tile caching, direct `Polyline`/`Polygon`/`Marker` drawing for trails, geofences, accuracy rings, and cell tower vectors.
 
-**Consequences:** Affects UI framework choice (Compose vs XML vs Web)
+**Consequences:** Smooth OpenStreetMap rendering across physical devices; map overlays update deterministically from Kotlin `StateFlow`.
 
 **Action Items:**
-- [ ] Spike: test osmdroid vs MapLibre in Compose
-- [ ] Decide based on developer experience
+- [x] Integrate `osmdroid-android` with `MapViewComposable.kt`
+- [x] Configure `UserAgentValue` (`BuildConfig.APPLICATION_ID`) to comply with OSM tile servers
 
 ---
 
-### [DATE] Decision: Local Database
+### 2026-11-04 Decision: Local Database
 
-**Status:** Pending
+**Status:** Accepted
 
 **Context:** Need to store location points locally for offline-first trail recording.
 
@@ -152,63 +152,65 @@ When recording a decision, use this format:
 1. **Room (SQLite)** — Android standard, type-safe, Kotlin coroutines, LiveData/Flow
 2. **Realm** — Object-oriented, reactive, but larger APK
 3. **DataStore (Preferences/Proto)** — Not for relational location data
-4. **Plain SQLite / File (JSON/GPX)** — Simple export, no query capability
+4. **Plain SQLite (`SQLiteOpenHelper`) + Preferences DataStore** — Zero KSP annotation processor overhead, direct SQL control, fast builds
 
-**Decision:** [TO BE DECIDED]
+**Decision:** **Native Android `SQLiteOpenHelper` (`LocationDbHelper.kt`, v2 with `(session_id, timestamp)` composite index) + Jetpack DataStore (`SettingsManager.kt`)**.
 
-**Rationale:** [TO BE FILLED]
+**Rationale:** Avoids KSP/Room annotation build complexity while giving deterministic SQL queries, atomic transactions, and fast $O(\log N)$ export generation alongside lightweight DataStore preferences.
 
-**Consequences:** Room integrates best with Android architecture; GPX export easy from any
+**Consequences:** Clean separation between relational telemetry (`gis_tracker.db`) and user settings (`tracker_settings` DataStore).
 
 **Action Items:**
-- [ ] Default to Room unless team has strong preference
+- [x] Implement `LocationDbHelper` (`sessions`, `location_points`, `geofences` tables)
+- [x] Add `idx_points_session` index via v2 non-destructive migration
 
 ---
 
-### [DATE] Decision: Backend / Sync (Optional)
+### 2026-11-09 Decision: Backend / Sync (Optional)
 
-**Status:** Pending
+**Status:** Accepted
 
-**Context:** Multi-user sharing or cloud backup of traces.
+**Context:** Multi-user sharing, personal multi-device fleet lookup, remote alarm trigger, and off-grid P2P discovery.
 
 **Options Considered:**
-1. **Firebase Realtime Database** — Free tier (1 GB, 100 concurrent), easy auth, real-time sync
-2. **Supabase (PostgreSQL)** — Free tier (500 MB), SQL, real-time, auth
-3. **Custom (Node/Go/Python + PostgreSQL)** — Full control, but hosting cost/effort
-4. **None (local-only)** — Simplest, privacy-first, export GPX/KML for sharing
+1. **Firebase Realtime Database** — Free tier, real-time sync
+2. **Supabase (PostgreSQL)** — Free tier, SQL
+3. **Cloud Firestore (Named Database) + Credential Manager Google Sign-In + Google Nearby Connections (`P2P_CLUSTER`)** — Serverless, zero-trust Firestore rules, Google Sign-In, plus zero-internet P2P fallback
+4. **None (local-only)** — Local export only
 
-**Decision:** [TO BE DECIDED]
+**Decision:** **Hybrid Opt-In Architecture: Firebase Cloud Firestore (named database `R.string.firestore_database_id`) gated by Jetpack Credential Manager Google Sign-In, plus offline Google Nearby Connections (`P2P_CLUSTER`)**.
 
-**Rationale:** [TO BE FILLED]
+**Rationale:** Local SQLite stays private when signed out or in Ghost Mode, while signed-in users get real-time multi-device fleet visibility, invite-code tracking groups, and remote ring—plus Nearby P2P works without internet.
 
-**Consequences:** Adds scope; recommend defer to Week 5 if time permits
+**Consequences:** Requires `firestore.rules`, composite `{uid}_{deviceId}` keys, `SetOptions.merge()`, and consistent SHA-1 keystore signing across local builds and GitHub Actions.
 
 **Action Items:**
-- [ ] Start local-only; add backend only if ahead of schedule
+- [x] Provision Cloud Firestore, `firestore.rules`, and `firestore.test.js`
+- [x] Implement `GroupRepository.kt`, `NearbyP2PManager.kt`, and `FindDeviceAlarmManager.kt`
 
 ---
 
-### [DATE] Decision: Background Tracking Strategy
+### 2026-11-08 Decision: Background Tracking Strategy
 
-**Status:** Pending
+**Status:** Accepted
 
-**Context:** Android 10+ requires `ACCESS_BACKGROUND_LOCATION` (user-granted, Play Store review) and Foreground Service with `FOREGROUND_SERVICE_LOCATION`.
+**Context:** Android 10+ requires `ACCESS_BACKGROUND_LOCATION` and Foreground Service with `FOREGROUND_SERVICE_LOCATION` plus battery/accuracy balance.
 
 **Options Considered:**
-1. **Foreground Service + High Accuracy** — Continuous GPS, high battery, shows persistent notification
-2. **Foreground Service + Balanced Power** — WiFi/Cell only, lower battery, ~block accuracy
-3. **Adaptive: High Accuracy when moving, Balanced when stationary** — Best balance, uses activity recognition
-4. **WorkManager periodic + FusedLocation** — Not real-time, ~15 min minimum interval
+1. **Foreground Service + High Accuracy** — Continuous GPS (1s / 2m)
+2. **Foreground Service + Balanced Power** — Fused WiFi/Cell/GPS (5s / 10m)
+3. **Foreground Service with User-Selectable Tiers (`HIGH_ACCURACY`, `BALANCED`, `POWER_SAVER`) + WakeLock**
+4. **WorkManager periodic** — Not real-time (~15 min minimum interval)
 
-**Decision:** [TO BE DECIDED]
+**Decision:** **Foreground Service (`LocationForegroundService.kt`) with `PARTIAL_WAKE_LOCK` and three selectable tiers**: `High Accuracy (1s GNSS)`, `Balanced Fused (5s)`, and `Power Saver (10s cell telemetry)`. Debug builds default to `Balanced` via `autoBalancedTestMode` to preserve tester battery.
 
-**Rationale:** [TO BE FILLED]
+**Rationale:** Gives evaluators full high-frequency precision when needed while preventing desk jitter and battery drain during prolonged testing or low-battery conditions.
 
-**Consequences:** Directly impacts battery life and Play Store compliance
+**Consequences:** Telemetry engine tracks active tier transitions cleanly and cancels superseded cell diagnostics jobs.
 
 **Action Items:**
-- [ ] Implement adaptive (Option 3) as default
-- [ ] Expose accuracy/battery tradeoff in settings
+- [x] Implement `LocationForegroundService` with `PARTIAL_WAKE_LOCK` and three tracking modes
+- [x] Expose tier selector chip on Map HUD and `autoBalancedTestMode` in Settings
 
 ---
 
@@ -216,12 +218,12 @@ When recording a decision, use this format:
 
 | Date | Decision | Status |
 |------|----------|--------|
-| 2026-11-01 | Project Option Selection | **Accepted** (Option 2) |
-| 2026-11-01 | Target Platform | **Accepted** (Android/Kotlin/Compose) |
-| — | Map Library | Pending |
-| — | Local Database | Pending |
-| — | Backend / Sync | Pending |
-| — | Background Tracking Strategy | Pending |
+| 2026-11-01 | Project Option Selection | **Accepted** (Option 2: Mobile Phone Tracking) |
+| 2026-11-01 | Target Platform | **Accepted** (Android / Kotlin / Jetpack Compose) |
+| 2026-11-04 | Map Library | **Accepted** (osmdroid) |
+| 2026-11-04 | Local Database | **Accepted** (SQLite `LocationDbHelper` + DataStore) |
+| 2026-11-09 | Backend / Sync | **Accepted** (Cloud Firestore + Credential Manager + Nearby P2P) |
+| 2026-11-08 | Background Tracking Strategy | **Accepted** (`LocationForegroundService` 3-tier modes) |
 
 ---
 
@@ -231,4 +233,4 @@ When recording a decision, use this format:
 2. **During discussion:** Fill in "Options Considered" with honest pros/cons
 3. **After agreement:** Complete "Decision", "Rationale", "Consequences"
 4. **Create action items** with checkboxes for tracking
-5. **Reference decisions** in commit messages: `feat: add Room DB per DECISION_LOG.md#local-database`
+5. **Reference decisions** in commit messages: `feat: update tracking tier per DECISION_LOG.md`
