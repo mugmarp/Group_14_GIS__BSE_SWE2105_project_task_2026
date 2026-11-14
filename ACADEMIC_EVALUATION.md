@@ -15,7 +15,7 @@ GeoTrace implements a multi-tiered spatial architecture that bridges physical ra
 ```
 +---------------------------------------------------------------------------------+
 |                                 USER INTERFACE                                  |
-|   Jetpack Compose M3 (Daylight Tactical Palette, OpenStreetMap / Carto Vector) |
+|   Jetpack Compose M3 (5-Layer osmdroid: OSM / Esri Satellite / Hybrid / Topo / HOT) |
 +---------------------------------------+-----------------------------------------+
                                         |
 +---------------------------------------v-----------------------------------------+
@@ -25,8 +25,8 @@ GeoTrace implements a multi-tiered spatial architecture that bridges physical ra
                     |                                   |
 +-------------------v---------------+   +---------------v-------------------------+
 |     HARDWARE TELEMETRY CORE       |   |       DATA PERSISTENCE & EXPORT         |
-|  • FusedLocationProviderClient    |   |  • SQLite (`LocationDbHelper` v2)       |
-|    (Multi-GNSS: GPS, GLONASS,     |   |    + Jetpack DataStore (Offline-First)  |
+|  • FusedLocationProviderClient    |   |  • SQLite (`LocationDbHelper` v3)       |
+|    (Multi-GNSS: GPS, GLONASS,     |   |    + Offline Maps + DataStore         |
 |     Galileo, BeiDou)              |   |  • Opt-in Cloud Firestore + Auth        |
 |  • TelephonyManager Hardware      |   |    (Zero-Trust Rules + Ghost Mode)      |
 |    (LTE/UMTS/GSM Cell Telemetry)  |   |  • Google Nearby Connections P2P        |

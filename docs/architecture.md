@@ -11,7 +11,9 @@
 │                       MOBILE APP (Android)                       │
 ├──────────────────────────────────────────────────────────────────┤
 │  UI Layer (Jetpack Compose + Material 3)                         │
-│  ├── MapViewComposable (osmdroid: OSM / Carto / Satellite)       │
+│  ├── MapViewComposable + MapTileSources                          │
+│  │   (OSM Streets, Esri Satellite, Hybrid Labels, Topo, HOT)     │
+│  ├── OfflineMapsDialog (2km/5km/Viewport Pre-Downloader)         │
 │  └── Screens (Map, Cellular Hub, Devices, Geofence, History,     │
 │               Research, Settings)                                │
 ├──────────────────────────────────────────────────────────────────┤
@@ -19,12 +21,13 @@
 │  ├── TrackerViewModel & GroupViewModel                           │
 │  ├── LocationForegroundService (WakeLock + Adaptive Modes)       │
 │  ├── CellularDiagnosticManager + OpenCellIdClient                │
+│  ├── OfflineMapManager (CacheManager + SqlTileWriter, 512 MB)    │
 │  ├── GeofenceManager + GeofenceBroadcastReceiver                 │
 │  ├── FindDeviceAlarmManager + AppUpdateManager                   │
 │  └── Nearby Connections P2P Mesh (Strategy.P2P_CLUSTER)          │
 ├──────────────────────────────────────────────────────────────────┤
 │  Data & Cloud Layer                                              │
-│  ├── Local SQLite (LocationDbHelper / LocationRepository)        │
+│  ├── Local SQLite (LocationDbHelper v3 / LocationRepository)     │
 │  ├── Export (TrackExporter: GPX / KML / CSV via FileProvider)    │
 │  └── Cloud Firestore (Named DB) + Credential Manager Google Auth │
 └──────────────────────────────────────────────────────────────────┘
@@ -55,8 +58,8 @@ app/
 │   │   ├── MainActivity.kt
 │   │   ├── LocationTrackerApp.kt               // App-level manual DI container
 │   │   ├── data/
-│   │   │   ├── LocationDbHelper.kt             // SQLite schema & indexes (gis_tracker.db v2)
-│   │   │   ├── LocationRepository.kt           // Trails, deadband/EMA filter, geofences
+│   │   │   ├── LocationDbHelper.kt             // SQLite schema & indexes (gis_tracker.db v3)
+│   │   │   ├── LocationRepository.kt           // Trails, deadband/EMA/tier-guard, geofences, offline regions
 │   │   │   ├── GroupRepository.kt              // Cloud Firestore (named DB) & Nearby P2P mesh
 │   │   │   └── export/TrackExporter.kt         // GPX 1.1, KML 2.2 & CSV generators
 │   │   ├── model/
@@ -64,16 +67,20 @@ app/
 │   │   │   ├── CellModels.kt                   // CellTowerInfo, CellTowerLocation
 │   │   │   ├── GeofenceModels.kt               // GeofenceZone, GeofenceAlert
 │   │   │   ├── GroupModels.kt                  // Group, MemberLocation, PersonalDevice, P2PPeer
-│   │   │   └── SettingsModels.kt               // TrackerSettings, SpeedUnit, CoordinateFormat
+│   │   │   └── SettingsModels.kt               // TrackerSettings, MapTileType, OfflineMapRegion, OfflineDownloadProgress
 │   │   ├── service/
 │   │   │   ├── LocationForegroundService.kt    // Foreground location + WakeLock
 │   │   │   ├── CellularDiagnosticManager.kt    // TelephonyManager radio scanner
 │   │   │   ├── OpenCellIdClient.kt             // Live OpenCellID REST API lookup
+│   │   │   ├── OfflineMapManager.kt            // osmdroid CacheManager + SqlTileWriter region downloader
 │   │   │   ├── GeofenceManager.kt              // Google Play GeofencingClient + BroadcastReceiver
 │   │   │   ├── FindDeviceAlarmManager.kt       // Remote Ring audio/vibration alarm
 │   │   │   └── AppUpdateManager.kt             // GitHub Releases API + DownloadManager
 │   │   ├── ui/
-│   │   │   ├── components/MapViewComposable.kt // osmdroid map + markers + polylines
+│   │   │   ├── components/
+│   │   │   │   ├── MapTileSources.kt           // 5 base/overlay tile sources (Esri, Carto, Topo, HOT, OSM)
+│   │   │   │   ├── MapViewComposable.kt        // osmdroid map, rotated chevrons, S/E trail pins, dBm cell rays
+│   │   │   │   └── OfflineMapsDialog.kt        // Offline region estimator, progress & saved region manager
 │   │   │   ├── screens/                        // MapScreen, CellularDiagnosticScreen, GroupScreen,
 │   │   │   │                                   // GeofenceScreen, HistoryScreen, ResearchAnalysisScreen, SettingsScreen
 │   │   │   └── theme/                          // Material 3 Theme, Color, Typography, Shape
@@ -94,11 +101,11 @@ app/
 |----------|-------------------|-----------|
 | **Tracking Approach** | Option 2: Mobile (GNSS / Fused / Cell) | Real-time capable, meter-level accuracy, battery-selectable modes |
 | **Platform** | Android (Kotlin + Jetpack Compose + Material 3) | Full hardware telemetry access, reactive UI |
-| **Map Library** | `osmdroid` (`6.1.18`) | Native Compose wrapper, OSM/Carto/Topo tiles, offline tile caching |
-| **Local Database** | SQLite (`LocationDbHelper`, indexed `v2`) | Lightweight, zero KSP overhead, fast `(session_id, timestamp)` index seeks |
+| **Map Library** | `osmdroid` (`6.1.18`) + `MapTileSources` + `OfflineMapManager` | Native Compose wrapper, 5 base/hybrid layers (OSM, Esri Satellite, Hybrid Labels, Topo, HOT), 512 MB internal cache & bounded offline region downloads |
+| **Local Database** | SQLite (`LocationDbHelper`, indexed `v3`) | Lightweight, zero KSP overhead, fast `(session_id, timestamp)` index seeks + `offline_map_regions` |
 | **Cloud Backend / Auth** | Cloud Firestore (Named DB) + Firebase Auth + Credential Manager (Google Sign-In) | Zero server ops, real-time snapshot listeners, strict `firestore.rules` |
 | **Off-Grid Mesh** | Google Nearby Connections (`Strategy.P2P_CLUSTER`) | Zero-internet BLE + Wi-Fi Direct peer coordinates & Remote Ring |
-| **Background Strategy** | Adaptive (`HIGH_ACCURACY` 1s / `BALANCED` 5s / `POWER_SAVER` 30s) + `PARTIAL_WAKE_LOCK` | Battery-tunable while surviving Android Doze mode |
+| **Background Strategy** | Adaptive (`HIGH_ACCURACY` 1s / `BALANCED` 5s / `POWER_SAVER` 30s/10s cell) + `PARTIAL_WAKE_LOCK` | Battery-tunable, Doze-resilient, with provider-tier transition guards preventing cross-tier jump spikes |
 
 ---
 

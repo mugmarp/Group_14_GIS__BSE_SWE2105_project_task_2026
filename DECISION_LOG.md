@@ -130,15 +130,15 @@ When recording a decision, use this format:
 3. **Google Maps SDK** — Requires API key (free tier generous but needs billing account), best docs
 4. **Leaflet (Web) / React Leaflet** — Web only, simple, raster tiles
 
-**Decision:** **osmdroid (`org.osmdroid:osmdroid-android`)** wrapped cleanly inside Jetpack Compose `AndroidView` (`MapViewComposable.kt`).
+**Decision:** **osmdroid (`org.osmdroid:osmdroid-android`)** wrapped cleanly inside Jetpack Compose `AndroidView` (`MapViewComposable.kt`) with shared tile definitions in `MapTileSources.kt` and an internal **512 MB** cache (`filesDir/osmdroid/tiles`, trimming at 450 MB).
 
-**Rationale:** Zero API key or billing account friction, mature offline tile caching, direct `Polyline`/`Polygon`/`Marker` drawing for trails, geofences, accuracy rings, and cell tower vectors.
+**Rationale:** Zero API key or billing account friction, mature offline `CacheManager` + `SqlTileWriter` archiving, multi-layer support (`MAPNIK`, Esri World Imagery, Carto Light Labels overlay, OpenTopoMap, Humanitarian HOT), and direct `Polyline`/`Polygon`/`Marker` drawing for trails, geofences, accuracy rings, and dBm-colored cell tower rays.
 
-**Consequences:** Smooth OpenStreetMap rendering across physical devices; map overlays update deterministically from Kotlin `StateFlow`.
+**Consequences:** Smooth multi-layer rendering across physical devices without external storage permissions; map overlays update deterministically from Kotlin `StateFlow`.
 
 **Action Items:**
-- [x] Integrate `osmdroid-android` with `MapViewComposable.kt`
-- [x] Configure `UserAgentValue` (`BuildConfig.APPLICATION_ID`) to comply with OSM tile servers
+- [x] Integrate `osmdroid-android` with `MapViewComposable.kt` & `MapTileSources.kt`
+- [x] Configure `UserAgentValue` (`$packageName/${BuildConfig.VERSION_NAME}`) and 512 MB private internal cache
 
 ---
 
@@ -154,15 +154,15 @@ When recording a decision, use this format:
 3. **DataStore (Preferences/Proto)** — Not for relational location data
 4. **Plain SQLite (`SQLiteOpenHelper`) + Preferences DataStore** — Zero KSP annotation processor overhead, direct SQL control, fast builds
 
-**Decision:** **Native Android `SQLiteOpenHelper` (`LocationDbHelper.kt`, v2 with `(session_id, timestamp)` composite index) + Jetpack DataStore (`SettingsManager.kt`)**.
+**Decision:** **Native Android `SQLiteOpenHelper` (`LocationDbHelper.kt`, v3 with `(session_id, timestamp)` composite index) + Jetpack DataStore (`SettingsManager.kt`)**.
 
 **Rationale:** Avoids KSP/Room annotation build complexity while giving deterministic SQL queries, atomic transactions, and fast $O(\log N)$ export generation alongside lightweight DataStore preferences.
 
-**Consequences:** Clean separation between relational telemetry (`gis_tracker.db`) and user settings (`tracker_settings` DataStore).
+**Consequences:** Clean separation between relational/spatial persistence (`gis_tracker.db` v3: `tracking_sessions`, `location_points`, `geofence_zones`, `geofence_alerts`, `offline_map_regions`) and user preferences (`geotrace_prefs` DataStore).
 
 **Action Items:**
-- [x] Implement `LocationDbHelper` (`sessions`, `location_points`, `geofences` tables)
-- [x] Add `idx_points_session` index via v2 non-destructive migration
+- [x] Implement `LocationDbHelper` (`tracking_sessions`, `location_points`, `geofence_zones`, `geofence_alerts`, `offline_map_regions`)
+- [x] Add `idx_points_session` index (v2) and `offline_map_regions` table (v3) via non-destructive `onUpgrade` migrations
 
 ---
 
@@ -211,6 +211,29 @@ When recording a decision, use this format:
 **Action Items:**
 - [x] Implement `LocationForegroundService` with `PARTIAL_WAKE_LOCK` and three tracking modes
 - [x] Expose tier selector chip on Map HUD and `autoBalancedTestMode` in Settings
+- [x] Guard `LocationRepository.recordLocation` & `stopCurrentSession` against `"cellular"` ↔ GNSS transition spikes
+
+---
+
+### 2026-11-14 Decision: Multi-Layer Satellite Imagery & Offline Region Downloads
+
+**Status:** Accepted
+
+**Context:** Field testing in rural Mbarara/Kihumuro and off-grid P2P demonstrations require physical aerial imagery (rooftops, dirt paths, masts) and guaranteed offline tile availability without Google Maps billing keys or risky broad storage permissions. Also, OSM standard `MAPNIK` enforces `FLAG_NO_BULK` prohibiting bulk tile scraping.
+
+**Options Considered:**
+1. **Google Maps SDK** — Requires billing account/API key and disallows raw offline bulk tile caching.
+2. **osmdroid Custom XYZ Raster Sources + `CacheManager` Offline Regions** — Esri World Imagery (`{z}/{y}/{x}`), Carto Light Labels `TilesOverlay` (Hybrid), OpenTopoMap (capped Z17), and Humanitarian HOT stored in private `filesDir/osmdroid/tiles` (512 MB cap).
+
+**Decision:** **5-Layer `MapTileSources.kt` + `OfflineMapManager.kt` (`CacheManager` + `SqlTileWriter`)** using private internal storage, $O(\text{zoomLevels})$ Web Mercator math for pre-download estimation, a 2,500-tile cap per region download, and SQLite `v3` (`offline_map_regions`) region metadata. Standard `MAPNIK` respects `supportsOfflineBulkDownload = false` (`FLAG_NO_BULK`) while remaining passively auto-cached on pan/zoom.
+
+**Rationale:** Gives evaluators Google Maps-grade Satellite/Hybrid aerial clarity and true off-grid map regions with zero external API keys, zero `OutOfMemoryError` estimation risk, and full respect for OpenStreetMap tile usage policy.
+
+**Consequences:** Users can pre-cache `Map View`, `2 km`, or `5 km` zones around field sites before entering dead zones; switching layers automatically clamps zoom (`newSource.maximumZoomLevel`) so Topo (Z17 max) never renders blank tiles.
+
+**Action Items:**
+- [x] Implement `MapTileSources.kt` (Esri Satellite, Carto Hybrid overlay, OpenTopoMap, Humanitarian HOT)
+- [x] Implement `OfflineMapManager.kt`, `OfflineMapsDialog.kt`, and `LocationDbHelper` `v3` `offline_map_regions`
 
 ---
 
@@ -220,10 +243,11 @@ When recording a decision, use this format:
 |------|----------|--------|
 | 2026-11-01 | Project Option Selection | **Accepted** (Option 2: Mobile Phone Tracking) |
 | 2026-11-01 | Target Platform | **Accepted** (Android / Kotlin / Jetpack Compose) |
-| 2026-11-04 | Map Library | **Accepted** (osmdroid) |
-| 2026-11-04 | Local Database | **Accepted** (SQLite `LocationDbHelper` + DataStore) |
+| 2026-11-04 | Map Library | **Accepted** (osmdroid + 512 MB internal cache) |
+| 2026-11-04 | Local Database | **Accepted** (SQLite `LocationDbHelper` v3 + DataStore) |
 | 2026-11-09 | Backend / Sync | **Accepted** (Cloud Firestore + Credential Manager + Nearby P2P) |
-| 2026-11-08 | Background Tracking Strategy | **Accepted** (`LocationForegroundService` 3-tier modes) |
+| 2026-11-08 | Background Tracking Strategy | **Accepted** (`LocationForegroundService` 3-tier modes + transition guard) |
+| 2026-11-14 | Multi-Layer & Offline Cartography | **Accepted** (Esri Satellite, Hybrid Overlay, HOT, `OfflineMapManager`) |
 
 ---
 

@@ -35,6 +35,8 @@ The GeoTrace quality assurance architecture verifies both functional software be
 | **Debug Compilation** | App compilation, Google Services processing, resource linking | `./gradlew assembleDebug` (`gradle assembleDebug`) | Produces `app-debug.apk` |
 | **Release Compilation** | Release packaging with project keystore config | `./gradlew assembleRelease` (`gradle assembleRelease`) | Produces signed `app-release.apk` |
 | **Real-Device Multi-Phone QA** | Google Sign-In, My Other Devices + Ring, Shared Groups, Off-Grid P2P, OTA Updates | Physical Android devices (see `docs/team-guide.md`) | Live telemetry, Ring alarm & offline P2P verified |
+| **Multi-Layer & Offline Maps QA** | Layer switches (`STANDARD`, `SATELLITE`, `HYBRID`, `TOPO` Z17 clamp, `HUMANITARIAN`), 2km/5km offline download/cancel/jump/clear | Physical device Map Settings / `OfflineMapsDialog` | Crisp aerial & label overlays, offline tiles render in Airplane Mode |
+| **Mode Transition QA** | Rapid toggles between `High Accuracy`, `Balanced`, and `Power Saver (Cell Only)` during active & standby tracking | Physical device HUD Mode Pill | Zero phantom jump distance, clean GNSS ↔ `"cellular"` handoff |
 
 ---
 

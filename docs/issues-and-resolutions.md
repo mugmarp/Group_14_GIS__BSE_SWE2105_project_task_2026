@@ -1,7 +1,7 @@
 # GeoTrace Technical Audit & Resolved Issues Log
 
-**Audit Timeframe:** November 8–9, 2026  
-**Target Release:** v1.0.0+ Maintenance & v1.1.0 Readiness  
+**Audit Timeframe:** November 8–14, 2026  
+**Target Release:** v1.0.2+ Stabilization & Field-Ready Release  
 **Target Package:** `com.geotrace`  
 **Cloud Backend Standard:** Firebase (Cloud Firestore & Firebase Authentication)
 
@@ -30,6 +30,9 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 | **GT-ISSUE-11** | Navigation / Sheet | **Medium** | `GeoTrace Safe Menu` bottom sheet opening half-height and clipping bottom actions | **Resolved** |
 | **GT-ISSUE-12** | Scope / Architecture | **Medium** | Speculative Indoor BLE RSSI Radar and Background Beacon cluttering Devices UI | **Removed** |
 | **GT-ISSUE-13** | Auth / CI Signing | **Critical** | Google Sign-In `"cancelled"` on physical devices due to Activity context resolution & CI debug keystore mismatch | **Resolved** |
+| **GT-ISSUE-14** | Cartography / Layers | **High** | Missing Satellite/Hybrid layers, `HUMANITARIAN` fallback to `MAPNIK`, unlinked label overlay redraws, and Z17 Topo blank tiles | **Resolved** |
+| **GT-ISSUE-15** | Telemetry / Mode Switch | **Critical** | False jump distance/speed spikes across `"cellular"` ↔ GNSS transitions, `POWER_SAVER` Wi-Fi ping-ponging, and stale cell fix on return to GNSS | **Resolved** |
+| **GT-ISSUE-16** | Offline Maps / Perf | **High** | Offline estimator `OutOfMemoryError` risk on wide zoom, main-thread disk cache scan, and `Clear Cache` SQLite desync (`v3`) | **Resolved** |
 
 ---
 
@@ -210,17 +213,53 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 
 ---
 
+### GT-ISSUE-14: Satellite/Hybrid Imagery, Broken HOT Layer & Topo Z17 Blank Tiles
+- **Discovered:** November 14, 2026
+- **Files Affected:** `MapTileSources.kt`, `MapViewComposable.kt`, `LocationTrackerApp.kt`, `TrackerViewModel.kt`, `SettingsModels.kt`, `SettingsManager.kt`
+- **Symptom:** App lacked aerial/satellite layers; `MapTileType.HUMANITARIAN` fell back to `MAPNIK`; Hybrid label overlay tiles required manual pan to repaint; switching to `TOPO` while zoomed to Z18–Z19 rendered blank white tiles; tile layer choice reset to `STANDARD` after restart.
+- **Resolution:**
+  1. Created `MapTileSources.kt` with Esri World Imagery (`{z}/{y}/{x}`), Carto Light Labels `TilesOverlay`, fixed `HumanitarianOSM` (`tile.openstreetmap.fr/hot/`), and `OpenTopoMap`.
+  2. Linked `hybridLabelsProvider.setTileRequestCompleteHandler(map.tileRequestCompleteHandler)` cleanly (cleared on `onDispose`) and clamped `map.controller.setZoom()` to `newSource.maximumZoomLevel` on layer switch.
+  3. Persisted `mapTileType` in `SettingsManager` and provisioned a 512 MB internal cache (`filesDir/osmdroid/tiles`), cached rotated direction chevrons, cached member/device/P2P avatars, `S`/`E` trail markers, and dBm-colored cell rays.
+- **Outcome:** Smooth 5-layer switching across physical devices with crisp physical satellite imagery and zero blank over-zoom tiles.
+
+---
+
+### GT-ISSUE-15: Telemetry Spikes & Stale Fixes During Tracking Mode Switching
+- **Discovered:** November 14, 2026
+- **Files Affected:** `LocationRepository.kt`, `TrackerViewModel.kt`, `LocationForegroundService.kt`, `MainActivity.kt`
+- **Symptom:** Rapidly switching between `POWER_SAVER` (cellular tower centroid) and `HIGH_ACCURACY` / `BALANCED` (GNSS/fused) logged fake hundred-meter distance jumps and velocity spikes; `PRIORITY_LOW_POWER` fused Wi-Fi updates overwrote active cell tower fixes in `POWER_SAVER`; switching back from `POWER_SAVER` to GNSS kept showing the old cellular fix until the next satellite callback; `startTracking()` could overwrite a user-selected mode with `autoBalancedTestMode` if settings loaded asymmetrically.
+- **Resolution:**
+  1. Added a **provider-tier transition guard** in `LocationRepository.recordLocation()` and `stopCurrentSession()`: transitions between `"cellular"` and GNSS/`"fused"` reset the anchor point and speed EMA without adding cross-tier jump distance or derived speed spikes.
+  2. Suppressed `PRIORITY_LOW_POWER` fused callbacks in `POWER_SAVER` whenever a fresh `"cellular"` fix exists, fired immediate cell lookup when switching to `POWER_SAVER`, restarted `startStandbyCellPolling()`, and enabled `requestLastKnownLocation(forceIfCellular = true)` when switching back to GNSS.
+  3. Synchronized `autoBalancedTestMode` initialization cleanly without overriding manual `HIGH_ACCURACY` selection during `startTracking()`, and prevented duplicate standby listener registration in `MainActivity.kt`.
+- **Outcome:** Clean, mathematically consistent telemetry trajectories across all mode switches without phantom distance or speed artifacts.
+
+---
+
+### GT-ISSUE-16: Offline Region Estimator OOM Risk & Main-Thread Cache Scan
+- **Discovered:** November 14, 2026
+- **Files Affected:** `OfflineMapManager.kt`, `OfflineMapsDialog.kt`, `LocationDbHelper.kt`, `LocationRepository.kt`
+- **Symptom:** Calling osmdroid's `CacheManager.getTilesCoverage()` at wide zoom levels allocated millions of `Long` tile indices in memory (`OutOfMemoryError` risk); `computeCacheSizeMb()` walked the tile filesystem synchronously on the Main thread; clearing the tile cache left stale rows in SQLite `offline_map_regions`; dialog radius `FilterChip` labels wrapped awkwardly on narrow phones.
+- **Resolution:**
+  1. Replaced `getTilesCoverage()` in `estimateRegionTilesAndMb()` with constant-memory $O(\text{zoomLevels})$ Web Mercator coordinate arithmetic, enforcing `MAX_TILES_PER_DOWNLOAD = 2500` and 2-pass imagery + label downloads for `HYBRID`.
+  2. Moved filesystem size scanning to `refreshCacheSizeAsync()` on `Dispatchers.IO`, cleared `offline_map_regions` atomically when clearing tile cache, incremented `LocationDbHelper` to `v3`, and added `maxLines = 1` / compact formatting to `OfflineMapsDialog` chips.
+- **Outcome:** Zero-lag, crash-free offline region sizing, downloading, jumping, and cache management.
+
+---
+
 ## 3. Verification & Compliance Checklist
 
 - [x] **FileProvider Export**: Verified `.gpx`, `.kml`, and `.csv` generate valid URIs without Binder overflow.
 - [x] **WakeLock Execution**: Verified `PARTIAL_WAKE_LOCK` acquires cleanly and releases without leaks on service stop.
-- [x] **Database Migration**: Verified clean upgrade from v1 to v2 database schema with composite index.
+- [x] **Database Migration**: Verified clean upgrade from `v1` → `v2` (composite index) → `v3` (`offline_map_regions`).
 - [x] **Auto-Balanced Testing Switch**: Verified UI toggle in Settings, 5s interval setting, and full trail recording.
 - [x] **Pedestrian Speed Calibration**: Verified low-speed clamp, EMA smoothing, derived fallback, and gait classification.
 - [x] **Cross-Screen Responsiveness**: Verified 48dp touch targets, weighted telemetry columns, and speed unit consistency.
-- [x] **Mode Switching Concurrency**: Verified `cellDiagnosticsJob` cancellation, active session SQLite sync, and target mode standby propagation.
+- [x] **Mode Switching Concurrency & Tier Guard**: Verified `cellDiagnosticsJob` cancellation, active session SQLite sync, provider-tier transition guard, and GNSS/cellular handoff.
 - [x] **HUD Collapse Ergonomics**: Verified centered pull-tab handle and `AnimatedVisibility` expansion transitions.
 - [x] **Safe Menu & Updates UI**: Verified auto-expanded scrollable bottom-sheet menu, Settings update button layout, and 404/install-permission handling.
 - [x] **Google Sign-In & CI Keystore**: Verified `findActivity()` context unwrapping and `debug.keystore.base64` CI decode step.
+- [x] **5-Layer Cartography & Offline Maps**: Verified Esri Satellite, Carto Hybrid overlay, Humanitarian HOT, Topo zoom clamping, and $O(\text{zoomLevels})$ offline region downloads.
 - [x] **Gradle Build**: Verified project builds cleanly (`compile_applet` PASS).
 

@@ -71,6 +71,7 @@ During each test run, the evaluators record telemetry at 1-second intervals via 
    - **Stationary Deadband Filter:** Enabled at `1.5m (Std)`.
    - **Accuracy Confidence Ring:** Toggled **ON**.
    - **Cell Tower Pinning on Map:** Toggled **ON** (with valid OpenCellID API key configured if physical tower coordinates on the map are required).
+   - **Offline Map Cache (Recommended):** Open **Offline Maps** from Settings or the Map layer menu to pre-download a `2 km` or `5 km` **Satellite Imagery** or **Satellite + Labels** region around MUST Kihumuro (`512 MB` private internal cache) for off-grid runs.
 3. Verify that **Cellular Hub** displays live hardware radio IDs (`MCC`, `MNC`, `LAC/TAC`, `CID/NCI`, `dBm`) via `TelephonyManager` for `641-10` (MTN) or `641-22` (Airtel). Note: GeoTrace uses zero synthetic/bundled tower coordinates—live coordinates require an OpenCellID API key.
 
 ### Phase 2: Open Sky Static Baseline Trial (Site A)
@@ -84,7 +85,7 @@ During each test run, the evaluators record telemetry at 1-second intervals via 
 
 ### Phase 3: Dynamic Walking Perimeter & Geofence Boundary Test (Site B)
 1. Define a Geofence polygon around the FAST Engineering complex with radius $R = 40\text{ m}$.
-2. Select **Walk Perimeter Tracking Mode** (3s sampling interval).
+2. Select **High Accuracy (1s)** or **Balanced Power (5s)** tracking mode.
 3. Walk along the perimeter, intentionally traversing the boundary twice.
 4. **Validation Criteria:**
    - Visual and haptic alert triggered upon boundary crossing within $\le 1.8\text{ seconds}$ of crossing the $R$ threshold.

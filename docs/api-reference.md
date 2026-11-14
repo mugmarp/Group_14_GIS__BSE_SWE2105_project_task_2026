@@ -106,3 +106,23 @@ Comma-separated values for Python (Pandas) / R / QGIS spatial analysis:
 timestamp,iso_time,latitude,longitude,accuracy_m,speed_mps,altitude_m,bearing_deg,provider,session_id
 1731024000000,2026-11-08T00:00:00Z,-0.617124,30.654812,3.2,0.00,1432.5,182.4,fused,session_001
 ```
+
+---
+
+## 5. Cartographic XYZ Tile Sources & Offline Cache Policy
+
+Defined in `ui/components/MapTileSources.kt` and initialized in `LocationTrackerApp.kt` (`filesDir/osmdroid/tiles`, `512 MB` max, trims at `450 MB`, zero runtime storage permissions).
+
+| `MapTileType` | `osmdroid` Source Name | URL / Scheme | Zoom Range | Bulk Pre-Download |
+| :--- | :--- | :--- | :--- | :--- |
+| **`STANDARD`** | `Mapnik` (`TileSourceFactory.MAPNIK`) | `https://tile.openstreetmap.org/{z}/{x}/{y}.png` | `Z0–Z19` | **Passive cache only** (`FLAG_NO_BULK` respected; `supportsOfflineBulkDownload = false`) |
+| **`SATELLITE`** | `EsriWorldImagery` | `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}` (`.jpg`) | `Z0–Z19` | ✅ **Supported** (`OfflineMapManager`) |
+| **`HYBRID`** | `EsriWorldImagery` + `CartoLightLabels` (`TilesOverlay`) | Esri imagery base + `https://{a,b,c}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}.png` | `Z0–Z19` | ✅ **Supported** (2-pass download: imagery + labels) |
+| **`TOPO`** | `OpenTopoMap` | `https://{a,b,c}.tile.opentopomap.org/{z}/{x}/{y}.png` | `Z0–Z17` | ✅ **Supported** (`Z17` zoom cap enforced on layer switch) |
+| **`HUMANITARIAN`** | `HumanitarianOSM` | `https://{a,b}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png` | `Z0–Z19` | ✅ **Supported** (`OfflineMapManager`) |
+
+### Offline Map Pre-Download Guardrails (`OfflineMapManager.kt`)
+- **Pre-Flight Estimation:** Computes Web Mercator tile counts in $O(\text{zoomLevels})$ arithmetic without allocating full tile-index lists in memory.
+- **Download Cap:** Enforces `MAX_TILES_PER_DOWNLOAD = 2500` tiles per region download (`Map View`, `2 km`, or `5 km` presets).
+- **Persistence:** Downloaded bounding boxes, layer type, zoom bounds, tile count, and estimated MB are stored in SQLite `gis_tracker.db` (`v3` table `offline_map_regions`), kept synchronized when clearing the tile cache.
+

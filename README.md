@@ -81,9 +81,10 @@ Group_14_GIS__BSE_SWE2105_project_task_2026/
 │       │   ├── OpenCellIdClient.kt           # Live OpenCellID REST API coordinate resolver
 │       │   ├── GeofenceManager.kt            # Android Geofencing API + BroadcastReceiver
 │       │   ├── FindDeviceAlarmManager.kt     # Remote Ring alarm & vibration controller
+│       │   ├── OfflineMapManager.kt          # osmdroid CacheManager + SqlTileWriter offline regions
 │       │   └── AppUpdateManager.kt           # GitHub Releases OTA APK updater
 │       ├── ui/                        # Jetpack Compose UI layer (Material 3 Daylight Palette)
-│       │   ├── components/            # Cartographic OpenStreetMap viewport & map overlays
+│       │   ├── components/            # MapViewComposable, MapTileSources & OfflineMapsDialog
 │       │   ├── screens/               # Map, Cellular Hub, Devices/Groups, Geofencing, History, Research, Settings
 │       │   └── theme/                 # Material 3 typography, shapes & daylight color scheme
 │       └── viewmodel/                 # TrackerViewModel & GroupViewModel (StateFlow engines)
@@ -98,15 +99,21 @@ Group_14_GIS__BSE_SWE2105_project_task_2026/
 
 ## 3. Core Implemented System Capabilities
 
-### 🗺️ Real-Time Map & Trajectory Tracking
-- **Multi-Constellation GNSS:** Google Play Services `FusedLocationProviderClient` streaming continuous 1 Hz fixes (latitude, longitude, altitude, speed, bearing, and 68% confidence error radius).
-- **Cartographic Viewport:** Real OpenStreetMap tiles rendered via `osmdroid` (`MAPNIK`, Carto Light, and OpenTopoMap) with smooth hardware-accelerated canvas pan, zoom, and auto-centering.
-- **Stationary Deadband Filter:** On-device Euclidean deadband filter ($T = 1.5\text{ m}$) that eliminates fake multipath GPS jitter when standing still, saving kilometers of false trajectory drift.
+### 🗺️ Real-Time Map, Multi-Layer Imagery & Offline Regions
+- **Multi-Constellation GNSS:** Google Play Services `FusedLocationProviderClient` streaming continuous 1 Hz fixes (latitude, longitude, altitude, speed, bearing, and 68% confidence error radius) with provider-tier transition guards so switching between `POWER_SAVER` cellular fixes and GNSS never logs false distance or speed jumps.
+- **5-Layer Cartographic Viewport:** Rendered via `osmdroid` (`MapTileSources.kt`) with persistent `mapTileType` selection, zoom clamping, and smooth pan/zoom/auto-centering:
+  - **OSM Streets (`STANDARD`):** `MAPNIK` standard road and POI map (auto-cached).
+  - **Satellite Imagery (`SATELLITE`):** Physical aerial/rooftop/terrain imagery via Esri World Imagery (`{z}/{y}/{x}`).
+  - **Satellite + Labels (`HYBRID`):** Esri Satellite combined with a transparent Carto Light Labels `TilesOverlay`.
+  - **Topographic Relief (`TOPO`):** OpenTopoMap physical contours and elevation shading (up to Z17).
+  - **Humanitarian (`HUMANITARIAN`):** Humanitarian OpenStreetMap Team (`HOT`) high-contrast road & building layer.
+- **Offline Maps Manager (`OfflineMapManager.kt` & `OfflineMapsDialog.kt`):** Pre-download bounded field regions (`Map View`, `2 km`, or `5 km` radius) for Satellite, Hybrid (2-pass imagery + labels), Topo, and Humanitarian layers into a persistent **512 MB private internal tile cache** (`filesDir/osmdroid/tiles`, zero storage permissions), backed by SQLite `v3` `offline_map_regions` tracking, $O(\text{zoomLevels})$ tile/MB estimates, and a 2,500-tile guardrail.
+- **GIS Symbology & Stationary Deadband Filter:** Cached bearing-rotated user direction chevrons, trail Start (`S`) and End (`E`) pins, plus an on-device Euclidean deadband filter ($T = 1.5\text{ m}$) eliminating stationary multipath GPS jitter.
 
 ### 📡 Live Cell Tower Telemetry & Pinning (OpenCellID)
 - Real-time hardware interrogation of active and neighbor base transceiver stations via Android `TelephonyManager`.
 - Resolves physical serving and neighbor cell coordinates and estimated coverage radius strictly via the live **OpenCellID API** when an API key is configured (via `OPENCELLID_API_KEY` or in **Settings**—no synthetic fallback coordinates are used), including Ugandan networks such as **MTN Uganda (`641-10`)** and **Airtel Uganda (`641-22`)**.
-- Renders resolved mast markers on the map with a semi-transparent coverage circle and a connecting vector ray from the device location.
+- Renders custom serving/neighbor mast badges on the map with a signal-strength (`dBm`) color-coded coverage circle and connecting vector ray from the device location.
 
 ### ⚖️ GPS vs. Cellular Telemetry Comparator
 - Direct side-by-side engineering evaluation tool built into the app:

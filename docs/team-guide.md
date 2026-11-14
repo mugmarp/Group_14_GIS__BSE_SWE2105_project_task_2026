@@ -9,7 +9,7 @@ This guide gives every group member a clear mental model of **how the app works*
 
 GeoTrace solves **SWE2105 Option 2 (Mobile Phone Tracking)** using real on-device sensors rather than coarse IP geolocation:
 
-- **Bottom Tab 1 — `Map`**: Live OpenStreetMap/Carto/Satellite viewport, telemetry HUD (coordinates, EMA-smoothed speed, gait state, accuracy ring, distance, waypoints), positioning mode selector, active trail recording (`REC`), plus live pins for your other devices, group members, P2P peers, geofence zones, and resolved cell towers.
+- **Bottom Tab 1 — `Map`**: 5-layer cartographic viewport (OSM Streets, Esri Satellite Imagery, Satellite + Labels Hybrid, OpenTopoMap, Humanitarian HOT) + **Offline Maps Manager** (`Map View`, `2 km`, `5 km`), telemetry HUD (coordinates, EMA-smoothed speed, gait state, accuracy ring, distance, waypoints), positioning mode selector, active trail recording (`REC`), bearing-rotated user chevron, trail `S`/`E` pins, plus live pins for your other devices, group members, P2P peers, geofence zones, and dBm-colored cell tower rays.
 - **Bottom Tab 2 — `Cellular Hub`**: Live hardware radio telemetry from Android `TelephonyManager` (CID/NCI, LAC/TAC, MCC, MNC, signal dBm, LTE/5G/3G/2G, serving + neighbor cells) and optional coordinate resolution via the **OpenCellID API**.
 - **Bottom Tab 3 — `Devices`**: Multi-device tracking & locating hub containing:
   1. **Off-Grid P2P Device Finder** (works with **zero internet and zero sign-in** via Bluetooth LE + Wi-Fi Direct).
@@ -30,7 +30,7 @@ GeoTrace solves **SWE2105 Option 2 (Mobile Phone Tracking)** using real on-devic
   1. **High Accuracy (GPS):** 1 s multi-constellation GNSS (`~2–5 m`, `~25 mA`).
   2. **Balanced Power (Fused):** 5 s Google Fused Location combining GPS + Wi-Fi + Cell (`~5–15 m`, `~8 mA`).
   3. **Power Saver (Cell Only):** 30 s low-power Fused updates (`~100–1,000 m`, `< 2 mA`) paired with 10 s passive `TelephonyManager` cell polling, falling back to OpenCellID serving-tower coordinates when needed.
-- Changing modes updates both **standby monitoring** (`TrackerViewModel`) and an **active recording foreground service** (`LocationForegroundService`), and persists the selection across restarts (`geotrace_prefs`).
+- Changing modes updates both **standby monitoring** (`TrackerViewModel`) and an **active recording foreground service** (`LocationForegroundService`), persists the selection across restarts (`geotrace_prefs`), and triggers a provider-tier transition guard so switching between `"cellular"` and GNSS does not log fake jump distance or speed spikes.
 
 ### Misconception 2: Confusing the 3 Multi-Device Systems
 They solve different scenarios—do not mix up their names or backends:
@@ -96,11 +96,11 @@ If tapping an account in **Sign in with Google** immediately fails with `"Sign-i
 | Layer | File(s) | Responsibility |
 | :--- | :--- | :--- |
 | **Entry & Navigation** | `LocationTrackerApp.kt`, `MainActivity.kt` | Initializes `osmdroid`, repositories, and single-activity Compose host (`Screen` tabs + auto-expanded scrollable `GeoTrace Safe Menu` bottom sheet + incoming Ring alarm banner). |
-| **Repositories** | `data/LocationRepository.kt`, `data/LocationDbHelper.kt`, `data/GroupRepository.kt` | SQLite trails/geofences/alerts (`gis_tracker.db` v2), jitter deadband + EMA speed smoothing, Firestore sync (`groups`, `users/{uid}/devices`), Nearby Connections `P2P_CLUSTER` mesh (`v3` binary telemetry + `0x0A` Ring). |
+| **Repositories** | `data/LocationRepository.kt`, `data/LocationDbHelper.kt`, `data/GroupRepository.kt` | SQLite trails/geofences/alerts/offline regions (`gis_tracker.db` v3), jitter deadband + EMA + tier-guard smoothing, Firestore sync (`groups`, `users/{uid}/devices`), Nearby Connections `P2P_CLUSTER` mesh (`v3` binary telemetry + `0x0A` Ring). |
 | **Exporters** | `data/export/TrackExporter.kt` | Generates GPX 1.1, KML 2.2, and CSV files shared via `FileProvider`. |
-| **Services** | `service/LocationForegroundService.kt`, `CellularDiagnosticManager.kt`, `OpenCellIdClient.kt`, `GeofenceManager.kt`, `FindDeviceAlarmManager.kt`, `AppUpdateManager.kt` | Foreground WakeLock location tracking, TelephonyManager radio reader, OpenCellID HTTP resolver, Android Geofencing API + BroadcastReceiver, high-priority Ring alarm + vibrator, GitHub Releases OTA APK updater. |
-| **ViewModels** | `viewmodel/TrackerViewModel.kt`, `viewmodel/GroupViewModel.kt` | StateFlows for map telemetry, modes, cell towers, settings, groups, personal device fleet, P2P peers, and Ring triggers. |
-| **UI Screens** | `ui/screens/MapScreen.kt`, `CellularDiagnosticScreen.kt`, `GroupScreen.kt`, `GeofenceScreen.kt`, `HistoryScreen.kt`, `ResearchAnalysisScreen.kt`, `SettingsScreen.kt` | Material 3 Compose screens; map viewport rendered in `ui/components/MapViewComposable.kt`. |
+| **Services** | `service/LocationForegroundService.kt`, `CellularDiagnosticManager.kt`, `OpenCellIdClient.kt`, `OfflineMapManager.kt`, `GeofenceManager.kt`, `FindDeviceAlarmManager.kt`, `AppUpdateManager.kt` | Foreground WakeLock location tracking, TelephonyManager radio reader, OpenCellID HTTP resolver, osmdroid `CacheManager` + `SqlTileWriter` offline region downloader, Android Geofencing API + BroadcastReceiver, high-priority Ring alarm + vibrator, GitHub Releases OTA APK updater. |
+| **ViewModels** | `viewmodel/TrackerViewModel.kt`, `viewmodel/GroupViewModel.kt` | StateFlows for map telemetry, modes, cell towers, settings, offline download progress, groups, personal device fleet, P2P peers, and Ring triggers. |
+| **UI Screens & Map** | `ui/screens/*Screen.kt`, `ui/components/MapTileSources.kt`, `MapViewComposable.kt`, `OfflineMapsDialog.kt` | Material 3 Compose screens; 5-layer `osmdroid` map viewport (`MapTileSources`) and offline region manager dialog. |
 
 ---
 
@@ -124,5 +124,6 @@ If tapping an account in **Sign in with Google** immediately fails with `"Sign-i
 2. **Phone A & B (Offline — Airplane Mode + Bluetooth ON):**
    - Turn OFF mobile data & Wi-Fi internet; enable Bluetooth + Location on both phones.
    - Switch **Off-Grid P2P Device Finder** ON on both phones → wait ~5–15 s for peer discovery/handshake → verify live distance, compass bearing, Map peer pin, and offline **P2P Ring**.
-3. **1-Phone Field Test (Outdoors):**
+3. **1-Phone Field Test (Outdoors + Offline Maps):**
+   - Switch map layers (`OSM Streets` → `Satellite Imagery` → `Satellite + Labels` → `Topographic Relief` → `Humanitarian HOT`), pre-download a `2 km` Offline Map Region around your test site, and confirm tiles render in Airplane Mode.
    - Switch modes (`High Accuracy` → `Balanced` → `Power Saver`), record a short walk with screen off for 30 s, stop recording, and export GPX/KML/CSV from **Saved Trails & Exports**.
