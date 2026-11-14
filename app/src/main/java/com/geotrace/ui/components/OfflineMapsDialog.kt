@@ -53,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -76,8 +77,8 @@ private enum class OfflineAreaMode(val label: String) {
 }
 
 private enum class OfflineDetailTier(val label: String, val minZoom: Int, val maxZoom: Int) {
-    STANDARD("Standard (Z12–16)", 12, 16),
-    HIGH("High Detail (Z13–17)", 13, 17)
+    STANDARD("Std (Z12–16)", 12, 16),
+    HIGH("High (Z13–17)", 13, 17)
 }
 
 @Composable
@@ -325,7 +326,7 @@ fun OfflineMapsDialog(
                                         selected = selected,
                                         enabled = enabled && !progress.isDownloading,
                                         onClick = { areaMode = mode },
-                                        label = { Text(mode.label, fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                                        label = { Text(mode.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
                                         colors = FilterChipDefaults.filterChipColors(
                                             selectedContainerColor = colorScheme.primary,
                                             selectedLabelColor = colorScheme.onPrimary
@@ -349,7 +350,7 @@ fun OfflineMapsDialog(
                                                 selected = selected,
                                                 enabled = !progress.isDownloading,
                                                 onClick = { selectedType = type },
-                                                label = { Text(type.label, fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                                                label = { Text(type.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
                                                 colors = FilterChipDefaults.filterChipColors(
                                                     selectedContainerColor = colorScheme.secondary,
                                                     selectedLabelColor = colorScheme.onSecondary
@@ -377,7 +378,7 @@ fun OfflineMapsDialog(
                                         selected = detailTier == tier,
                                         enabled = !progress.isDownloading,
                                         onClick = { detailTier = tier },
-                                        label = { Text(tier.label, fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                                        label = { Text(tier.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
                                         colors = FilterChipDefaults.filterChipColors(
                                             selectedContainerColor = colorScheme.primary,
                                             selectedLabelColor = colorScheme.onPrimary
@@ -537,7 +538,7 @@ fun OfflineMapsDialog(
             title = { Text("Clear Offline Tile Cache?", fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "Deletes all cached street, satellite, and topographic map tiles (${String.format(Locale.US, "%.1f", cacheSizeMb)} MB) from device storage.",
+                    "Deletes all cached street, satellite, and topographic map tiles (${String.format(Locale.US, "%.1f", cacheSizeMb)} MB) from device storage and clears the downloaded regions list.",
                     fontSize = 13.sp
                 )
             },

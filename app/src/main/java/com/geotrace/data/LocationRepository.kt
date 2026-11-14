@@ -181,7 +181,7 @@ class LocationRepository(private val context: Context) {
         var dbDistance = 0.0
         val cursor = db.query(
             LocationDbHelper.TABLE_POINTS,
-            arrayOf("latitude", "longitude"),
+            arrayOf("latitude", "longitude", "provider"),
             "session_id = ?",
             arrayOf(current.id),
             null, null, "timestamp ASC"
@@ -189,18 +189,24 @@ class LocationRepository(private val context: Context) {
         cursor.use { c ->
             var lastLat: Double? = null
             var lastLon: Double? = null
+            var lastProvider: String? = null
             while (c.moveToNext()) {
                 dbCount++
                 val lat = c.getDouble(0)
                 val lon = c.getDouble(1)
+                val provider = c.getString(2)
                 if (lastLat != null && lastLon != null) {
-                    val stepDist = calculateDistanceMeters(lastLat, lastLon, lat, lon)
-                    if (stepDist in 1.5..5000.0) {
-                        dbDistance += stepDist
+                    val isProviderSwitch = (lastProvider == "cellular") != (provider == "cellular")
+                    if (!isProviderSwitch) {
+                        val stepDist = calculateDistanceMeters(lastLat, lastLon, lat, lon)
+                        if (stepDist in 1.5..5000.0) {
+                            dbDistance += stepDist
+                        }
                     }
                 }
                 lastLat = lat
                 lastLon = lon
+                lastProvider = provider
             }
         }
 
@@ -252,32 +258,43 @@ class LocationRepository(private val context: Context) {
         var candidateSpeed = rawPoint.speed
 
         if (prevPoint != null) {
-            val dist = calculateDistanceMeters(prevPoint.latitude, prevPoint.longitude, rawPoint.latitude, rawPoint.longitude)
-            val timeDiffSec = ((rawPoint.timestamp - prevPoint.timestamp) / 1000.0).coerceAtLeast(0.1)
-            val impliedSpeedMps = (dist / timeDiffSec).toFloat()
-
-            // Discard sudden GPS teleportation/multipath jump (> 5km or implied speed > 200 km/h)
-            if (dist > 5000.0 || impliedSpeedMps > 55.0f) {
+            val isProviderTierSwitch = (prevPoint.provider == "cellular") != (rawPoint.provider == "cellular")
+            if (isProviderTierSwitch) {
+                // Switching between Cell Tower mast coords and GNSS/Fused coords must not inflate distance or speed
                 additionalDistance = 0.0
-            } else if (jitterThresholdMeters > 0f && dist < jitterThresholdMeters) {
-                _filteredJitterMeters.value += dist
-                _filteredJitterCount.value += 1
-                additionalDistance = 0.0
-                isStationary = true
+                isStationary = false
+                if (candidateSpeed < 0.6f) {
+                    candidateSpeed = 0f
+                }
+                smoothedSpeedMps = candidateSpeed
             } else {
-                additionalDistance = dist
-            }
+                val dist = calculateDistanceMeters(prevPoint.latitude, prevPoint.longitude, rawPoint.latitude, rawPoint.longitude)
+                val timeDiffSec = ((rawPoint.timestamp - prevPoint.timestamp) / 1000.0).coerceAtLeast(0.1)
+                val impliedSpeedMps = (dist / timeDiffSec).toFloat()
 
-            // Speed Calibration & Noise Filtering
-            if (isStationary) {
-                // When distance deadband filters this coordinate as stationary, speed must be 0
-                candidateSpeed = 0f
-            } else if (candidateSpeed <= 0.1f && timeDiffSec > 0.2 && additionalDistance > 0.0) {
-                // Fallback for Balanced/Cellular modes where hasSpeed() is false: derive from displacement / time
-                candidateSpeed = impliedSpeedMps.coerceIn(0f, 45f)
-            } else if (candidateSpeed < 0.6f) {
-                // Low-speed pedestrian noise floor clamp (< 0.6 m/s or < 2.1 km/h)
-                candidateSpeed = 0f
+                // Discard sudden GPS teleportation/multipath jump (> 5km or implied speed > 200 km/h)
+                if (dist > 5000.0 || impliedSpeedMps > 55.0f) {
+                    additionalDistance = 0.0
+                } else if (jitterThresholdMeters > 0f && dist < jitterThresholdMeters) {
+                    _filteredJitterMeters.value += dist
+                    _filteredJitterCount.value += 1
+                    additionalDistance = 0.0
+                    isStationary = true
+                } else {
+                    additionalDistance = dist
+                }
+
+                // Speed Calibration & Noise Filtering
+                if (isStationary) {
+                    // When distance deadband filters this coordinate as stationary, speed must be 0
+                    candidateSpeed = 0f
+                } else if (candidateSpeed <= 0.1f && timeDiffSec > 0.2 && additionalDistance > 0.0) {
+                    // Fallback for Balanced/Cellular modes where hasSpeed() is false: derive from displacement / time
+                    candidateSpeed = impliedSpeedMps.coerceIn(0f, 45f)
+                } else if (candidateSpeed < 0.6f) {
+                    // Low-speed pedestrian noise floor clamp (< 0.6 m/s or < 2.1 km/h)
+                    candidateSpeed = 0f
+                }
             }
         } else {
             if (candidateSpeed < 0.6f) {
@@ -286,9 +303,10 @@ class LocationRepository(private val context: Context) {
         }
 
         // Exponential Moving Average (EMA) smoothing for stable velocity display
+        val isProviderSwitch = prevPoint != null && ((prevPoint.provider == "cellular") != (rawPoint.provider == "cellular"))
         smoothedSpeedMps = if (candidateSpeed <= 0f) {
             0f // Instant stop
-        } else if (smoothedSpeedMps <= 0f) {
+        } else if (isProviderSwitch || smoothedSpeedMps <= 0f) {
             candidateSpeed
         } else {
             (0.35f * candidateSpeed) + (0.65f * smoothedSpeedMps)
@@ -827,6 +845,12 @@ class LocationRepository(private val context: Context) {
     suspend fun deleteOfflineMapRegion(id: String) = withContext(Dispatchers.IO) {
         val db = dbHelper.writableDatabase
         db.delete(LocationDbHelper.TABLE_OFFLINE_MAPS, "id = ?", arrayOf(id))
+        loadOfflineMapRegions()
+    }
+
+    suspend fun clearAllOfflineMapRegions() = withContext(Dispatchers.IO) {
+        val db = dbHelper.writableDatabase
+        db.delete(LocationDbHelper.TABLE_OFFLINE_MAPS, null, null)
         loadOfflineMapRegions()
     }
 

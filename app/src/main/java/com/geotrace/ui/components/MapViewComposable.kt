@@ -127,6 +127,9 @@ fun MapViewComposable(
         createPinBadgeDrawable(context, "E", android.graphics.Color.parseColor("#DC2626"))
     }
 
+    // Cache member & peer avatar drawables to prevent per-second Bitmap allocations
+    val avatarDrawableCache = remember { mutableMapOf<String, android.graphics.drawable.Drawable>() }
+
     // Transparent street/place labels overlay for Satellite Hybrid mode
     val hybridLabelsProvider = remember(context) {
         MapTileProviderBasic(context.applicationContext, MapTileSources.hybridLabelsOverlay)
@@ -141,7 +144,14 @@ fun MapViewComposable(
     // Update Tile Source dynamically when user switches in Settings or Layer Menu
     LaunchedEffect(settings.mapTileType, mapViewRef) {
         mapViewRef?.let { map ->
-            map.setTileSource(MapTileSources.baseTileSourceFor(settings.mapTileType))
+            val newSource = MapTileSources.baseTileSourceFor(settings.mapTileType)
+            map.setTileSource(newSource)
+            if (map.zoomLevelDouble > newSource.maximumZoomLevel.toDouble()) {
+                map.controller.setZoom(newSource.maximumZoomLevel.toDouble())
+            }
+            if (settings.mapTileType == com.geotrace.model.MapTileType.HYBRID) {
+                hybridLabelsProvider.setTileRequestCompleteHandler(map.tileRequestCompleteHandler)
+            }
             map.invalidate()
         }
     }
@@ -186,6 +196,7 @@ fun MapViewComposable(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            hybridLabelsProvider.setTileRequestCompleteHandler(null)
             hybridLabelsProvider.detach()
             mapViewRef?.onDetach()
         }
@@ -230,6 +241,7 @@ fun MapViewComposable(
                     post {
                         onMapBoundsChanged?.invoke(boundingBox)
                     }
+                    hybridLabelsProvider.setTileRequestCompleteHandler(tileRequestCompleteHandler)
                     mapViewRef = this
                 }
             },
@@ -480,13 +492,17 @@ fun MapViewComposable(
                         map.overlays.add(memberPolygon)
                     }
 
-                    // Custom avatar pin
+                    // Custom avatar pin (cached)
+                    val memberKey = "${member.displayName.trim().take(2).uppercase()}:$memberColor"
+                    val memberIcon = avatarDrawableCache.getOrPut(memberKey) {
+                        createMemberAvatarDrawable(context, member.displayName, memberColor)
+                    }
                     val memberMarker = Marker(map).apply {
                         position = memberGeoPoint
                         title = "👤 ${member.displayName} (${member.gait})"
                         snippet = "Speed: ${String.format(Locale.US, "%.1f", member.speed * 3.6f)} km/h | Battery: ${member.batteryPercent}% (${member.trackingMode})"
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        icon = createMemberAvatarDrawable(context, member.displayName, memberColor)
+                        icon = memberIcon
                     }
                     map.overlays.add(memberMarker)
                 }
@@ -497,12 +513,16 @@ fun MapViewComposable(
                     if (device.deviceId == currentDeviceId || device.id == currentDeviceId) continue
                     if (device.latitude == 0.0 && device.longitude == 0.0) continue
                     val devPoint = GeoPoint(device.latitude, device.longitude)
+                    val devKey = "${device.deviceName.trim().take(2).uppercase()}:$violetColor"
+                    val devIcon = avatarDrawableCache.getOrPut(devKey) {
+                        createMemberAvatarDrawable(context, device.deviceName, violetColor)
+                    }
                     val devMarker = Marker(map).apply {
                         position = devPoint
                         title = "📱 My Device: ${device.deviceName}"
                         snippet = "${device.deviceModel} | Battery: ${device.batteryPercent}% (${device.trackingMode})"
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        icon = createMemberAvatarDrawable(context, device.deviceName, violetColor)
+                        icon = devIcon
                     }
                     map.overlays.add(devMarker)
                 }
@@ -510,12 +530,17 @@ fun MapViewComposable(
                 // 6. Draw P2P Wilderness Peers (Phase 2 Nearby Connections)
                 for (peer in nearbyPeers) {
                     val peerGeoPoint = GeoPoint(peer.latitude, peer.longitude)
+                    val peerColor = android.graphics.Color.parseColor("#059669")
+                    val peerKey = "${peer.displayName.trim().take(2).uppercase()}:$peerColor"
+                    val peerIcon = avatarDrawableCache.getOrPut(peerKey) {
+                        createP2PPeerDrawable(context, peer.displayName)
+                    }
                     val peerMarker = Marker(map).apply {
                         position = peerGeoPoint
                         title = "📶 P2P Peer: ${peer.displayName}"
                         snippet = "Speed: ${String.format(Locale.US, "%.1f", peer.speed * 3.6f)} km/h | Battery: ${peer.batteryPercent}% (Direct BLE/Wi-Fi)"
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        icon = createP2PPeerDrawable(context, peer.displayName)
+                        icon = peerIcon
                     }
                     map.overlays.add(peerMarker)
                 }

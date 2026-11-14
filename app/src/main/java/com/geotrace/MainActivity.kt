@@ -191,7 +191,9 @@ fun MainAppScreen(
         if (notGranted.isNotEmpty()) {
             permissionLauncher.launch(notGranted.toTypedArray())
         } else {
-            viewModel.startStandbyLocationUpdates()
+            if (!viewModel.hasActiveStandbyUpdates()) {
+                viewModel.startStandbyLocationUpdates()
+            }
             viewModel.refreshCellTowers()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {

@@ -222,6 +222,17 @@ class LocationForegroundService : Service() {
     private fun onNewLocationReceived(loc: Location, mode: TrackingMode) {
         val repo = (application as LocationTrackerApp).repository
         val activeSession = repo.activeSession.value
+        val effectiveMode = currentMode
+        val latest = repo.currentLocation.value
+
+        // In Cell-Only mode, if a recent cellular mast fix exists (< 35s), ignore Wi-Fi/fused coarse pings
+        if (effectiveMode == TrackingMode.POWER_SAVER &&
+            latest != null &&
+            latest.provider == "cellular" &&
+            (System.currentTimeMillis() - latest.timestamp) < 35_000L
+        ) {
+            return
+        }
 
         val point = LocationPoint(
             latitude = loc.latitude,
@@ -239,7 +250,7 @@ class LocationForegroundService : Service() {
             repo.recordLocation(point)
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             if (activeSession != null) {
-                nm.notify(NOTIFICATION_ID, buildStatusNotification(mode))
+                nm.notify(NOTIFICATION_ID, buildStatusNotification(effectiveMode))
             }
         }
     }

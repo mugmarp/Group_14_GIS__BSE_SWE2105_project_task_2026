@@ -6,15 +6,21 @@ import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineDownloadProgress
 import com.geotrace.model.OfflineMapRegion
 import com.geotrace.ui.components.MapTileSources
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import org.osmdroid.tileprovider.cachemanager.CacheManager
 import org.osmdroid.tileprovider.modules.SqlTileWriter
 import org.osmdroid.util.BoundingBox
 import java.util.UUID
+import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.floor
+import kotlin.math.ln
 import kotlin.math.max
+import kotlin.math.tan
 
 /**
  * Google Maps-style offline region downloader backed by osmdroid's CacheManager and SqlTileWriter.
@@ -31,7 +37,7 @@ class OfflineMapManager(private val context: Context) {
     private val _downloadProgress = MutableStateFlow(OfflineDownloadProgress())
     val downloadProgress: StateFlow<OfflineDownloadProgress> = _downloadProgress.asStateFlow()
 
-    private val _cacheSizeMb = MutableStateFlow(computeCacheSizeMb())
+    private val _cacheSizeMb = MutableStateFlow(0f)
     val cacheSizeMb: StateFlow<Float> = _cacheSizeMb.asStateFlow()
 
     @Volatile
@@ -55,16 +61,50 @@ class OfflineMapManager(private val context: Context) {
         )
     }
 
+    /**
+     * Computes exact Web Mercator tile count in O(zoomLevels) arithmetic without allocating
+     * millions of tile indices (preventing OOM crashes when zoomed out to continental scale).
+     */
     fun estimateRegionTilesAndMb(
         box: BoundingBox,
         tileType: MapTileType,
         minZoom: Int,
         maxZoom: Int
     ): Pair<Int, Float> {
+        if (box.latNorth <= box.latSouth || box.lonEast == box.lonWest) {
+            return 0 to 0f
+        }
         val safeMin = minZoom.coerceIn(4, 17)
         val safeMax = maxZoom.coerceIn(safeMin, 18)
-        val baseTiles = CacheManager.getTilesCoverage(box, safeMin, safeMax).size
-        val totalTiles = if (tileType == MapTileType.HYBRID) baseTiles * 2 else baseTiles
+        val north = box.latNorth.coerceIn(-85.0511, 85.0511)
+        val south = box.latSouth.coerceIn(-85.0511, 85.0511)
+        val west = box.lonWest.coerceIn(-180.0, 180.0)
+        val east = box.lonEast.coerceIn(-180.0, 180.0)
+
+        var baseTilesLong = 0L
+        for (z in safeMin..safeMax) {
+            val n = 1L shl z
+            val xMin = floor(((west + 180.0) / 360.0) * n).toLong().coerceIn(0L, n - 1L)
+            val xMax = floor(((east + 180.0) / 360.0) * n).toLong().coerceIn(0L, n - 1L)
+            val dx = if (west <= east) {
+                (xMax - xMin + 1L)
+            } else {
+                (n - xMin) + (xMax + 1L)
+            }
+
+            val yMin = latToTileY(north, n)
+            val yMax = latToTileY(south, n)
+            val dy = (yMax - yMin + 1L).coerceAtLeast(1L)
+
+            baseTilesLong = (baseTilesLong + (dx * dy)).coerceAtMost(1_000_000L)
+            if (baseTilesLong >= 1_000_000L) break
+        }
+
+        val totalTiles = if (tileType == MapTileType.HYBRID) {
+            (baseTilesLong * 2L).coerceAtMost(1_000_000L).toInt()
+        } else {
+            baseTilesLong.toInt()
+        }
         val kbPerTile = when (tileType) {
             MapTileType.SATELLITE -> 42f
             MapTileType.HYBRID -> 28f // average across imagery (~42KB) + labels (~14KB)
@@ -73,6 +113,13 @@ class OfflineMapManager(private val context: Context) {
         }
         val estimatedMb = (totalTiles * kbPerTile) / 1024f
         return totalTiles to estimatedMb
+    }
+
+    private fun latToTileY(latDeg: Double, n: Long): Long {
+        val latRad = Math.toRadians(latDeg)
+        val merc = ln(tan(latRad) + 1.0 / cos(latRad))
+        val y = floor((1.0 - merc / PI) / 2.0 * n).toLong()
+        return y.coerceIn(0L, n - 1L)
     }
 
     fun startRegionDownload(
@@ -310,6 +357,10 @@ class OfflineMapManager(private val context: Context) {
                 writer.onDetach()
             } catch (_: Exception) {}
         }
+    }
+
+    suspend fun refreshCacheSizeAsync() = withContext(Dispatchers.IO) {
+        _cacheSizeMb.value = computeCacheSizeMb()
     }
 
     fun refreshCacheSize() {
