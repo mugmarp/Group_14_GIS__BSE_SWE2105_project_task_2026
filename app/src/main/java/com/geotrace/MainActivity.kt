@@ -347,6 +347,7 @@ fun MainAppScreen(
                     onNavigateBack = { currentScreen = Screen.MAP }
                 )
                 Screen.RESEARCH -> ResearchAnalysisScreen(
+                    viewModel = viewModel,
                     onNavigateBack = { currentScreen = Screen.MAP }
                 )
                 Screen.SETTINGS -> SettingsScreen(

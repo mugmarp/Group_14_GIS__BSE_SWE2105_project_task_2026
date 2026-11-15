@@ -12,24 +12,24 @@ enum class TrackingMode(
         title = "High Accuracy (GPS)",
         description = "Continuous multi-constellation GNSS (GPS/Galileo/GLONASS) with 1s updates. Best for active movement.",
         intervalMs = 1000L,
-        minDistanceMeters = 2f,
+        minDistanceMeters = 0f,
         expectedAccuracy = "2 – 5 meters",
         batteryImpact = "High (~20-30 mA)"
     ),
     BALANCED(
         title = "Balanced Power (Fused)",
-        description = "Fused location prioritizing Wi-Fi & cellular networks with 5s updates. Ideal for continuous testing and daily transit.",
+        description = "Network & Wi-Fi fused positioning with 5s updates. Lower power than continuous GNSS for everyday transit.",
         intervalMs = 5000L,
-        minDistanceMeters = 10f,
-        expectedAccuracy = "5 – 15 meters",
+        minDistanceMeters = 5f,
+        expectedAccuracy = "10 – 40 meters",
         batteryImpact = "Moderate (~5-10 mA)"
     ),
     POWER_SAVER(
         title = "Power Saver (Cell Only)",
-        description = "Coarse cellular tower updates with 30s intervals. Maximizes battery for long-term tracking.",
-        intervalMs = 30000L,
-        minDistanceMeters = 50f,
-        expectedAccuracy = "100 – 1,000 meters",
+        description = "Cellular base-station telemetry (TelephonyManager + OpenCellID / Network) with 20s updates. Maximizes battery life.",
+        intervalMs = 20000L,
+        minDistanceMeters = 30f,
+        expectedAccuracy = "100 – 1,500 meters",
         batteryImpact = "Minimal (< 2 mA)"
     )
 }
@@ -53,9 +53,9 @@ data class LocationPoint(
             val kmh = speedKmh
             return when {
                 kmh < 0.8f -> "Stationary"
-                kmh < 2.5f -> "Slow Walk"
-                kmh < 5.4f -> "Walking"
-                kmh < 8.0f -> "Brisk Walk"
+                kmh < 2.4f -> "Slow Walk"
+                kmh < 5.8f -> "Walking"
+                kmh < 8.5f -> "Brisk Walk"
                 kmh < 18.0f -> "Running"
                 else -> "In Transit"
             }

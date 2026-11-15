@@ -32,6 +32,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
         if (intent.action == Intent.ACTION_BOOT_COMPLETED) {
             val protectionEnabled = prefs.getBoolean("background_protection_enabled", true)
+            val hysteresis = prefs.getFloat("geofence_hysteresis_meters", 10f)
             if (!isEnabled && !protectionEnabled) return
             val pendingResult = goAsync()
             CoroutineScope(Dispatchers.IO).launch {
@@ -40,7 +41,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                     if (isEnabled && app != null) {
                         app.repository.loadGeofences()
                         val zones = app.repository.geofenceZones.value
-                        GeofenceManager(context.applicationContext).syncGeofences(zones, enabled = true)
+                        GeofenceManager(context.applicationContext).syncGeofences(zones, enabled = true, hysteresisMeters = hysteresis)
                     }
                     if (protectionEnabled &&
                         com.google.firebase.auth.FirebaseAuth.getInstance().currentUser != null &&
@@ -73,12 +74,14 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
         val geofenceTransition = geofencingEvent.geofenceTransition
         if (geofenceTransition != Geofence.GEOFENCE_TRANSITION_ENTER &&
+            geofenceTransition != Geofence.GEOFENCE_TRANSITION_DWELL &&
             geofenceTransition != Geofence.GEOFENCE_TRANSITION_EXIT
         ) {
             return
         }
 
-        val isNowInside = geofenceTransition == Geofence.GEOFENCE_TRANSITION_ENTER
+        val isNowInside = geofenceTransition == Geofence.GEOFENCE_TRANSITION_ENTER ||
+            geofenceTransition == Geofence.GEOFENCE_TRANSITION_DWELL
         val triggeringGeofences = geofencingEvent.triggeringGeofences ?: emptyList()
         if (triggeringGeofences.isEmpty()) return
 

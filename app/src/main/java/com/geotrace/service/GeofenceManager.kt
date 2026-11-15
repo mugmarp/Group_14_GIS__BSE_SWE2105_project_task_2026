@@ -84,7 +84,7 @@ class GeofenceManager(private val context: Context) {
         }
     }
 
-    fun syncGeofences(zones: List<GeofenceZone>, enabled: Boolean) {
+    fun syncGeofences(zones: List<GeofenceZone>, enabled: Boolean, hysteresisMeters: Float = 10f) {
         if (!enabled) {
             unregisterAllGeofences()
             return
@@ -129,25 +129,41 @@ class GeofenceManager(private val context: Context) {
             return
         }
 
+        val useDwell = hysteresisMeters > 0f
         val geofenceList = activeZones.mapNotNull { zone ->
             var transitionTypes = 0
             if (zone.alertOnEntry) {
-                transitionTypes = transitionTypes or Geofence.GEOFENCE_TRANSITION_ENTER
+                transitionTypes = transitionTypes or if (useDwell) {
+                    Geofence.GEOFENCE_TRANSITION_DWELL
+                } else {
+                    Geofence.GEOFENCE_TRANSITION_ENTER
+                }
             }
             if (zone.alertOnExit) {
                 transitionTypes = transitionTypes or Geofence.GEOFENCE_TRANSITION_EXIT
             }
             if (transitionTypes == 0) return@mapNotNull null
 
+            val effectiveRadius = if (zone.isInside) {
+                (zone.radiusMeters + hysteresisMeters).coerceAtLeast(30f)
+            } else {
+                (zone.radiusMeters - hysteresisMeters).coerceAtLeast(30f)
+            }
+
             Geofence.Builder()
                 .setRequestId(zone.id)
                 .setCircularRegion(
                     zone.latitude,
                     zone.longitude,
-                    zone.radiusMeters.coerceAtLeast(30f)
+                    effectiveRadius
                 )
                 .setExpirationDuration(Geofence.NEVER_EXPIRE)
                 .setTransitionTypes(transitionTypes)
+                .apply {
+                    if (useDwell && zone.alertOnEntry) {
+                        setLoiteringDelay(8_000)
+                    }
+                }
                 .setNotificationResponsiveness(5_000)
                 .build()
         }

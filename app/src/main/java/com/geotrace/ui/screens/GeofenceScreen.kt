@@ -333,10 +333,10 @@ fun GeofenceScreen(
                         shape = RoundedCornerShape(18.dp),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                         modifier = Modifier
-                            .height(36.dp)
+                            .height(48.dp)
                             .testTag("add_geofence_btn")
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("Add Zone", fontWeight = FontWeight.Bold, fontSize = 11.sp)
                     }
@@ -494,8 +494,9 @@ fun GeofenceScreen(
                 }
             }
 
-            // Safe Zone Integrity & Anti-Flapping Engine Banner
+            // Safe Zone Integrity & Dual-Radius Precision Adjustment Engine Banner
             item {
+                val delta = settings.geofenceHysteresisMeters
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
@@ -508,7 +509,7 @@ fun GeofenceScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                                 Box(
                                     modifier = Modifier
                                         .size(30.dp)
@@ -525,15 +526,19 @@ fun GeofenceScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
                                     Text(
-                                        text = "Perimeter Integrity & Anti-Flapping",
+                                        text = "Academic Precision Adjustment",
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = colorScheme.onSurface
                                     )
                                     Text(
-                                        text = "Hysteresis Boundary Filtering Active",
+                                        text = if (delta > 0f) {
+                                            "Dual-Radius Hysteresis Active (Entry R−${delta.toInt()}m / Exit R+${delta.toInt()}m)"
+                                        } else {
+                                            "Raw Single-Radius Mode (No Hysteresis Buffer)"
+                                        },
                                         fontSize = 10.sp,
-                                        color = colorScheme.tertiary,
+                                        color = if (delta > 0f) colorScheme.tertiary else customColors.warning,
                                         fontWeight = FontWeight.SemiBold
                                     )
                                 }
@@ -541,13 +546,13 @@ fun GeofenceScreen(
 
                             Surface(
                                 shape = RoundedCornerShape(10.dp),
-                                color = colorScheme.tertiary.copy(alpha = 0.15f)
+                                color = (if (delta > 0f) colorScheme.tertiary else customColors.warning).copy(alpha = 0.15f)
                             ) {
                                 Text(
-                                    text = "15m DEADBAND",
+                                    text = if (delta > 0f) "±${delta.toInt()}m BAND" else "0m RAW",
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = colorScheme.tertiary,
+                                    color = if (delta > 0f) colorScheme.tertiary else customColors.warning,
                                     modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                                 )
                             }
@@ -556,11 +561,73 @@ fun GeofenceScreen(
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Text(
-                            text = "To eliminate boundary oscillation (flapping) near hostel gates caused by multipath GPS noise, an exit hysteresis offset of 15.0m is applied before triggering state transitions.",
+                            text = "Uses a smaller inner radius (R − Δ) to confirm genuine entry and a larger outer radius (R + Δ) before triggering exit—preventing false boundary flapping from GPS drift.",
                             fontSize = 11.sp,
                             lineHeight = 15.sp,
                             color = colorScheme.onSurfaceVariant
                         )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            val presetsDelta = listOf(0f to "0m Raw", 5f to "±5m Tight", 10f to "±10m Std", 20f to "±20m Wide")
+                            presetsDelta.forEach { (value, label) ->
+                                val selected = delta == value
+                                FilterChip(
+                                    selected = selected,
+                                    onClick = { viewModel.updateGeofenceHysteresis(value) },
+                                    label = { Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = colorScheme.primary,
+                                        selectedLabelColor = colorScheme.onPrimary,
+                                        containerColor = customColors.surfaceContainerLow,
+                                        labelColor = colorScheme.onSurfaceVariant
+                                    ),
+                                    border = FilterChipDefaults.filterChipBorder(
+                                        enabled = true,
+                                        selected = selected,
+                                        borderColor = colorScheme.outlineVariant,
+                                        selectedBorderColor = colorScheme.primary
+                                    ),
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(customColors.surfaceContainerLow, RoundedCornerShape(8.dp))
+                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Confidence Accuracy Gate",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Ignore boundary flips on coarse Cell-Only or low-confidence fixes",
+                                    fontSize = 10.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                            androidx.compose.material3.Switch(
+                                checked = settings.geofenceAccuracyGateEnabled,
+                                onCheckedChange = { viewModel.toggleGeofenceAccuracyGate(it) },
+                                colors = androidx.compose.material3.SwitchDefaults.colors(checkedThumbColor = colorScheme.primary),
+                                modifier = Modifier.testTag("geofence_accuracy_gate_switch")
+                            )
+                        }
 
                         Spacer(modifier = Modifier.height(8.dp))
 
@@ -776,6 +843,7 @@ fun GeofenceScreen(
                 GeofenceZoneCard(
                     zone = zone,
                     distanceMeters = distMeters,
+                    hysteresisMeters = settings.geofenceHysteresisMeters,
                     onEdit = {
                         draftOverrides = null
                         editingZone = zone
@@ -858,6 +926,7 @@ fun GeofenceScreen(
 private fun GeofenceZoneCard(
     zone: GeofenceZone,
     distanceMeters: Double,
+    hysteresisMeters: Float,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -941,8 +1010,14 @@ private fun GeofenceZoneCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
+                    val entryR = (zone.radiusMeters - hysteresisMeters).coerceAtLeast(minOf(10f, zone.radiusMeters * 0.5f))
+                    val exitR = zone.radiusMeters + hysteresisMeters
                     Text(
-                        text = "Radius: ${zone.radiusMeters.toInt()}m • Area: ~${String.format(Locale.US, "%.1f", (Math.PI * zone.radiusMeters * zone.radiusMeters / 10000.0))} ha",
+                        text = if (hysteresisMeters > 0f) {
+                            "Radius: ${zone.radiusMeters.toInt()}m (Entry ≤${entryR.toInt()}m • Exit >${exitR.toInt()}m)"
+                        } else {
+                            "Radius: ${zone.radiusMeters.toInt()}m • Area: ~${String.format(Locale.US, "%.1f", (Math.PI * zone.radiusMeters * zone.radiusMeters / 10000.0))} ha"
+                        },
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = colorScheme.onSurface

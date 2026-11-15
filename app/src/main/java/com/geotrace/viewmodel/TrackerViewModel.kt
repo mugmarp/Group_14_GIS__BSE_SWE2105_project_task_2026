@@ -62,7 +62,9 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             keepScreenOn = repository.getSavedKeepScreenOn(),
             showCellTowerPin = repository.getSavedShowCellTowerPin(),
             openCellIdApiKey = repository.getSavedOpenCellIdApiKey(),
-            geofenceNotificationEnabled = repository.geofenceNotificationsEnabled
+            geofenceNotificationEnabled = repository.geofenceNotificationsEnabled,
+            geofenceHysteresisMeters = repository.getSavedGeofenceHysteresis(),
+            geofenceAccuracyGateEnabled = repository.getSavedGeofenceAccuracyGate()
         )
     )
     val settings: StateFlow<com.geotrace.model.TrackerSettings> = _settings.asStateFlow()
@@ -101,10 +103,14 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val currentMapBoundingBox: StateFlow<org.osmdroid.util.BoundingBox?> = _currentMapBoundingBox.asStateFlow()
 
     private val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(application)
+    private val systemLocationManager = application.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
     private var standbyCallback: com.google.android.gms.location.LocationCallback? = null
+    private var standbyNetworkListener: android.location.LocationListener? = null
     private var standbyCellJob: Job? = null
     private var lastCellularFallbackKey: String? = null
     private var lastCellularFallbackTimeMs: Long = 0L
+    @Volatile
+    private var lastModeSwitchMs: Long = 0L
 
     init {
         startStandbyLocationUpdates()
@@ -116,12 +122,12 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private fun observeGeofencingSync() {
         viewModelScope.launch {
             combine(geofenceZones, settings) { zones, currentSettings ->
-                Pair(zones, currentSettings.geofenceNotificationEnabled)
-            }.collect { (zones, enabled) ->
+                Triple(zones, currentSettings.geofenceNotificationEnabled, currentSettings.geofenceHysteresisMeters)
+            }.collect { (zones, enabled, hysteresis) ->
                 if (enabled) {
-                    geofenceManager.syncGeofences(zones, true)
+                    geofenceManager.syncGeofences(zones, true, hysteresis)
                 } else {
-                    geofenceManager.syncGeofences(emptyList(), false)
+                    geofenceManager.syncGeofences(emptyList(), false, hysteresis)
                 }
             }
         }
@@ -201,64 +207,177 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun hasActiveStandbyUpdates(): Boolean = standbyCallback != null
+    fun hasActiveStandbyUpdates(): Boolean = standbyCallback != null || standbyNetworkListener != null
 
     @android.annotation.SuppressLint("MissingPermission")
     fun startStandbyLocationUpdates(targetMode: TrackingMode = trackingMode.value) {
-        requestLastKnownLocation(forceIfCellular = targetMode != TrackingMode.POWER_SAVER)
         stopStandbyLocationUpdates()
-
-        val (priority, interval, minDistance) = when (targetMode) {
-            TrackingMode.HIGH_ACCURACY -> Triple(com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY, 1500L, 1.0f)
-            TrackingMode.BALANCED -> Triple(com.google.android.gms.location.Priority.PRIORITY_BALANCED_POWER_ACCURACY, 5000L, 10.0f)
-            TrackingMode.POWER_SAVER -> Triple(com.google.android.gms.location.Priority.PRIORITY_LOW_POWER, 20000L, 50.0f)
+        if (targetMode == TrackingMode.HIGH_ACCURACY) {
+            requestLastKnownLocation(forceIfCellular = true)
         }
 
-        val request = com.google.android.gms.location.LocationRequest.Builder(
-            priority,
-            interval
-        )
-            .setMinUpdateDistanceMeters(minDistance)
-            .setMinUpdateIntervalMillis(interval / 2)
-            .build()
+        when (targetMode) {
+            TrackingMode.HIGH_ACCURACY -> {
+                val request = com.google.android.gms.location.LocationRequest.Builder(
+                    com.google.android.gms.location.Priority.PRIORITY_HIGH_ACCURACY,
+                    targetMode.intervalMs
+                )
+                    .setMinUpdateDistanceMeters(targetMode.minDistanceMeters)
+                    .setMinUpdateIntervalMillis(targetMode.intervalMs / 2)
+                    .build()
 
-        standbyCallback = object : com.google.android.gms.location.LocationCallback() {
-            override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
-                val loc = result.lastLocation ?: return
-                // In Cell-Only mode, avoid fused Wi-Fi ping-ponging when a serving cell tower fix is resolved
-                if (trackingMode.value == TrackingMode.POWER_SAVER && _cellTowerLocation.value != null) {
-                    return
-                }
-                // Only post from standby callback if no active foreground recording service is managing updates
-                if (activeSession.value == null) {
-                    val p = LocationPoint(
-                        latitude = loc.latitude,
-                        longitude = loc.longitude,
-                        accuracy = loc.accuracy,
-                        speed = if (loc.hasSpeed()) loc.speed else 0f,
-                        altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
-                        bearing = if (loc.hasBearing()) loc.bearing else 0f,
-                        provider = loc.provider ?: "fused",
-                        timestamp = loc.time,
-                        sessionId = "standby"
+                standbyCallback = createStandbyFusedCallback(targetMode)
+                try {
+                    fusedLocationClient.requestLocationUpdates(
+                        request,
+                        standbyCallback!!,
+                        android.os.Looper.getMainLooper()
                     )
-                    viewModelScope.launch {
-                        repository.recordLocation(p)
+                } catch (_: SecurityException) {
+                } catch (_: Exception) {
+                }
+            }
+
+            TrackingMode.BALANCED -> {
+                val lm = systemLocationManager
+                val networkEnabled = try {
+                    lm?.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) == true
+                } catch (_: Exception) {
+                    false
+                }
+
+                if (networkEnabled && lm != null) {
+                    val listener = createStandbyNetworkListener(targetMode)
+                    standbyNetworkListener = listener
+                    try {
+                        lm.requestLocationUpdates(
+                            android.location.LocationManager.NETWORK_PROVIDER,
+                            targetMode.intervalMs,
+                            targetMode.minDistanceMeters,
+                            listener,
+                            android.os.Looper.getMainLooper()
+                        )
+                    } catch (_: SecurityException) {
+                    } catch (_: Exception) {
+                    }
+                } else {
+                    val request = com.google.android.gms.location.LocationRequest.Builder(
+                        com.google.android.gms.location.Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+                        targetMode.intervalMs
+                    )
+                        .setMinUpdateDistanceMeters(targetMode.minDistanceMeters)
+                        .setMinUpdateIntervalMillis(targetMode.intervalMs)
+                        .build()
+                    standbyCallback = createStandbyFusedCallback(targetMode)
+                    try {
+                        fusedLocationClient.requestLocationUpdates(
+                            request,
+                            standbyCallback!!,
+                            android.os.Looper.getMainLooper()
+                        )
+                    } catch (_: SecurityException) {
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+
+            TrackingMode.POWER_SAVER -> {
+                // In Cell-Only mode, cell polling + OpenCellID leads; coarse NETWORK_PROVIDER only acts as passive fallback if OpenCellID returns null
+                val lm = systemLocationManager
+                val networkEnabled = try {
+                    lm?.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) == true
+                } catch (_: Exception) {
+                    false
+                }
+                if (networkEnabled && lm != null) {
+                    val listener = createStandbyNetworkListener(targetMode)
+                    standbyNetworkListener = listener
+                    try {
+                        lm.requestLocationUpdates(
+                            android.location.LocationManager.NETWORK_PROVIDER,
+                            targetMode.intervalMs,
+                            targetMode.minDistanceMeters,
+                            listener,
+                            android.os.Looper.getMainLooper()
+                        )
+                    } catch (_: SecurityException) {
+                    } catch (_: Exception) {
+                    }
+                } else {
+                    val request = com.google.android.gms.location.LocationRequest.Builder(
+                        com.google.android.gms.location.Priority.PRIORITY_LOW_POWER,
+                        targetMode.intervalMs
+                    )
+                        .setMinUpdateDistanceMeters(targetMode.minDistanceMeters)
+                        .setMinUpdateIntervalMillis(targetMode.intervalMs)
+                        .build()
+                    standbyCallback = createStandbyFusedCallback(targetMode)
+                    try {
+                        fusedLocationClient.requestLocationUpdates(
+                            request,
+                            standbyCallback!!,
+                            android.os.Looper.getMainLooper()
+                        )
+                    } catch (_: SecurityException) {
+                    } catch (_: Exception) {
                     }
                 }
             }
         }
+    }
 
-        try {
-            fusedLocationClient.requestLocationUpdates(
-                request,
-                standbyCallback!!,
-                android.os.Looper.getMainLooper()
+    private fun createStandbyFusedCallback(registeredMode: TrackingMode): com.google.android.gms.location.LocationCallback {
+        return object : com.google.android.gms.location.LocationCallback() {
+            override fun onLocationResult(result: com.google.android.gms.location.LocationResult) {
+                val loc = result.lastLocation ?: return
+                handleStandbyPlatformLocation(loc, registeredMode)
+            }
+        }
+    }
+
+    private fun createStandbyNetworkListener(registeredMode: TrackingMode): android.location.LocationListener {
+        return object : android.location.LocationListener {
+            override fun onLocationChanged(location: android.location.Location) {
+                handleStandbyPlatformLocation(location, registeredMode)
+            }
+            @Deprecated("Deprecated in Java")
+            override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) {}
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+        }
+    }
+
+    private fun handleStandbyPlatformLocation(loc: android.location.Location, registeredMode: TrackingMode) {
+        val currentMode = trackingMode.value
+        if (currentMode != registeredMode) return
+        if (lastModeSwitchMs > 0L && loc.time > 0L && loc.time < lastModeSwitchMs - 2_000L) return
+
+        // In Balanced mode, block GPS hardware updates so it stays strictly Network/Fused
+        if (currentMode == TrackingMode.BALANCED && loc.provider == android.location.LocationManager.GPS_PROVIDER) {
+            return
+        }
+
+        // In Cell-Only mode, block warm GNSS/high-precision Wi-Fi pings and defer whenever OpenCellID resolved a tower
+        if (currentMode == TrackingMode.POWER_SAVER) {
+            if (_cellTowerLocation.value != null) return
+            if (loc.provider == android.location.LocationManager.GPS_PROVIDER || loc.accuracy < 35f) return
+        }
+
+        if (activeSession.value == null) {
+            val p = LocationPoint(
+                latitude = loc.latitude,
+                longitude = loc.longitude,
+                accuracy = loc.accuracy,
+                speed = if (loc.hasSpeed()) loc.speed else 0f,
+                altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
+                bearing = if (loc.hasBearing()) loc.bearing else 0f,
+                provider = loc.provider ?: "fused",
+                timestamp = loc.time,
+                sessionId = "standby"
             )
-        } catch (e: SecurityException) {
-            // Handled via UI permission request flow
-        } catch (e: Exception) {
-            // Hardware/service unavailable
+            viewModelScope.launch {
+                repository.recordLocation(p)
+            }
         }
     }
 
@@ -267,15 +386,22 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             fusedLocationClient.removeLocationUpdates(it)
             standbyCallback = null
         }
+        standbyNetworkListener?.let { listener ->
+            try {
+                systemLocationManager?.removeUpdates(listener)
+            } catch (_: Exception) {
+            }
+            standbyNetworkListener = null
+        }
     }
 
     @android.annotation.SuppressLint("MissingPermission")
     fun requestLastKnownLocation(forceIfCellular: Boolean = false) {
-        if (trackingMode.value == TrackingMode.POWER_SAVER) return
+        if (trackingMode.value != TrackingMode.HIGH_ACCURACY) return
         try {
             fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
                 val cur = currentLocation.value
-                val isFreshLastKnown = loc != null && (System.currentTimeMillis() - loc.time) < 120_000L
+                val isFreshLastKnown = loc != null && (System.currentTimeMillis() - loc.time) < 20_000L
                 val shouldApply = cur == null || (forceIfCellular && cur.provider == "cellular" && isFreshLastKnown)
                 if (loc != null && shouldApply) {
                     val p = LocationPoint(
@@ -325,12 +451,14 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setTrackingMode(mode: TrackingMode) {
+        lastModeSwitchMs = System.currentTimeMillis()
+        stopStandbyLocationUpdates()
         viewModelScope.launch {
             repository.setTrackingMode(mode)
             startStandbyCellPolling()
             if (mode == TrackingMode.POWER_SAVER) {
                 refreshCellTowers()
-                // Force immediate cellular fix check if currentLocation is GNSS
+                // Force immediate cellular fix check if currentLocation is GNSS/Fused
                 val curLoc = currentLocation.value
                 _cellTowerLocation.value?.let { towerLoc ->
                     if (curLoc == null || curLoc.provider != "cellular") {
@@ -356,6 +484,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 LocationForegroundService.updateMode(getApplication(), mode)
             } else {
                 startStandbyLocationUpdates(mode)
+                // Keep foreground protection service synchronized with newly selected mode too
+                LocationForegroundService.updateMode(getApplication(), mode)
             }
         }
     }
@@ -568,12 +698,25 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun toggleGeofenceNotifications(enabled: Boolean) {
         repository.setGeofenceNotificationsEnabled(enabled)
         _settings.value = _settings.value.copy(geofenceNotificationEnabled = enabled)
-        geofenceManager.syncGeofences(geofenceZones.value, enabled)
+        geofenceManager.syncGeofences(geofenceZones.value, enabled, _settings.value.geofenceHysteresisMeters)
+    }
+
+    fun updateGeofenceHysteresis(meters: Float) {
+        repository.saveGeofenceHysteresis(meters)
+        _settings.value = _settings.value.copy(geofenceHysteresisMeters = meters)
+        if (_settings.value.geofenceNotificationEnabled) {
+            geofenceManager.syncGeofences(geofenceZones.value, true, meters)
+        }
+    }
+
+    fun toggleGeofenceAccuracyGate(enabled: Boolean) {
+        repository.saveGeofenceAccuracyGate(enabled)
+        _settings.value = _settings.value.copy(geofenceAccuracyGateEnabled = enabled)
     }
 
     fun resyncGeofencingApi() {
         val enabled = _settings.value.geofenceNotificationEnabled
-        geofenceManager.syncGeofences(geofenceZones.value, enabled)
+        geofenceManager.syncGeofences(geofenceZones.value, enabled, _settings.value.geofenceHysteresisMeters)
     }
 
     fun sendTestAcademicNotification() {

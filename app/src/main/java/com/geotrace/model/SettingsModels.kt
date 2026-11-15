@@ -56,5 +56,7 @@ data class TrackerSettings(
     val keepScreenOn: Boolean = true,
     val showCellTowerPin: Boolean = true,
     val openCellIdApiKey: String = "",
-    val geofenceNotificationEnabled: Boolean = false
+    val geofenceNotificationEnabled: Boolean = false,
+    val geofenceHysteresisMeters: Float = 10f,
+    val geofenceAccuracyGateEnabled: Boolean = true
 )

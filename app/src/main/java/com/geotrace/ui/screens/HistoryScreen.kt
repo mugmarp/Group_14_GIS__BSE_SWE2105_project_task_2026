@@ -73,6 +73,7 @@ fun HistoryScreen(
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
     val sessions by viewModel.allSessions.collectAsState()
+    val settings by viewModel.settings.collectAsState()
 
     var exportContent by remember { mutableStateOf<Pair<String, String>?>(null) } // Pair(Type, Text)
 
@@ -94,14 +95,14 @@ fun HistoryScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (onNavigateBack != null) {
-                        IconButton(onClick = onNavigateBack, modifier = Modifier.size(36.dp)) {
+                        IconButton(onClick = onNavigateBack, modifier = Modifier.size(48.dp)) {
                             Icon(
                                 Icons.AutoMirrored.Filled.ArrowBack,
                                 contentDescription = "Back to Live Map",
                                 tint = colorScheme.onSurface
                             )
                         }
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                     }
                     Column {
                         Text(
@@ -176,6 +177,7 @@ fun HistoryScreen(
                 items(sessions) { session ->
                     SessionHistoryCard(
                         session = session,
+                        speedUnit = settings.speedUnit,
                         onExportGpx = {
                             viewModel.exportGpx(session) { gpx ->
                                 exportContent = Pair("GPX (GPS Exchange Format)", gpx)
@@ -272,6 +274,7 @@ fun HistoryScreen(
 @Composable
 private fun SessionHistoryCard(
     session: TrackingSession,
+    speedUnit: com.geotrace.model.SpeedUnit,
     onExportGpx: () -> Unit,
     onExportKml: () -> Unit,
     onExportCsv: () -> Unit,
@@ -362,11 +365,22 @@ private fun SessionHistoryCard(
                     }
                     Box(modifier = Modifier.width(1.dp).height(30.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
                     Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
+                        val avgConverted = (session.avgSpeedKmh / 3.6) * speedUnit.multiplier
+                        val maxConverted = (session.maxSpeedKmh / 3.6) * speedUnit.multiplier
+                        val speedSub = buildString {
+                            if (session.maxSpeedKmh > 0.1) {
+                                append("Max ${String.format(Locale.US, "%.1f", maxConverted)}")
+                            }
+                            session.avgPaceMinPerKm.takeIf { it != "--:--" }?.let { pace ->
+                                if (isNotEmpty()) append(" • ")
+                                append(pace)
+                            }
+                        }.ifBlank { null }
                         MetricItem(
                             label = "AVG SPEED",
-                            value = "${String.format(Locale.US, "%.1f", session.avgSpeedKmh)} km/h",
+                            value = "${String.format(Locale.US, "%.1f", avgConverted)} ${speedUnit.label}",
                             color = colorScheme.onSurface,
-                            subtitle = session.avgPaceMinPerKm.takeIf { it != "--:--" }
+                            subtitle = speedSub
                         )
                     }
                     Box(modifier = Modifier.width(1.dp).height(30.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))

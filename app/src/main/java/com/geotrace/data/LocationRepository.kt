@@ -144,6 +144,20 @@ class LocationRepository(private val context: Context) {
         prefs.edit().putString("map_tile_type", tileType.name).apply()
     }
 
+    fun getSavedGeofenceHysteresis(): Float = prefs.getFloat("geofence_hysteresis_meters", 10f)
+
+    fun saveGeofenceHysteresis(meters: Float) {
+        geofenceHysteresisMeters = meters
+        prefs.edit().putFloat("geofence_hysteresis_meters", meters).apply()
+    }
+
+    fun getSavedGeofenceAccuracyGate(): Boolean = prefs.getBoolean("geofence_accuracy_gate", true)
+
+    fun saveGeofenceAccuracyGate(enabled: Boolean) {
+        geofenceAccuracyGateEnabled = enabled
+        prefs.edit().putBoolean("geofence_accuracy_gate", enabled).apply()
+    }
+
     private fun loadInitialTrackingMode(): TrackingMode {
         val saved = prefs.getString("selected_tracking_mode", null)
         if (!saved.isNullOrBlank()) {
@@ -158,7 +172,19 @@ class LocationRepository(private val context: Context) {
     var jitterThresholdMeters: Float = getSavedJitterThreshold()
 
     @Volatile
+    var geofenceHysteresisMeters: Float = getSavedGeofenceHysteresis()
+
+    @Volatile
+    var geofenceAccuracyGateEnabled: Boolean = getSavedGeofenceAccuracyGate()
+
+    @Volatile
     private var smoothedSpeedMps: Float = 0f
+
+    @Volatile
+    private var stationaryAnchorPoint: LocationPoint? = null
+
+    @Volatile
+    private var consecutiveSlowSamples: Int = 0
 
     private val transitionCooldownLock = Any()
     private val lastNotifiedTransitionMs = mutableMapOf<String, Pair<Boolean, Long>>()
@@ -218,6 +244,8 @@ class LocationRepository(private val context: Context) {
         _activeSession.value = session
         _activeTrailPoints.value = emptyList()
         smoothedSpeedMps = 0f
+        stationaryAnchorPoint = null
+        consecutiveSlowSamples = 0
         loadSessions()
         session
     }
@@ -227,9 +255,10 @@ class LocationRepository(private val context: Context) {
         val endTime = System.currentTimeMillis()
         val db = dbHelper.writableDatabase
 
-        // Audit points in SQLite database to ensure the saved record matches actual persisted points
+        // Audit points in SQLite database using anchor-based accumulation so walking steps < 1.5m sum accurately
         var dbCount = 0
         var dbDistance = 0.0
+        val effectiveDeadband = jitterThresholdMeters.toDouble().coerceAtLeast(0.0)
         val cursor = db.query(
             LocationDbHelper.TABLE_POINTS,
             arrayOf("latitude", "longitude", "provider"),
@@ -238,25 +267,31 @@ class LocationRepository(private val context: Context) {
             null, null, "timestamp ASC"
         )
         cursor.use { c ->
-            var lastLat: Double? = null
-            var lastLon: Double? = null
+            var anchorLat: Double? = null
+            var anchorLon: Double? = null
             var lastProvider: String? = null
             while (c.moveToNext()) {
                 dbCount++
                 val lat = c.getDouble(0)
                 val lon = c.getDouble(1)
                 val provider = c.getString(2)
-                if (lastLat != null && lastLon != null) {
+                if (anchorLat != null && anchorLon != null) {
                     val isProviderSwitch = (lastProvider == "cellular") != (provider == "cellular")
-                    if (!isProviderSwitch) {
-                        val stepDist = calculateDistanceMeters(lastLat, lastLon, lat, lon)
-                        if (stepDist in 1.5..5000.0) {
+                    if (isProviderSwitch) {
+                        anchorLat = lat
+                        anchorLon = lon
+                    } else {
+                        val stepDist = calculateDistanceMeters(anchorLat, anchorLon, lat, lon)
+                        if (stepDist in effectiveDeadband..5000.0) {
                             dbDistance += stepDist
+                            anchorLat = lat
+                            anchorLon = lon
                         }
                     }
+                } else {
+                    anchorLat = lat
+                    anchorLon = lon
                 }
-                lastLat = lat
-                lastLon = lon
                 lastProvider = provider
             }
         }
@@ -287,6 +322,8 @@ class LocationRepository(private val context: Context) {
         _activeSession.value = null
         _activeTrailPoints.value = emptyList()
         smoothedSpeedMps = 0f
+        stationaryAnchorPoint = null
+        consecutiveSlowSamples = 0
         loadSessions()
         updated
     }
@@ -305,62 +342,88 @@ class LocationRepository(private val context: Context) {
         }
 
         var additionalDistance = 0.0
-        var isStationary = false
         var candidateSpeed = rawPoint.speed
+        var isProviderSwitch = false
 
         if (prevPoint != null) {
-            val isProviderTierSwitch = (prevPoint.provider == "cellular") != (rawPoint.provider == "cellular")
-            if (isProviderTierSwitch) {
+            isProviderSwitch = (prevPoint.provider == "cellular") != (rawPoint.provider == "cellular")
+            if (isProviderSwitch) {
                 // Switching between Cell Tower mast coords and GNSS/Fused coords must not inflate distance or speed
                 additionalDistance = 0.0
-                isStationary = false
-                if (candidateSpeed < 0.6f) {
+                stationaryAnchorPoint = rawPoint
+                consecutiveSlowSamples = 0
+                if (candidateSpeed < 0.45f) {
                     candidateSpeed = 0f
                 }
                 smoothedSpeedMps = candidateSpeed
             } else {
-                val dist = calculateDistanceMeters(prevPoint.latitude, prevPoint.longitude, rawPoint.latitude, rawPoint.longitude)
-                val timeDiffSec = ((rawPoint.timestamp - prevPoint.timestamp) / 1000.0).coerceAtLeast(0.1)
-                val impliedSpeedMps = (dist / timeDiffSec).toFloat()
+                val anchor = stationaryAnchorPoint ?: prevPoint
+                val distFromPrev = calculateDistanceMeters(prevPoint.latitude, prevPoint.longitude, rawPoint.latitude, rawPoint.longitude)
+                val distFromAnchor = calculateDistanceMeters(anchor.latitude, anchor.longitude, rawPoint.latitude, rawPoint.longitude)
+                val dtPrevSec = ((rawPoint.timestamp - prevPoint.timestamp) / 1000.0).coerceAtLeast(0.1)
+                val dtAnchorSec = ((rawPoint.timestamp - anchor.timestamp) / 1000.0).coerceAtLeast(0.1)
+                val impliedSpeedFromPrev = (distFromPrev / dtPrevSec).toFloat()
+                val impliedSpeedFromAnchor = (distFromAnchor / dtAnchorSec).toFloat()
 
-                // Discard sudden GPS teleportation/multipath jump (> 5km or implied speed > 200 km/h)
-                if (dist > 5000.0 || impliedSpeedMps > 55.0f) {
+                // Discard sudden GPS teleportation/multipath spike (> 5km or > 200 km/h)
+                if (distFromPrev > 5000.0 || impliedSpeedFromPrev > 55.0f) {
                     additionalDistance = 0.0
-                } else if (jitterThresholdMeters > 0f && dist < jitterThresholdMeters) {
-                    _filteredJitterMeters.value += dist
-                    _filteredJitterCount.value += 1
-                    additionalDistance = 0.0
-                    isStationary = true
+                    candidateSpeed = smoothedSpeedMps
                 } else {
-                    additionalDistance = dist
-                }
+                    val deadband = jitterThresholdMeters
+                    val movedPastDeadband = deadband <= 0f || distFromAnchor >= deadband
+                    val dopplerIndicatesMovement = rawPoint.speed >= 0.55f // >= ~2.0 km/h GNSS Doppler
 
-                // Speed Calibration & Noise Filtering
-                if (isStationary) {
-                    // When distance deadband filters this coordinate as stationary, speed must be 0
-                    candidateSpeed = 0f
-                } else if (candidateSpeed <= 0.1f && timeDiffSec > 0.2 && additionalDistance > 0.0) {
-                    // Fallback for Balanced/Cellular modes where hasSpeed() is false: derive from displacement / time
-                    candidateSpeed = impliedSpeedMps.coerceIn(0f, 45f)
-                } else if (candidateSpeed < 0.6f) {
-                    // Low-speed pedestrian noise floor clamp (< 0.6 m/s or < 2.1 km/h)
-                    candidateSpeed = 0f
+                    if (movedPastDeadband) {
+                        // Advance anchor and credit full accumulated displacement (no lost 1.1-1.4m walking strides)
+                        additionalDistance = distFromAnchor
+                        stationaryAnchorPoint = rawPoint
+                        consecutiveSlowSamples = 0
+
+                        // Recover displacement speed when chip Doppler is missing (Balanced/Cell) or under-reads in pocket
+                        candidateSpeed = when {
+                            rawPoint.provider == "cellular" -> impliedSpeedFromAnchor.coerceIn(0f, 35f)
+                            rawPoint.speed <= 0.1f && dtAnchorSec >= 0.3 -> impliedSpeedFromAnchor.coerceIn(0f, 45f)
+                            rawPoint.speed < 0.6f && impliedSpeedFromAnchor >= 0.6f && rawPoint.accuracy <= 25f ->
+                                impliedSpeedFromAnchor.coerceIn(0f, 45f)
+                            rawPoint.speed < 0.45f && impliedSpeedFromAnchor < 0.45f -> 0f
+                            else -> rawPoint.speed
+                        }
+                    } else if (dopplerIndicatesMovement) {
+                        // Moving slowly on a 1s tick (< 1.5m step) with clear GNSS Doppler: preserve velocity & hold anchor
+                        // so the next tick accumulates >= deadband without losing distance or crashing EMA to 0.
+                        additionalDistance = 0.0
+                        consecutiveSlowSamples = 0
+                        candidateSpeed = rawPoint.speed
+                    } else {
+                        // Genuine sub-deadband drift while stationary or very slow start
+                        if (distFromPrev > 0.05 && (dtAnchorSec >= 2.0 || rawPoint.speed < 0.25f)) {
+                            _filteredJitterMeters.value += distFromPrev
+                            _filteredJitterCount.value += 1
+                        }
+                        additionalDistance = 0.0
+                        consecutiveSlowSamples += 1
+                        candidateSpeed = 0f
+                    }
                 }
             }
         } else {
-            if (candidateSpeed < 0.6f) {
+            stationaryAnchorPoint = rawPoint
+            consecutiveSlowSamples = 0
+            if (candidateSpeed < 0.45f) {
                 candidateSpeed = 0f
             }
         }
 
-        // Exponential Moving Average (EMA) smoothing for stable velocity display
-        val isProviderSwitch = prevPoint != null && ((prevPoint.provider == "cellular") != (rawPoint.provider == "cellular"))
-        smoothedSpeedMps = if (candidateSpeed <= 0f) {
-            0f // Instant stop
-        } else if (isProviderSwitch || smoothedSpeedMps <= 0f) {
-            candidateSpeed
-        } else {
-            (0.35f * candidateSpeed) + (0.65f * smoothedSpeedMps)
+        // Smooth EMA velocity display without instant-zero dropouts on a single 1s sub-deadband sample
+        smoothedSpeedMps = when {
+            isProviderSwitch -> candidateSpeed
+            candidateSpeed <= 0f -> {
+                if (consecutiveSlowSamples >= 3 || smoothedSpeedMps < 0.35f) 0f
+                else 0.55f * smoothedSpeedMps
+            }
+            smoothedSpeedMps <= 0f -> candidateSpeed
+            else -> (0.45f * candidateSpeed) + (0.55f * smoothedSpeedMps)
         }
 
         val point = rawPoint.copy(speed = smoothedSpeedMps)
@@ -408,8 +471,8 @@ class LocationRepository(private val context: Context) {
             db.update(LocationDbHelper.TABLE_SESSIONS, updateCv, "id = ?", arrayOf(session.id))
         }
 
-        // Check geofences
-        checkGeofences(point.latitude, point.longitude)
+        // Check geofences with dual-radius hysteresis & accuracy gating
+        checkGeofences(point.latitude, point.longitude, point.accuracy, point.provider)
     }
 
     fun updateCellTowers(towers: List<CellTowerInfo>) {
@@ -755,7 +818,12 @@ class LocationRepository(private val context: Context) {
         }
     }
 
-    private suspend fun checkGeofences(lat: Double, lon: Double) = withContext(Dispatchers.IO) {
+    private suspend fun checkGeofences(
+        lat: Double,
+        lon: Double,
+        accuracyMeters: Float = 10f,
+        provider: String = "fused"
+    ) = withContext(Dispatchers.IO) {
         val zones = _geofenceZones.value
         val updatedZones = mutableListOf<GeofenceZone>()
         val newAlerts = mutableListOf<GeofenceAlert>()
@@ -763,15 +831,27 @@ class LocationRepository(private val context: Context) {
         val db = dbHelper.writableDatabase
         val now = System.currentTimeMillis()
 
-        // 15m exit hysteresis margin to eliminate boundary flapping caused by GPS multipath noise
-        val hysteresisBufferMeters = 15.0
+        // Dual-radius Schmitt-trigger hysteresis: smaller radius for entry, larger radius for exit
+        val delta = geofenceHysteresisMeters.toDouble().coerceAtLeast(0.0)
+        val useAccuracyGate = geofenceAccuracyGateEnabled
 
         for (z in zones) {
+            if (useAccuracyGate) {
+                val maxAllowedAcc = maxOf(35.0, z.radiusMeters * 0.75)
+                if (provider == "cellular" || accuracyMeters > maxAllowedAcc) {
+                    updatedZones.add(z)
+                    continue
+                }
+            }
+
             val dist = calculateDistanceMeters(lat, lon, z.latitude, z.longitude)
+            val entryRadius = (z.radiusMeters - delta).coerceAtLeast(minOf(10.0, z.radiusMeters * 0.5))
+            val exitRadius = z.radiusMeters + delta
+
             val isNowInside = if (z.isInside) {
-                dist <= (z.radiusMeters + hysteresisBufferMeters)
+                dist <= exitRadius
             } else {
-                dist <= z.radiusMeters
+                dist <= entryRadius
             }
 
             if (isNowInside != z.isInside) {

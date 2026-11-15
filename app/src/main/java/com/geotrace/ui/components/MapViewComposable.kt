@@ -351,7 +351,8 @@ fun MapViewComposable(
                     map.overlays.add(userMarker)
                 }
 
-                // 3. Draw Geofence Circular Zones (Safe Zones & Boda Warning Perimeters)
+                // 3. Draw Geofence Circular Zones (Nominal perimeter + Dual-Radius Hysteresis Band)
+                val deltaHyst = settings.geofenceHysteresisMeters.toDouble().coerceAtLeast(0.0)
                 for (zone in geofenceZones) {
                     val zoneCenter = GeoPoint(zone.latitude, zone.longitude)
                     val circlePoints = computeCircleGeoPoints(zoneCenter, zone.radiusMeters.toDouble())
@@ -372,6 +373,36 @@ fun MapViewComposable(
                         android.graphics.Color.green(zoneColor),
                         android.graphics.Color.blue(zoneColor)
                     )
+                    val entryR = (zone.radiusMeters - deltaHyst).coerceAtLeast(minOf(10.0, zone.radiusMeters * 0.5))
+                    val exitR = zone.radiusMeters + deltaHyst
+
+                    if (deltaHyst > 0.0) {
+                        val hystColor = android.graphics.Color.argb(
+                            115,
+                            android.graphics.Color.red(zoneColor),
+                            android.graphics.Color.green(zoneColor),
+                            android.graphics.Color.blue(zoneColor)
+                        )
+                        val outerExitRing = Polygon(map).apply {
+                            points = computeCircleGeoPoints(zoneCenter, exitR)
+                            fillPaint.color = android.graphics.Color.TRANSPARENT
+                            outlinePaint.color = hystColor
+                            outlinePaint.strokeWidth = 1.5f
+                            outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(10f, 8f), 0f)
+                        }
+                        map.overlays.add(outerExitRing)
+
+                        if (entryR < zone.radiusMeters - 2.0) {
+                            val innerEntryRing = Polygon(map).apply {
+                                points = computeCircleGeoPoints(zoneCenter, entryR)
+                                fillPaint.color = android.graphics.Color.TRANSPARENT
+                                outlinePaint.color = hystColor
+                                outlinePaint.strokeWidth = 1.5f
+                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f, 6f), 0f)
+                            }
+                            map.overlays.add(innerEntryRing)
+                        }
+                    }
 
                     val zonePolygon = Polygon(map).apply {
                         points = circlePoints
@@ -379,7 +410,11 @@ fun MapViewComposable(
                         outlinePaint.color = outlineColor
                         outlinePaint.strokeWidth = 3f
                         title = "${zone.category.iconEmoji} ${zone.name} (${zone.radiusMeters.toInt()}m)"
-                        snippet = "Category: ${zone.category.label} | Status: ${if (zone.isInside) "INSIDE SAFE ZONE" else "OUTSIDE"}"
+                        snippet = if (deltaHyst > 0.0) {
+                            "Category: ${zone.category.label} | Status: ${if (zone.isInside) "INSIDE" else "OUTSIDE"} | Entry ≤${entryR.toInt()}m, Exit >${exitR.toInt()}m"
+                        } else {
+                            "Category: ${zone.category.label} | Status: ${if (zone.isInside) "INSIDE SAFE ZONE" else "OUTSIDE"}"
+                        }
                     }
                     map.overlays.add(zonePolygon)
                 }
@@ -508,7 +543,8 @@ fun MapViewComposable(
                     val memberMarker = Marker(map).apply {
                         position = memberGeoPoint
                         title = "👤 ${member.displayName} (${member.gait})"
-                        snippet = "Speed: ${String.format(Locale.US, "%.1f", member.speed * 3.6f)} km/h | Battery: ${member.batteryPercent}% (${member.trackingMode})"
+                        val memberSpeed = member.speed * settings.speedUnit.multiplier
+                        snippet = "Speed: ${String.format(Locale.US, "%.1f", memberSpeed)} ${settings.speedUnit.label} | Battery: ${member.batteryPercent}% (${member.trackingMode})"
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         icon = memberIcon
                     }
@@ -548,7 +584,8 @@ fun MapViewComposable(
                     val peerMarker = Marker(map).apply {
                         position = peerGeoPoint
                         title = "📶 P2P Peer: ${peer.displayName}"
-                        snippet = "Speed: ${String.format(Locale.US, "%.1f", peer.speed * 3.6f)} km/h | Battery: ${peer.batteryPercent}% (Direct BLE/Wi-Fi)"
+                        val peerSpeed = peer.speed * settings.speedUnit.multiplier
+                        snippet = "Speed: ${String.format(Locale.US, "%.1f", peerSpeed)} ${settings.speedUnit.label} | Battery: ${peer.batteryPercent}% (Direct BLE/Wi-Fi)"
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         icon = peerIcon
                     }
