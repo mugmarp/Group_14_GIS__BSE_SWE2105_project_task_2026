@@ -25,12 +25,12 @@ GeoTrace implements a multi-tiered spatial architecture that bridges physical ra
                     |                                   |
 +-------------------v---------------+   +---------------v-------------------------+
 |     HARDWARE TELEMETRY CORE       |   |       DATA PERSISTENCE & EXPORT         |
-|  • FusedLocationProviderClient    |   |  • SQLite (`LocationDbHelper` v3)       |
-|    (Multi-GNSS: GPS, GLONASS,     |   |    + Offline Maps + DataStore         |
+|  • FusedLocationProviderClient    |   |  • SQLite (`LocationDbHelper` v4)       |
+|    (Multi-GNSS: GPS, GLONASS,     |   |    Trackpoints + Waypoints + Regions  |
 |     Galileo, BeiDou)              |   |  • Opt-in Cloud Firestore + Auth        |
 |  • TelephonyManager Hardware      |   |    (Zero-Trust Rules + Ghost Mode)      |
 |    (LTE/UMTS/GSM Cell Telemetry)  |   |  • Google Nearby Connections P2P        |
-|  • OpenCellID Live API Resolver   |   |  • GPX 1.1 / KML 2.2 / CSV Exports      |
+|  • OpenCellID Live API Resolver   |   |  • GPX / KML / CSV / GeoJSON Exports    |
 |    (Requires User API Key)        |   +-----------------------------------------+
 |  • In-App Update Engine           |
 |    (GitHub Releases API + CI/CD)  |
@@ -82,7 +82,7 @@ GeoTrace is architected to comply strictly with the legal statutes governing tel
 - **Radio Frequency & Interception Compliance:** GeoTrace queries only standard Android OS passive radio cell identity broadcasts via standard `TelephonyManager.getAllCellInfo()` permissions (`android.permission.READ_PHONE_STATE`). It performs zero RF interception, IMSI catching, or unauthorized spectrum transmissions.
 
 ### 3. Electronic Signatures Act, 2011 (Cap 101) & Electronic Transactions Act (Cap 103)
-- Exported GPX and KML logs preserve ISO-8601 UTC timestamps, coordinate/elevation provenance, and accuracy metadata (`<hdop>`), providing auditable geodetic records via `FileProvider`.
+- Exported logs in **GPX (GPS Exchange Format)**, **KML (Google Earth)**, **CSV (Raw Telemetry)**, and **GeoJSON (GIS Vector)** preserve ISO-8601 UTC timestamps, coordinate/elevation provenance, manual field waypoint annotations, and GPS horizontal accuracy metadata (`geotrace:accuracy_m`), providing auditable geodetic records via Android Storage Access Framework (`Save File`) and `FileProvider`.
 
 ---
 

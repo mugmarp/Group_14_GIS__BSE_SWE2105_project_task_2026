@@ -29,7 +29,7 @@ Field trials are partitioned across three distinct physical environments within 
 
 ## 3. Quantitative Test Metrics & Log Sheet Structure
 
-During each test run, the evaluators record telemetry at 1-second intervals via GeoTrace’s background foreground service (`LocationForegroundService`). Data is exported into CSV format for statistical analysis in Python/QGIS.
+During each test run, the evaluators record telemetry at 1-second intervals via GeoTrace’s background foreground service (`LocationForegroundService`), with automated stationary heartbeat deduplication every 15 seconds to prevent SQLite bloat while preserving drift audits. Automated breadcrumbs are logged as **Trackpoints** (`TRACKPOINT` / `<trkpt>`), while landmark stops or survey benchmark pins dropped via **Pin Waypoint** are saved separately as **Waypoints** (`WAYPOINT` / `<wpt>`). Data is exported into **CSV (Raw Telemetry)**, **GPX (GPS Exchange Format)**, **KML (Google Earth)**, or **GeoJSON (GIS Vector)** for statistical analysis in Python/QGIS.
 
 ### Metric Definitions
 - **$E_{GPS}$ (GNSS Accuracy):** Estimated horizontal radial error (meters) reported by the GNSS provider at 68% confidence.
@@ -103,8 +103,11 @@ During each test run, the evaluators record telemetry at 1-second intervals via 
 
 ## 5. Data Export & Verification Instructions
 
-1. Upon stopping tracking session, tap **History** tab (`HistoryScreen.kt`).
-2. Tap **Export GPX** to generate schema-compliant XML containing `<trk>` and `<trkpt>` nodes with `<ele>`, `<time>`, and `<hdop>`.
-3. Tap **Export KML** to visualize 3D path extrusion in Google Earth Pro.
-4. Tap **Export CSV** for raw statistical compilation in R / Python Pandas.
-5. Ingest exported CSV into QGIS to verify spatial alignment against official Uganda National Forestry Authority (NFA) / Ministry of Lands basemaps.
+1. While actively recording, optionally tap **Pause Trail** / **Resume Trail** for breaks or tap **Pin Waypoint** in the expanded HUD to mark survey control stations (`<wpt>`) separately from automated 1 Hz breadcrumb **Trackpoints** (`<trkpt>`).
+2. Upon tapping **Stop** on the recording pill, open `☰` **Menu → Saved Trails & Exports** (`HistoryScreen.kt`). Optionally tap **Inspect on Map** (`Track`) to preview the recorded polyline and orange waypoint badges (`W1`, `W2`, ...), or rename/manage trails.
+3. Choose an export button on the saved trail card to preview and **Save File** (via Storage Access Framework directly to Downloads) or **Share** (via `FileProvider`) in any of four GIS-compliant formats:
+   - **GPX (GPS Exchange Format):** Generates schema-valid GPX 1.1 XML containing `<wpt>` manual pins plus `<trk>`/`<trkseg>`/`<trkpt>` nodes with `<ele>`, `<time>`, and `<extensions>` (`geotrace:speed_mps`, `geotrace:accuracy_m`, `geotrace:bearing`, `geotrace:provider`).
+   - **KML (Google Earth):** Generates OGC KML 2.2 with `<gx:Track>` / `<gx:MultiTrack>` temporal playback and a `Waypoints` pin folder for Google Earth Pro.
+   - **CSV (Raw Telemetry):** Generates a 14-column spreadsheet (`RecordType` distinguishing `WAYPOINT` vs `TRACKPOINT`) for raw statistical compilation in R, Excel, or Python Pandas.
+   - **GeoJSON (GIS Vector):** Generates an RFC 7946 `FeatureCollection` (`LineString`/`MultiLineString` + `Point` features) ready for direct QGIS or web GIS ingestion.
+4. Ingest exported CSV, GPX, or GeoJSON into QGIS to verify spatial alignment against official Uganda National Forestry Authority (NFA) / Ministry of Lands basemaps.

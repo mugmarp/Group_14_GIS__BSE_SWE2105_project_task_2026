@@ -84,28 +84,38 @@ GeoTrace checks for software updates and distribution binaries directly from the
 
 ---
 
-## 4. Spatial Data Export Schemas
+## 4. Spatial Data Export Schemas (`TrackExporter.kt`)
 
-### 1. GPX 1.1 Specification (Topografix DTD)
-- Conforms to standard `http://www.topografix.com/GPX/1/1`.
-- Contains track metadata `<trk>`, track segment `<trkseg>`, and track points `<trkpt lat="..." lon="...">`.
-- Each point records:
+All exports distinguish **automated Trackpoints** (`<trkpt>` / `TRACKPOINT`) from **manual field Waypoints** (`<wpt>` / `WAYPOINT`), enforce explicit extensions via `ExportFormat` (preventing `.txt` fallback coercion), and support both direct **Storage Access Framework (`Save File`)** and **`FileProvider` sharing**.
+
+### 1. GPX (GPS Exchange Format) — GPX 1.1 (`application/gpx+xml`, `.gpx`)
+- Conforms to Topografix schema `http://www.topografix.com/GPX/1/1` with custom telemetry namespace `xmlns:geotrace="https://geotrace.local/xmlschemas/Telemetry/v1"`.
+- Exports `<metadata>` (`<name>`, `<desc>`, `<time>`), manual field pins as `<wpt lat="..." lon="...">` (`<ele>`, `<time>`, `<name>`, optional `<desc>`, `<sym>Flag</sym>`, `<extensions><geotrace:accuracy>`), and segmented tracks (`<trk>` → `<trkseg>`, split on > 5 km teleport gaps) containing `<trkpt lat="..." lon="...">`:
   - `<ele>`: Altitude in meters above mean sea level.
   - `<time>`: ISO 8601 UTC timestamp (`YYYY-MM-DDTHH:mm:ssZ`).
-  - `<speed>`: Velocity in meters per second.
-  - `<hdop>`: Horizontal dilution of precision derived from GPS accuracy radius.
+  - `<extensions>`:
+    - `<geotrace:speed_mps>`: Velocity in meters per second.
+    - `<geotrace:accuracy_m>`: Horizontal 68% error radius in meters.
+    - `<geotrace:bearing>`: Heading in degrees.
+    - `<geotrace:provider>`: Location source (`fused`, `gps`, `network`, `cellular`).
 
-### 2. KML 2.2 Specification (OGC Standard)
-- Conforms to Open Geospatial Consortium (OGC) standard KML schema.
-- Renders 3D extruded polyline (`<LineString>`) with `<altitudeMode>clampToGround</altitudeMode>`.
-- Includes colored waypoint pins for start, finish, and intermediate geofence boundaries.
+### 2. KML (Google Earth) — OGC KML 2.2 (`application/vnd.google-earth.kml+xml`, `.kml`)
+- Conforms to OGC KML 2.2 (`http://www.opengis.net/kml/2.2`) with Google Earth extensions (`xmlns:gx="http://www.google.com/kml/ext/2.2"`).
+- Places manual field pins in a `<Folder><name>Waypoints</name>` of timestamped `<Point>` Placemarks.
+- Renders time-indexed path playback using `<gx:Track>` (or `<gx:MultiTrack>` for segmented sessions) with paired `<when>` UTC timestamps and `<gx:coord>lon lat alt</gx:coord>` tuples under `<altitudeMode>clampToGround</altitudeMode>`.
 
-### 3. CSV Telemetry Schema
-Comma-separated values for Python (Pandas) / R / QGIS spatial analysis:
+### 3. CSV (Raw Telemetry) — Tabular Schema (`text/csv`, `.csv`)
+14-column comma-separated schema for Python (Pandas), R, Excel, and QGIS tabular joins (`RecordType` separates manual `WAYPOINT` pins from automated `TRACKPOINT` breadcrumbs):
 ```csv
-timestamp,iso_time,latitude,longitude,accuracy_m,speed_mps,altitude_m,bearing_deg,provider,session_id
-1731024000000,2026-11-08T00:00:00Z,-0.617124,30.654812,3.2,0.00,1432.5,182.4,fused,session_001
+RecordType,Label,Note,SessionName,Timestamp,ISO_Time,Latitude,Longitude,Altitude_m,Speed_mps,Speed_kmh,Accuracy_m,Bearing,Provider
+WAYPOINT,Survey Benchmark,Corner stone,MUST_Walk,1731024005000,2026-11-08T00:00:05Z,-0.617124,30.654812,1432.5,0.0,0.0,3.2,0.0,manual_pin
+TRACKPOINT,,,MUST_Walk,1731024006000,2026-11-08T00:00:06Z,-0.617130,30.654820,1432.6,1.25,4.5,3.1,182.4,fused
 ```
+
+### 4. GeoJSON (GIS Vector) — RFC 7946 (`application/geo+json`, `.geojson`)
+- Outputs a standard RFC 7946 `FeatureCollection`:
+  - **Track Feature:** `LineString` (or `MultiLineString` across > 5 km gaps) with `featureType: "track"`, `sessionId`, `name`, `trackingMode`, `startTimeUtc`, `endTimeUtc`, `distanceMeters`, `durationSeconds`, `avgSpeedKmh`, `maxSpeedKmh`, and `trackpointCount`.
+  - **Waypoint Features:** Individual `Point` features (`[lon, lat, alt]`) with `featureType: "waypoint"`, `id`, `name`, optional `note`, `accuracyMeters`, and `timestampUtc`.
 
 ---
 
@@ -124,5 +134,5 @@ Defined in `ui/components/MapTileSources.kt` and initialized in `LocationTracker
 ### Offline Map Pre-Download Guardrails (`OfflineMapManager.kt`)
 - **Pre-Flight Estimation:** Computes Web Mercator tile counts in $O(\text{zoomLevels})$ arithmetic without allocating full tile-index lists in memory.
 - **Download Cap:** Enforces `MAX_TILES_PER_DOWNLOAD = 2500` tiles per region download (`Map View`, `2 km`, or `5 km` presets).
-- **Persistence:** Downloaded bounding boxes, layer type, zoom bounds, tile count, and estimated MB are stored in SQLite `gis_tracker.db` (`v3` table `offline_map_regions`), kept synchronized when clearing the tile cache.
+- **Persistence:** Downloaded bounding boxes, layer type, zoom bounds, tile count, and estimated MB are stored in SQLite `gis_tracker.db` (`offline_map_regions` table; schema currently at `v4`), kept synchronized when clearing the tile cache.
 

@@ -304,7 +304,7 @@ The web dispatcher can be deployed as a single, zero-build HTML/JS bundle hosted
 
 ## 7. Implementation Status & Roadmap
 
-1. **Phase 1 (Completed):** Local single-device GNSS/Fused/Cellular recording, `TelephonyManager` + OpenCellID resolution, GPX/KML/CSV export via `FileProvider`, `WakeLock` protection, and deadband/EMA speed smoothing.
+1. **Phase 1 (Completed):** Local single-device GNSS/Fused/Cellular recording (`SQLite` `v4` with distinct automated Trackpoints vs. manual Waypoints, Pause/Resume & 15 s stationary dedup), `TelephonyManager` + OpenCellID resolution, **GPX (GPS Exchange Format)** / **KML (Google Earth)** / **CSV (Raw Telemetry)** / **GeoJSON (GIS Vector)** export via SAF & `FileProvider`, `WakeLock` protection, and deadband/EMA speed smoothing.
 2. **Phase 2 (Completed):** Named Cloud Firestore sync (`/users/{uid}/devices/{deviceId}` & `/groups/{groupId}/live_locations/{uid}_{deviceId}`), Google Sign-In via Credential Manager, Remote Ring alarm, invite-code groups, Ghost Mode, and off-grid Nearby Connections `P2P_CLUSTER` mesh.
 3. **Phase 3 (Planned / Optional):** Deploy the standalone Leaflet Web Dispatcher (Section 6) if a browser fleet dashboard is required alongside the Android app.
 4. **Phase 4 (Planned / Optional):** Shared cloud geofence synchronization across group members.

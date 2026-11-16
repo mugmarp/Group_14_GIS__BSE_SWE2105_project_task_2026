@@ -154,15 +154,15 @@ When recording a decision, use this format:
 3. **DataStore (Preferences/Proto)** — Not for relational location data
 4. **Plain SQLite (`SQLiteOpenHelper`) + Preferences DataStore** — Zero KSP annotation processor overhead, direct SQL control, fast builds
 
-**Decision:** **Native Android `SQLiteOpenHelper` (`LocationDbHelper.kt`, v3 with `(session_id, timestamp)` composite index) + Jetpack DataStore (`SettingsManager.kt`)**.
+**Decision:** **Native Android `SQLiteOpenHelper` (`LocationDbHelper.kt`, v4 with `(session_id, timestamp)` composite indexes and `ON DELETE CASCADE` foreign keys) + `SharedPreferences` (`geotrace_prefs`)**.
 
-**Rationale:** Avoids KSP/Room annotation build complexity while giving deterministic SQL queries, atomic transactions, and fast $O(\log N)$ export generation alongside lightweight DataStore preferences.
+**Rationale:** Avoids KSP/Room annotation build complexity while giving deterministic SQL queries, `Mutex`-guarded atomic transactions, and fast $O(\log N)$ export generation alongside lightweight preference storage.
 
-**Consequences:** Clean separation between relational/spatial persistence (`gis_tracker.db` v3: `tracking_sessions`, `location_points`, `geofence_zones`, `geofence_alerts`, `offline_map_regions`) and user preferences (`geotrace_prefs` DataStore).
+**Consequences:** Clean separation between relational/spatial persistence (`gis_tracker.db` v4: `tracking_sessions` with pause/resume state, `location_points`, `trail_waypoints`, `geofence_zones`, `geofence_alerts`, `offline_map_regions`) and user preferences (`geotrace_prefs`).
 
 **Action Items:**
-- [x] Implement `LocationDbHelper` (`tracking_sessions`, `location_points`, `geofence_zones`, `geofence_alerts`, `offline_map_regions`)
-- [x] Add `idx_points_session` index (v2) and `offline_map_regions` table (v3) via non-destructive `onUpgrade` migrations
+- [x] Implement `LocationDbHelper` (`tracking_sessions`, `location_points`, `trail_waypoints`, `geofence_zones`, `geofence_alerts`, `offline_map_regions`)
+- [x] Add `idx_points_session` (v2), `offline_map_regions` (v3), and `trail_waypoints` + pause/resume columns + `ON DELETE CASCADE` (v4) via non-destructive `onUpgrade` migrations
 
 ---
 
@@ -238,6 +238,29 @@ When recording a decision, use this format:
 
 ---
 
+### 2026-11-15 Decision: Spatial Export Standards, SAF Delivery & Trackpoint/Waypoint Separation
+
+**Status:** Accepted
+
+**Context:** Automated 1 Hz GPS breadcrumbs recorded during a session serve a fundamentally different GIS role from manually pinned field landmarks, while Android share targets sometimes stripped or coerced non-standard extensions (e.g., falling back to `.txt`) when exporting raw text or mismatched filenames.
+
+**Options Considered:**
+1. **Plain text/GPX-only share intents** — Limited GIS compatibility and prone to `.txt` coercion on receiving apps.
+2. **Typed `ExportFormat` Pipeline (`TrackExporter.kt`) + Distinct `trail_waypoints` Table + Dual SAF / `FileProvider` Delivery** — Separate automated **Trackpoints** (`<trkpt>` / `TRACKPOINT`) from manual **Waypoints** (`<wpt>` / `WAYPOINT`), and export strictly via `ExportFormat` (`GPX (GPS Exchange Format)`, `KML (Google Earth)`, `CSV (Raw Telemetry)`, `GeoJSON (GIS Vector)`).
+
+**Decision:** **Adopted typed `ExportFormat` serialization + distinct Trackpoints vs. Waypoints storage (`LocationDbHelper` v4) + dual Storage Access Framework (`CreateDocument` "Save File") and `FileProvider` sharing**, paired with a slim bottom Recording Pill (Pause/Resume/Stop) and on-demand HUD `Pin Waypoint` control.
+
+**Rationale:** Ensures schema-valid GPX 1.1 (`<extensions>` `geotrace:*`), temporal KML `<gx:Track>`, 14-column `RecordType` CSV, and RFC 7946 GeoJSON with true `.gpx` / `.kml` / `.csv` / `.geojson` extensions and 24-hour export cache cleanup.
+
+**Consequences:** QGIS, Google Earth, Python/Pandas, and R ingest GeoTrace trails cleanly with zero `.txt` mislabeling, while stationary logging avoids 1-second database bloat via 15-second heartbeat deduplication.
+
+**Action Items:**
+- [x] Implement `TrailWaypoint` & `trail_waypoints` SQLite v4 migration + `Mutex` concurrency + crash recovery
+- [x] Implement `ExportFormat` enum (`GPX (GPS Exchange Format)`, `KML (Google Earth)`, `CSV (Raw Telemetry)`, `GeoJSON (GIS Vector)`) and SAF `Save File` + `FileProvider` share sheet
+- [x] Add slim Bottom Recording Pill, Pause/Resume, Pin Waypoint, and Inspect Trail on Map
+
+---
+
 ## Decision Index
 
 | Date | Decision | Status |
@@ -245,10 +268,11 @@ When recording a decision, use this format:
 | 2026-11-01 | Project Option Selection | **Accepted** (Option 2: Mobile Phone Tracking) |
 | 2026-11-01 | Target Platform | **Accepted** (Android / Kotlin / Jetpack Compose) |
 | 2026-11-04 | Map Library | **Accepted** (osmdroid + 512 MB internal cache) |
-| 2026-11-04 | Local Database | **Accepted** (SQLite `LocationDbHelper` v3 + DataStore) |
+| 2026-11-04 | Local Database | **Accepted** (SQLite `LocationDbHelper` v4 + `geotrace_prefs`) |
 | 2026-11-09 | Backend / Sync | **Accepted** (Cloud Firestore + Credential Manager + Nearby P2P) |
 | 2026-11-08 | Background Tracking Strategy | **Accepted** (`LocationForegroundService` 3-tier `REC` + 24/7 Protection Mode) |
 | 2026-11-14 | Multi-Layer & Offline Cartography | **Accepted** (Esri Satellite, Hybrid Overlay, HOT, `OfflineMapManager`, Map Pick) |
+| 2026-11-15 | Spatial Export & Trackpoint/Waypoint Model | **Accepted** (`ExportFormat` GPX/KML/CSV/GeoJSON, SAF Save, SQLite v4 `trail_waypoints`) |
 
 ---
 

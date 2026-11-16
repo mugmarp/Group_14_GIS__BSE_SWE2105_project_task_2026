@@ -36,6 +36,7 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
 | **GT-ISSUE-17** | Multi-Device / Bg | **Critical** | Devices unreachable / Remote Ring silent when `MainActivity` is closed or after device reboot | **Resolved** |
 | **GT-ISSUE-18** | Geofencing / GIS | **High** | Kakoba Hostels coordinate offset, lack of interactive map coordinate picking, and non-persisted Settings flags | **Resolved** |
 | **GT-ISSUE-19** | Lifecycle / Audit | **Critical** | ForegroundService early-stop crash risk, sign-out resetting 24/7 toggle, cold-start `selected_group_id` wipe, Pick-on-Map tap swallowing, & Remote Ring clock skew | **Resolved** |
+| **GT-ISSUE-20** | Recording / Export | **High** | Automated `<trkpt>` vs manual `<wpt>` conflation, `.txt` export extension fallback, HUD/Recording Pill clutter, missing Pause/Resume & GeoJSON, and SQLite `v4` hardening | **Resolved** |
 
 ---
 
@@ -288,21 +289,34 @@ Following the initial release of **GeoTrace**, an in-depth system audit evaluate
   3. Moved `MapEventsOverlay` to the top of `map.overlays`, added finite coordinate validation (`-90..90`, `-180..180`) across cloud/P2P streams and `GeoPoint` plots, keyed `GeofenceEditDialog` states, widened Remote Ring clock-skew tolerance to `±120s`, and mirrored the **24/7 Background Protection** switch inside `SettingsScreen`.
 - **Outcome:** Crash-proof foreground service transitions, persistent user group/protection preferences, reliable rooftop map picking, and consistent Settings/Devices controls.
 
+### GT-ISSUE-20: Trackpoint vs. Waypoint Separation, Export Extension Fidelity (`.txt` Fix), HUD Declutter & SQLite `v4`
+- **Discovered:** November 15, 2026
+- **Files Affected:** `LocationDbHelper.kt`, `LocationRepository.kt`, `LocationModels.kt`, `LocationForegroundService.kt`, `TrackExporter.kt`, `HistoryScreen.kt`, `MapScreen.kt`, `MapViewComposable.kt`, `CellularDiagnosticScreen.kt`, `MainActivity.kt`, `TrackerViewModel.kt`, `ui/screens/devices/*`
+- **Symptoms & Risks:**
+  1. High-frequency 1 Hz automated breadcrumbs were labeled simply as `"WAYPOINTS"`, conflating continuous GPS **Trackpoints** (`<trkpt>` / `TRACKPOINT`) with true manually pinned GIS **Waypoints** (`<wpt>` / `WAYPOINT`), and stationary 1 s runs wrote redundant duplicate rows.
+  2. Export targets without strict typed MIME/filename contracts risked Android share/save coercion to `.txt`, GPX emitted `<speed>`/`<hdop>` directly on `<trkpt>` (invalid against GPX 1.1 XSD), GeoJSON was absent, and trails lacked direct Storage Access Framework (`Save File`), rename, inspect-on-map, and empty-trail guards.
+  3. The permanent standby Recording HUD + active bottom bar duplicated metrics already shown in the expanded telemetry HUD, `CellularDiagnosticScreen` had minor label wrapping/overlap, and trail recording lacked Pause/Resume, crash-recovery reconciliation, and `Mutex` locking.
+- **Resolution:**
+  1. **True GIS Separation & DB `v4`:** Renamed automated metric to `TRACKPOINTS` in `MapScreen.kt`, added `TrailWaypoint` (`trail_waypoints` table with `ON DELETE CASCADE` in `LocationDbHelper.kt` `v4`), implemented **Pin Waypoint** (`W1`, `W2`, ... orange badges on map), 15 s stationary heartbeat deduplication, `Mutex`-synchronized Pause/Resume & point persistence, and crash/reboot orphan session recovery.
+  2. **Typed Exports & `.txt` Bug Elimination:** Added `ExportFormat` (`GPX (GPS Exchange Format)`, `KML (Google Earth)`, `CSV (Raw Telemetry)`, `GeoJSON (GIS Vector)`) in `TrackExporter.kt`, moved custom GPX telemetry into `<extensions>` (`geotrace:*`), upgraded KML to `<gx:Track>` / `<gx:MultiTrack>` + `Waypoints` Folder, expanded CSV to a 14-column `RecordType` (`WAYPOINT`/`TRACKPOINT`) schema, and added SAF `CreateDocument` (`Save File`), `FileProvider` sharing, and 24-hour export cache cleanup in `HistoryScreen.kt`.
+  3. **UX Decluttering & Modularization:** Consolidated bottom nav to **Map** and **Devices** (moving **Cellular Hub** cleanly into `☰` Menu with `BSE Group 14 • GIS Task` / `Offline + Cloud Sync` footer), replaced the standby recorder box with an on-demand `Record Trail` trigger + slim single-row active Recording Pill (with Pause/Resume/Stop), added `Inspect on Map` / rename / delete confirmation in History, polished `CellularDiagnosticScreen` spacing, and modularized `GroupScreen` into `ui/screens/devices/*`.
+- **Outcome:** Standards-compliant GPX/KML/CSV/GeoJSON exports without `.txt` fallbacks, clean separation of Trackpoints vs. Waypoints, decluttered Map HUD, and resilient Pause/Resume SQLite `v4` trail recording.
+
 ---
 
 ## 3. Verification & Compliance Checklist
 
-- [x] **FileProvider Export**: Verified `.gpx`, `.kml`, and `.csv` generate valid URIs without Binder overflow.
+- [x] **FileProvider & SAF Export**: Verified **GPX (GPS Exchange Format)**, **KML (Google Earth)**, **CSV (Raw Telemetry)**, and **GeoJSON (GIS Vector)** generate valid `.gpx`, `.kml`, `.csv`, and `.geojson` files via `Save File` (SAF) and `FileProvider` share without Binder overflow or `.txt` coercion.
 - [x] **WakeLock Execution**: Verified `PARTIAL_WAKE_LOCK` acquires cleanly during `REC` and releases cleanly on downgrade/stop.
-- [x] **Database Migration**: Verified clean upgrade from `v1` → `v2` (composite index) → `v3` (`offline_map_regions`).
+- [x] **Database Migration**: Verified clean upgrade from `v1` → `v2` (composite index) → `v3` (`offline_map_regions`) → `v4` (`trail_waypoints`, `ON DELETE CASCADE`, pause/resume columns).
 - [x] **Full Settings Persistence**: Verified `autoBalancedTestMode` removal and persistence of all `TrackerSettings` fields in `geotrace_prefs`.
 - [x] **Pedestrian Speed Calibration**: Verified low-speed clamp, EMA smoothing, derived fallback, and gait classification.
-- [x] **Cross-Screen Responsiveness**: Verified 48dp touch targets, weighted telemetry columns, and speed unit consistency.
+- [x] **Cross-Screen Responsiveness**: Verified 48dp touch targets, weighted telemetry columns, slim bottom Recording Pill, Cellular Hub alignment, and modular `ui/screens/devices/*` components.
 - [x] **Mode Switching Concurrency & Tier Guard**: Verified `cellDiagnosticsJob` cancellation, active session SQLite sync, provider-tier transition guard, and GNSS/cellular handoff.
-- [x] **HUD Collapse Ergonomics**: Verified centered pull-tab handle and `AnimatedVisibility` expansion transitions.
-- [x] **Safe Menu & Updates UI**: Verified auto-expanded scrollable bottom-sheet menu, Settings update button layout, and 404/install-permission handling.
+- [x] **HUD Collapse Ergonomics**: Verified centered pull-tab handle, on-demand `Record Trail` trigger, and `AnimatedVisibility` expansion transitions.
+- [x] **Safe Menu & Updates UI**: Verified auto-expanded scrollable bottom-sheet menu (`BSE Group 14 • GIS Task` / `Offline + Cloud Sync`), Settings update button layout, and 404/install-permission handling.
 - [x] **Google Sign-In & CI Keystore**: Verified `findActivity()` context unwrapping and `debug.keystore.base64` CI decode step.
-- [x] **5-Layer Cartography & Offline Maps**: Verified Esri Satellite, Carto Hybrid overlay, Humanitarian HOT, Topo zoom clamping, and $O(\text{zoomLevels})$ offline region downloads.
+- [x] **5-Layer Cartography & Offline Maps**: Verified Esri Satellite, Carto Hybrid overlay, Humanitarian HOT, Topo zoom clamping, background caching chip, and $O(\text{zoomLevels})$ offline region downloads.
 - [x] **24/7 Background Protection & Map Pick**: Verified `ACTION_START_PROTECTION`, boot recovery, process-wide Remote Ring listener, Kakoba preset fix, `"Pick on Map"` overlay z-order, and synchronized Settings/Devices 24/7 switches.
 - [x] **Gradle Build**: Verified project builds cleanly (`compile_applet` PASS).
 

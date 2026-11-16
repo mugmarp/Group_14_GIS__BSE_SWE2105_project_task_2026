@@ -13,7 +13,7 @@ The GeoTrace quality assurance architecture verifies both functional software be
 1. **Local JVM & Unit Tests (`gradle testDebugUnitTest`)**:
    - Algorithmic validation of Haversine distance, speed unit conversion, and DMS/DD coordinate transformations.
    - Validation of the Euclidean deadband stationary filter ($T = 1.5\text{ m}$).
-   - Validation of GPX, KML, and CSV spatial serializations.
+   - Validation of **GPX (GPS Exchange Format)**, **KML (Google Earth)**, **CSV (Raw Telemetry)**, and **GeoJSON (GIS Vector)** spatial serializations (`<wpt>` vs `<trkpt>` separation).
 2. **Build & Release Packaging Verification (`gradle assembleDebug assembleRelease`)**:
    - Clean compilation of both development debug APK and optimized ProGuard release APK.
    - ProGuard/R8 bytecode shrinkage and keep rules verification for OpenCellID JSON models.
@@ -38,6 +38,7 @@ The GeoTrace quality assurance architecture verifies both functional software be
 | **Multi-Layer & Offline Maps QA** | Layer switches (`STANDARD`, `SATELLITE`, `HYBRID`, `TOPO` Z17 clamp, `HUMANITARIAN`), 2km/5km offline download/cancel/jump/clear | Physical device Map Settings / `OfflineMapsDialog` | Crisp aerial & label overlays, offline tiles render in Airplane Mode |
 | **Mode Transition QA** | Rapid toggles between `High Accuracy`, `Balanced`, and `Power Saver (Cell Only)` during active & standby tracking | Physical device HUD Mode Pill | Zero phantom jump distance, clean GNSS ↔ `"cellular"` handoff |
 | **24/7 Protection & Map Pick QA** | Sign in, enable 24/7 Background Protection, swipe app UI away, trigger Remote Ring from 2nd phone; test `Pick on Map` on Satellite view | Two physical phones + `GroupScreen` / `GeofenceScreen` | Background sync & Remote Ring fire with UI closed; tapped rooftop coordinate populates Zone Editor |
+| **Trail Recording, Waypoints & Export QA** | Record trail, Pause/Resume, Pin Waypoint (`<wpt>`), Stop, Inspect on Map, Save/Share **GPX (GPS Exchange Format)**, **KML (Google Earth)**, **CSV (Raw Telemetry)** & **GeoJSON (GIS Vector)** | `MapScreen` / `HistoryScreen` / QGIS & Google Earth | Slim recording pill updates live, DB `v4` restores across process kill, and exports retain exact `.gpx`/`.kml`/`.csv`/`.geojson` extensions |
 
 ---
 

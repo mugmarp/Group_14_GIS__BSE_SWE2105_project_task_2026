@@ -27,8 +27,9 @@
 │  └── Nearby Connections P2P Mesh (Strategy.P2P_CLUSTER)          │
 ├──────────────────────────────────────────────────────────────────┤
 │  Data & Cloud Layer                                              │
-│  ├── Local SQLite (LocationDbHelper v3 / LocationRepository)     │
-│  ├── Export (TrackExporter: GPX / KML / CSV via FileProvider)    │
+│  ├── Local SQLite (LocationDbHelper v4 / LocationRepository)     │
+│  ├── Export (TrackExporter: GPX / KML / CSV / GeoJSON via        │
+│  │           FileProvider & Storage Access Framework)            │
 │  └── Cloud Firestore (Named DB) + Credential Manager Google Auth │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -58,12 +59,12 @@ app/
 │   │   ├── MainActivity.kt
 │   │   ├── LocationTrackerApp.kt               // App-level manual DI container
 │   │   ├── data/
-│   │   │   ├── LocationDbHelper.kt             // SQLite schema & indexes (gis_tracker.db v3)
-│   │   │   ├── LocationRepository.kt           // Trails, deadband/EMA/tier-guard, geofences, offline regions
+│   │   │   ├── LocationDbHelper.kt             // SQLite schema & indexes (gis_tracker.db v4, trail_waypoints, ON DELETE CASCADE)
+│   │   │   ├── LocationRepository.kt           // Trails, Pause/Resume, Waypoints, 15s dedup, deadband/EMA/tier-guard, geofences
 │   │   │   ├── GroupRepository.kt              // Cloud Firestore (named DB) & Nearby P2P mesh
-│   │   │   └── export/TrackExporter.kt         // GPX 1.1, KML 2.2 & CSV generators
+│   │   │   └── export/TrackExporter.kt         // GPX (GPS Exchange Format), KML (Google Earth), CSV (Raw Telemetry), GeoJSON
 │   │   ├── model/
-│   │   │   ├── LocationModels.kt               // TrackingMode, LocationPoint, TrackingSession
+│   │   │   ├── LocationModels.kt               // TrackingMode, LocationPoint, TrailWaypoint, TrackingSession
 │   │   │   ├── CellModels.kt                   // CellTowerInfo, CellTowerLocation
 │   │   │   ├── GeofenceModels.kt               // GeofenceZone, GeofenceAlert
 │   │   │   ├── GroupModels.kt                  // Group, MemberLocation, PersonalDevice, P2PPeer
@@ -82,7 +83,8 @@ app/
 │   │   │   │   ├── MapViewComposable.kt        // osmdroid map, rotated chevrons, S/E trail pins, dBm cell rays
 │   │   │   │   └── OfflineMapsDialog.kt        // Offline region estimator, progress & saved region manager
 │   │   │   ├── screens/                        // MapScreen, CellularDiagnosticScreen, GroupScreen,
-│   │   │   │                                   // GeofenceScreen, HistoryScreen, ResearchAnalysisScreen, SettingsScreen
+│   │   │   │   │                               // GeofenceScreen, HistoryScreen, ResearchAnalysisScreen, SettingsScreen
+│   │   │   │   └── devices/                    // DeviceCards, DeviceControlPanels, GroupDialogs, DevicesModelsAndUtils
 │   │   │   └── theme/                          // Material 3 Theme, Color, Typography, Shape
 │   │   └── viewmodel/
 │   │       ├── TrackerViewModel.kt
@@ -102,7 +104,8 @@ app/
 | **Tracking Approach** | Option 2: Mobile (GNSS / Fused / Cell) | Real-time capable, meter-level accuracy, battery-selectable modes |
 | **Platform** | Android (Kotlin + Jetpack Compose + Material 3) | Full hardware telemetry access, reactive UI |
 | **Map Library** | `osmdroid` (`6.1.18`) + `MapTileSources` + `OfflineMapManager` | Native Compose wrapper, 5 base/hybrid layers (OSM, Esri Satellite, Hybrid Labels, Topo, HOT), 512 MB internal cache & bounded offline region downloads |
-| **Local Database** | SQLite (`LocationDbHelper`, indexed `v3`) | Lightweight, zero KSP overhead, fast `(session_id, timestamp)` index seeks + `offline_map_regions` |
+| **Local Database** | SQLite (`LocationDbHelper`, indexed `v4`) | Lightweight, zero KSP overhead, fast `(session_id, timestamp)` index seeks, `trail_waypoints` with `ON DELETE CASCADE`, pause/resume state, `offline_map_regions` |
+| **Spatial Exports** | `ExportFormat`: GPX (GPS Exchange Format), KML (Google Earth), CSV (Raw Telemetry), GeoJSON (GIS Vector) | Schema-compliant interchange with strict file extensions via SAF `Save File` and `FileProvider` |
 | **Cloud Backend / Auth** | Cloud Firestore (Named DB) + Firebase Auth + Credential Manager (Google Sign-In) | Zero server ops, real-time snapshot listeners, strict `firestore.rules` |
 | **Off-Grid Mesh** | Google Nearby Connections (`Strategy.P2P_CLUSTER`) | Zero-internet BLE + Wi-Fi Direct peer coordinates & Remote Ring |
 | **Background Strategy** | Adaptive (`HIGH_ACCURACY` 1s / `BALANCED` 5s / `POWER_SAVER` 30s/10s cell) + `PARTIAL_WAKE_LOCK` | Battery-tunable, Doze-resilient, with provider-tier transition guards preventing cross-tier jump spikes |
@@ -111,15 +114,15 @@ app/
 
 ## Components to Document
 
-- [x] Location data model (`LocationPoint` schema)
+- [x] Location data model (`LocationPoint` & `TrailWaypoint` schema)
 - [ ] Permission flow diagram
 - [ ] Background service lifecycle
 - [ ] Battery optimization strategy (adaptive priority)
-- [ ] Map rendering pipeline (MapLibre/osmdroid in Compose)
-- [ ] Export format specification (GPX/KML)
-- [ ] Sync protocol (Firebase Realtime DB)
+- [ ] Map rendering pipeline (`osmdroid` in Compose)
+- [x] Export format specification (`GPX (GPS Exchange Format)`, `KML (Google Earth)`, `CSV (Raw Telemetry)`, `GeoJSON (GIS Vector)`)
+- [x] Sync protocol (Cloud Firestore Named DB + Offline Nearby P2P)
 - [ ] Privacy policy / data retention
-- [ ] Cell diagnostic screen (raw cell + OpenCellID comparison)
+- [x] Cell diagnostic screen (raw cell + OpenCellID comparison)
 
 ---
 

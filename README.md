@@ -85,7 +85,8 @@ Group_14_GIS__BSE_SWE2105_project_task_2026/
 │       │   └── AppUpdateManager.kt           # GitHub Releases OTA APK updater
 │       ├── ui/                        # Jetpack Compose UI layer (Material 3 Daylight Palette)
 │       │   ├── components/            # MapViewComposable, MapTileSources & OfflineMapsDialog
-│       │   ├── screens/               # Map, Cellular Hub, Devices/Groups, Geofencing, History, Research, Settings
+│       │   ├── screens/               # Map, Cellular Hub, Geofencing, History, Research, Settings
+│       │   │   └── devices/           # Modular Devices hub (Groups, My Fleet, Off-Grid P2P cards/panels)
 │       │   └── theme/                 # Material 3 typography, shapes & daylight color scheme
 │       └── viewmodel/                 # TrackerViewModel & GroupViewModel (StateFlow engines)
 │
@@ -107,8 +108,8 @@ Group_14_GIS__BSE_SWE2105_project_task_2026/
   - **Satellite + Labels (`HYBRID`):** Esri Satellite combined with a transparent Carto Light Labels `TilesOverlay`.
   - **Topographic Relief (`TOPO`):** OpenTopoMap physical contours and elevation shading (up to Z17).
   - **Humanitarian (`HUMANITARIAN`):** Humanitarian OpenStreetMap Team (`HOT`) high-contrast road & building layer.
-- **Offline Maps Manager (`OfflineMapManager.kt` & `OfflineMapsDialog.kt`):** Pre-download bounded field regions (`Map View`, `2 km`, or `5 km` radius) for Satellite, Hybrid (2-pass imagery + labels), Topo, and Humanitarian layers into a persistent **512 MB private internal tile cache** (`filesDir/osmdroid/tiles`, zero storage permissions), backed by SQLite `v3` `offline_map_regions` tracking, $O(\text{zoomLevels})$ tile/MB estimates, and a 2,500-tile guardrail.
-- **GIS Symbology & Stationary Deadband Filter:** Cached bearing-rotated user direction chevrons, trail Start (`S`) and End (`E`) pins, plus an on-device Euclidean deadband filter ($T = 1.5\text{ m}$) eliminating stationary multipath GPS jitter.
+- **Offline Maps Manager (`OfflineMapManager.kt` & `OfflineMapsDialog.kt`):** Pre-download bounded field regions (`Map View`, `2 km`, or `5 km` radius) for Satellite, Hybrid (2-pass imagery + labels), Topo, and Humanitarian layers into a persistent **512 MB private internal tile cache** (`filesDir/osmdroid/tiles`, zero storage permissions), backed by SQLite `offline_map_regions` tracking, $O(\text{zoomLevels})$ tile/MB estimates, background continuation with live HUD caching chip, and a 2,500-tile guardrail.
+- **GIS Symbology, Trackpoints vs. Waypoints & Deadband Filter:** Cached bearing-rotated user direction chevrons, trail Start (`S`) and End (`E`) pins, numbered orange manual field Waypoint markers (`W1`, `W2`, ... distinct from automated 1 Hz `<trkpt>` breadcrumb trackpoints), plus an on-device Euclidean deadband filter ($T = 1.5\text{ m}$) eliminating stationary multipath GPS jitter.
 
 ### 📡 Live Cell Tower Telemetry & Pinning (OpenCellID)
 - Real-time hardware interrogation of active and neighbor base transceiver stations via Android `TelephonyManager`.
@@ -132,12 +133,14 @@ Group_14_GIS__BSE_SWE2105_project_task_2026/
 - **Shared Tracking Groups:** Create or join `XXX-XXX` invite-code groups backed by Cloud Firestore with **Ghost Mode** privacy controls and per-device keying (`{uid}_{deviceId}`).
 - **Off-Grid P2P Device Finder (SWE2105 Option 2 Offline Transport):** Uses Google Nearby Connections (`Strategy.P2P_CLUSTER`) over BLE + Wi-Fi Direct (`~50–200 m`) to exchange **genuine GNSS/fused coordinates**, battery telemetry, and offline Ring commands when cellular internet is unavailable—keeping real-time Option 2 tracking operational offline without replacing GPS/cell positioning.
 
-### 📜 Spatial History, Exports & Hybrid Persistence
-- **Local-First SQLite Trails:** Recorded trails, waypoints, and geofences are stored locally on-device (`gis_tracker.db`); cloud sharing is strictly opt-in behind Google Sign-In and Ghost Mode controls.
-- One-tap export via `FileProvider` to industry-standard formats:
-  - **GPX 1.1:** Schema-compliant XML for QGIS, Strava, and Garmin devices.
-  - **KML 2.2:** OGC-compliant 3D trajectory markup for Google Earth visualization.
-  - **CSV:** Tabular format for Pandas / R data analysis.
+### 📜 Spatial History, Trackpoints vs. Waypoints & Exports
+- **Local-First SQLite `v4` Persistence (`gis_tracker.db`):** Recorded trails (`tracking_sessions`), automated telemetry breadcrumbs (`location_points` with 15 s stationary heartbeat deduplication), manual field markers (`trail_waypoints` with `ON DELETE CASCADE`), and geofences are stored locally on-device with `Mutex`-synchronized pause/resume state and crash/reboot session recovery; cloud sharing remains strictly opt-in behind Google Sign-In and Ghost Mode controls.
+- **Automated Trackpoints vs. Manual Waypoints:** High-frequency GNSS fixes logged during an active session are recorded as **Trackpoints** (`<trkpt>` / `TRACKPOINT`) to reconstruct continuous movement paths and stationary drift, whereas user-pinned locations (**Pin Waypoint** in the HUD) are saved as named **Waypoints** (`<wpt>` / `WAYPOINT`) with optional field notes.
+- **One-Tap Save (`SAF`) & Share (`FileProvider`) Exports (`TrackExporter.kt`):** Clean extension-enforced file generation (`.gpx`, `.kml`, `.csv`, `.geojson`) via Android Storage Access Framework (`Save File`) or `FileProvider` share sheet:
+  - **GPX (GPS Exchange Format):** GPX 1.1 XML (`topografix.com/GPX/1/1`) with `<wpt>` manual waypoints, `<trkseg>` trackpoints, and namespaced `<extensions>` (`geotrace:speed_mps`, `geotrace:accuracy_m`, `geotrace:bearing`, `geotrace:provider`) for QGIS, Strava, and Garmin.
+  - **KML (Google Earth):** OGC KML 2.2 with `<gx:Track>` / `<gx:MultiTrack>` temporal trajectories and a dedicated `Waypoints` pin folder for Google Earth visualization.
+  - **CSV (Raw Telemetry):** 14-column tabular schema (`RecordType` = `WAYPOINT` or `TRACKPOINT`) for Python (Pandas), R, and Excel statistical analysis.
+  - **GeoJSON (GIS Vector):** RFC 7946 `FeatureCollection` containing `LineString`/`MultiLineString` track geometry plus `Point` waypoint features for QGIS, Leaflet, and web GIS pipelines.
 
 ---
 
