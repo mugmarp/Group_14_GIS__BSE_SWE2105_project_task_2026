@@ -2,6 +2,7 @@ package com.geotrace.ui.screens
 
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
@@ -63,18 +64,29 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.geotrace.model.CellTowerInfo
 import com.geotrace.model.CellTowerLocation
 import com.geotrace.model.LocationPoint
-import com.geotrace.model.SpeedUnit
 import com.geotrace.model.TrackerSettings
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
+import com.geotrace.service.OpenCellIdLookupState
+import com.geotrace.service.OpenCellIdStatus
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.TrackerViewModel
 import java.util.Locale
+
+private data class ModeAggregateStats(
+    val mode: TrackingMode,
+    val trialCount: Int,
+    val totalDistanceMeters: Double,
+    val totalPoints: Int,
+    val totalDurationSec: Long,
+    val weightedAvgSpeedMps: Double
+)
 
 @Composable
 fun ResearchAnalysisScreen(
@@ -95,6 +107,7 @@ fun ResearchAnalysisScreen(
     val cellTowerLocation: CellTowerLocation? = viewModel?.cellTowerLocation?.collectAsState()?.value
     val allCellLocations: List<CellTowerLocation> = viewModel?.allCellTowerLocations?.collectAsState()?.value ?: emptyList()
     val rawCellTowers: List<CellTowerInfo> = viewModel?.cellTowers?.collectAsState()?.value ?: emptyList()
+    val openCellIdStatus: OpenCellIdStatus = viewModel?.openCellIdStatus?.collectAsState()?.value ?: OpenCellIdStatus()
     val allSessions: List<TrackingSession> = viewModel?.allSessions?.collectAsState()?.value ?: emptyList()
     val filteredJitterMeters: Double = viewModel?.filteredJitterMeters?.collectAsState()?.value ?: 0.0
     val filteredJitterCount: Int = viewModel?.filteredJitterCount?.collectAsState()?.value ?: 0
@@ -118,11 +131,33 @@ fun ResearchAnalysisScreen(
         } else null
     }
 
+    val modeStats = remember(allSessions) {
+        TrackingMode.values().map { mode ->
+            val group = allSessions.filter { it.trackingMode == mode }
+            val totalDistM = group.sumOf { it.totalDistanceMeters }
+            val totalPts = group.sumOf { it.pointCount }
+            val totalDurSec = group.sumOf { it.currentDurationSeconds() }
+            val weightedSpeedMps = if (totalDistM > 0.0 && totalDurSec > 0L) {
+                totalDistM / totalDurSec.toDouble()
+            } else {
+                0.0
+            }
+            ModeAggregateStats(
+                mode = mode,
+                trialCount = group.size,
+                totalDistanceMeters = totalDistM,
+                totalPoints = totalPts,
+                totalDurationSec = totalDurSec,
+                weightedAvgSpeedMps = weightedSpeedMps
+            )
+        }
+    }
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .background(colorScheme.background)
-            .padding(16.dp),
+            .background(colorScheme.background),
+        contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         // Header
@@ -151,7 +186,7 @@ fun ResearchAnalysisScreen(
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                     }
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 Icons.Default.School,
@@ -162,15 +197,19 @@ fun ResearchAnalysisScreen(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = "SWE2105 Research Lab",
-                                fontSize = 18.sp,
+                                fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = colorScheme.onBackground
+                                color = colorScheme.onBackground,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                         Text(
                             text = "Option 1 (IP) vs Option 2 (GNSS & Cell Telemetry)",
                             fontSize = 11.sp,
-                            color = colorScheme.onSurfaceVariant
+                            color = colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -183,10 +222,12 @@ fun ResearchAnalysisScreen(
                             currentLocation = currentLocation,
                             cellTowerLocation = cellTowerLocation,
                             servingCellInfo = servingCellInfo,
+                            openCellIdStatus = openCellIdStatus,
                             mastOffsetMeters = mastOffsetMeters,
                             filteredJitterMeters = filteredJitterMeters,
                             filteredJitterCount = filteredJitterCount,
-                            allSessions = allSessions,
+                            modeStats = modeStats,
+                            totalSessionCount = allSessions.size,
                             settings = settings
                         )
                     },
@@ -226,7 +267,10 @@ fun ResearchAnalysisScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f).padding(end = 8.dp)
+                            ) {
                                 Icon(
                                     Icons.Default.Analytics,
                                     contentDescription = null,
@@ -239,7 +283,9 @@ fun ResearchAnalysisScreen(
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     letterSpacing = 0.04.sp,
-                                    color = colorScheme.onSurface
+                                    color = colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                             Surface(
@@ -266,22 +312,41 @@ fun ResearchAnalysisScreen(
                                 .padding(10.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            val fixColor = when {
+                                currentLocation == null -> colorScheme.onSurfaceVariant
+                                currentLocation.accuracy <= 15f -> colorScheme.tertiary
+                                else -> customColors.warning
+                            }
                             TechMetric(
                                 label = "ACTIVE FIX ACCURACY",
                                 value = if (currentLocation != null) {
                                     "±${currentLocation.accuracy.toInt()}m (${currentLocation.provider.uppercase()})"
-                                } else "Awaiting Fix",
-                                color = if ((currentLocation?.accuracy ?: 999f) <= 15f) colorScheme.tertiary else customColors.warning,
+                                } else {
+                                    "Awaiting Fix"
+                                },
+                                color = fixColor,
                                 modifier = Modifier.weight(1f)
                             )
+
+                            val offsetText = when {
+                                mastOffsetMeters != null && mastOffsetMeters >= 1000.0 ->
+                                    String.format(Locale.US, "%.2f km", mastOffsetMeters / 1000.0)
+                                mastOffsetMeters != null ->
+                                    String.format(Locale.US, "%.0f m", mastOffsetMeters)
+                                servingCellInfo == null -> "No Serving Cell"
+                                currentLocation == null && cellTowerLocation != null -> "Awaiting GNSS Fix"
+                                openCellIdStatus.state == OpenCellIdLookupState.NO_API_KEY -> "Needs API Key"
+                                openCellIdStatus.state == OpenCellIdLookupState.AUTH_ERROR -> "API Auth Error"
+                                openCellIdStatus.state == OpenCellIdLookupState.RATE_LIMITED -> "Rate Limited"
+                                openCellIdStatus.state == OpenCellIdLookupState.NETWORK_ERROR -> "Lookup Offline"
+                                openCellIdStatus.state == OpenCellIdLookupState.NOT_FOUND -> "Unindexed Cell"
+                                currentLocation == null -> "Awaiting GNSS Fix"
+                                else -> "Resolving Mast..."
+                            }
                             TechMetric(
                                 label = "GNSS VS CELL OFFSET",
-                                value = when {
-                                    mastOffsetMeters == null -> if (servingCellInfo != null) "Needs OpenCellID Key" else "No Tower"
-                                    mastOffsetMeters >= 1000.0 -> String.format(Locale.US, "%.2f km", mastOffsetMeters / 1000.0)
-                                    else -> String.format(Locale.US, "%.0f m", mastOffsetMeters)
-                                },
-                                color = colorScheme.secondary,
+                                value = offsetText,
+                                color = if (mastOffsetMeters != null) colorScheme.secondary else colorScheme.onSurfaceVariant,
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -296,12 +361,15 @@ fun ResearchAnalysisScreen(
                                 .padding(10.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
+                            val servingSignalText = servingCellInfo?.signalDbm?.let { "$it dBm" } ?: "Signal N/A"
                             TechMetric(
                                 label = "SERVING CELL MAST",
                                 value = if (servingCellInfo != null) {
-                                    "CID ${servingCellInfo.cid ?: "--"} • ${servingCellInfo.signalDbm ?: 0} dBm"
-                                } else "Unavailable",
-                                color = colorScheme.onSurface,
+                                    "CID ${servingCellInfo.cid ?: "--"} • $servingSignalText"
+                                } else {
+                                    "Unavailable"
+                                },
+                                color = if (servingCellInfo != null) colorScheme.onSurface else colorScheme.onSurfaceVariant,
                                 modifier = Modifier.weight(1f)
                             )
                             TechMetric(
@@ -316,20 +384,27 @@ fun ResearchAnalysisScreen(
 
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
                                 text = "Deadband Filtered: $filteredJitterCount spikes (${String.format(Locale.US, "%.1f", filteredJitterMeters)}m)",
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
-                                color = colorScheme.onSurfaceVariant
+                                color = colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(end = 8.dp)
                             )
                             Text(
-                                text = "Geofence Band: ±${settings.geofenceHysteresisMeters.toInt()}m",
+                                text = "Geofence: ±${settings.geofenceHysteresisMeters.toInt()}m",
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
                                 color = colorScheme.tertiary,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
                             )
                         }
                     }
@@ -337,7 +412,7 @@ fun ResearchAnalysisScreen(
             }
         }
 
-        // Card 2: Recorded Field Sessions Grouped by Tracking Mode
+        // Card 2: Recorded Field Sessions Grouped by Tracking Mode (Distance/Time-Weighted Aggregate Speed)
         item {
             Card(
                 modifier = Modifier
@@ -357,15 +432,8 @@ fun ResearchAnalysisScreen(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    TrackingMode.values().forEachIndexed { idx, mode ->
-                        val modeSessions = allSessions.filter { it.trackingMode == mode }
-                        val totalDistM = modeSessions.sumOf { it.totalDistanceMeters }
-                        val totalPts = modeSessions.sumOf { it.pointCount }
-                        val avgSpeedMps = if (modeSessions.isNotEmpty()) {
-                            (modeSessions.map { it.avgSpeedKmh }.average() / 3.6)
-                        } else 0.0
-                        val avgSpeedDisplay = avgSpeedMps * settings.speedUnit.multiplier
-
+                    modeStats.forEachIndexed { idx, stat ->
+                        val avgSpeedDisplay = stat.weightedAvgSpeedMps * settings.speedUnit.multiplier
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -373,42 +441,56 @@ fun ResearchAnalysisScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(end = 8.dp)
+                            ) {
                                 Text(
-                                    text = mode.title,
+                                    text = stat.mode.title,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = colorScheme.onSurface
+                                    color = colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = if (modeSessions.isEmpty()) {
-                                        "No field trials recorded yet • Expected ${mode.expectedAccuracy}"
+                                    text = if (stat.trialCount == 0) {
+                                        "No field trials recorded yet • Expected ${stat.mode.expectedAccuracy}"
                                     } else {
-                                        val distStr = if (totalDistM >= 1000) String.format(Locale.US, "%.2f km", totalDistM / 1000.0)
-                                        else String.format(Locale.US, "%.0f m", totalDistM)
-                                        "${modeSessions.size} trials • $distStr • $totalPts pts"
+                                        val distStr = if (stat.totalDistanceMeters >= 1000.0) {
+                                            String.format(Locale.US, "%.2f km", stat.totalDistanceMeters / 1000.0)
+                                        } else {
+                                            String.format(Locale.US, "%.0f m", stat.totalDistanceMeters)
+                                        }
+                                        val durStr = formatCompactDuration(stat.totalDurationSec)
+                                        "${stat.trialCount} trials • $distStr • $durStr • ${stat.totalPoints} pts"
                                     },
                                     fontSize = 10.sp,
-                                    color = colorScheme.onSurfaceVariant
+                                    color = colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
-                                color = if (modeSessions.isNotEmpty()) colorScheme.primary.copy(alpha = 0.12f) else customColors.surfaceContainerLow
+                                color = if (stat.trialCount > 0) colorScheme.primary.copy(alpha = 0.12f) else customColors.surfaceContainerLow
                             ) {
                                 Text(
-                                    text = if (modeSessions.isNotEmpty()) {
+                                    text = if (stat.trialCount > 0) {
                                         "${String.format(Locale.US, "%.1f", avgSpeedDisplay)} ${settings.speedUnit.label}"
-                                    } else "--",
+                                    } else {
+                                        "--"
+                                    },
                                     fontSize = 10.sp,
                                     fontFamily = FontFamily.Monospace,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (modeSessions.isNotEmpty()) colorScheme.primary else colorScheme.onSurfaceVariant,
+                                    color = if (stat.trialCount > 0) colorScheme.primary else colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
                             }
                         }
-                        if (idx < TrackingMode.values().lastIndex) {
+                        if (idx < modeStats.lastIndex) {
                             HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.35f))
                         }
                     }
@@ -467,6 +549,7 @@ fun ResearchAnalysisScreen(
                                     onClick = { selectedTech = tech },
                                     label = { Text(tech.shortLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
                                     shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier.heightIn(min = 48.dp),
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = colorScheme.primary,
                                         selectedLabelColor = colorScheme.onPrimary,
@@ -520,7 +603,7 @@ fun ResearchAnalysisScreen(
             }
         }
 
-        // Card 4: Interactive Field Scenario Recommender (Apply Mode Live)
+        // Card 4: Interactive Field Scenario Recommender (Apply Mode & Hysteresis Live)
         item {
             Card(
                 modifier = Modifier
@@ -562,6 +645,7 @@ fun ResearchAnalysisScreen(
                                 onClick = { selectedScenario = scenario },
                                 label = { Text(scenario.chipLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
                                 shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.heightIn(min = 48.dp),
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = colorScheme.secondary,
                                     selectedLabelColor = colorScheme.onSecondary,
@@ -612,7 +696,14 @@ fun ResearchAnalysisScreen(
                                 Spacer(modifier = Modifier.height(10.dp))
                                 val isAlreadyActive = trackingMode == selectedScenario.recommendedMode
                                 OutlinedButton(
-                                    onClick = { viewModel.setTrackingMode(selectedScenario.recommendedMode) },
+                                    onClick = {
+                                        viewModel.setTrackingMode(selectedScenario.recommendedMode)
+                                        Toast.makeText(
+                                            context,
+                                            "Switched mode to ${selectedScenario.recommendedMode.title}",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
                                     enabled = !isAlreadyActive,
                                     shape = RoundedCornerShape(8.dp),
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
@@ -629,6 +720,40 @@ fun ResearchAnalysisScreen(
                                         },
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                val hysteresisMatches = settings.geofenceHysteresisMeters == selectedScenario.suggestedHysteresisMeters &&
+                                    (!selectedScenario.requiresAccuracyGate || settings.geofenceAccuracyGateEnabled)
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        viewModel.updateGeofenceHysteresis(selectedScenario.suggestedHysteresisMeters)
+                                        if (selectedScenario.requiresAccuracyGate) {
+                                            viewModel.toggleGeofenceAccuracyGate(true)
+                                        }
+                                        Toast.makeText(
+                                            context,
+                                            "Applied ${selectedScenario.suggestedHysteresisLabel} geofence calibration",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
+                                    enabled = !hysteresisMatches,
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 48.dp)
+                                        .testTag("apply_recommended_hysteresis_btn")
+                                ) {
+                                    Text(
+                                        text = if (hysteresisMatches) {
+                                            "Geofence Calibration Active (${selectedScenario.suggestedHysteresisLabel})"
+                                        } else {
+                                            "Apply Calibration: ${selectedScenario.suggestedHysteresisLabel}"
+                                        },
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold
                                     )
                                 }
                             }
@@ -733,7 +858,8 @@ private fun CollapsibleResearchCard(
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .clickable(onClick = onToggle),
+                        .clickable(onClick = onToggle)
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -745,7 +871,7 @@ private fun CollapsibleResearchCard(
                             icon()
                             Spacer(modifier = Modifier.width(8.dp))
                         }
-                        Column {
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = title,
                                 fontSize = 11.sp,
@@ -760,6 +886,7 @@ private fun CollapsibleResearchCard(
                             )
                         }
                     }
+                    Spacer(modifier = Modifier.width(8.dp))
                     Icon(
                         imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                         contentDescription = if (expanded) "Collapse section" else "Expand section",
@@ -793,7 +920,10 @@ private fun MetricScoreBar(label: String, targetProgress: Float, color: Color) {
                 text = label,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f).padding(end = 8.dp)
             )
             Text(
                 text = "${(animatedProgress * 100).toInt()}%",
@@ -824,15 +954,30 @@ private fun TechMetric(label: String, value: String, color: Color, modifier: Mod
             fontSize = 9.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.Bold,
-            letterSpacing = 0.04.sp
+            letterSpacing = 0.04.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         Text(
             text = value,
             fontSize = 12.sp,
             fontFamily = FontFamily.Monospace,
             fontWeight = FontWeight.Bold,
-            color = color
+            color = color,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
         )
+    }
+}
+
+private fun formatCompactDuration(totalSec: Long): String {
+    val hours = totalSec / 3600L
+    val mins = (totalSec % 3600L) / 60L
+    val secs = totalSec % 60L
+    return when {
+        hours > 0L -> "${hours}h ${mins}m"
+        mins > 0L -> "${mins}m ${secs}s"
+        else -> "${secs}s"
     }
 }
 
@@ -842,10 +987,12 @@ private fun shareResearchSummary(
     currentLocation: LocationPoint?,
     cellTowerLocation: CellTowerLocation?,
     servingCellInfo: CellTowerInfo?,
+    openCellIdStatus: OpenCellIdStatus,
     mastOffsetMeters: Double?,
     filteredJitterMeters: Double,
     filteredJitterCount: Int,
-    allSessions: List<TrackingSession>,
+    modeStats: List<ModeAggregateStats>,
+    totalSessionCount: Int,
     settings: TrackerSettings
 ) {
     val sb = StringBuilder()
@@ -858,62 +1005,85 @@ private fun shareResearchSummary(
         )
     }
     if (servingCellInfo != null) {
+        val signalStr = servingCellInfo.signalDbm?.let { "$it dBm" } ?: "Signal N/A"
         sb.appendLine(
             "Serving Cell: ${servingCellInfo.operatorDisplayName} (${servingCellInfo.type}) | " +
-                "CID=${servingCellInfo.cid ?: "N/A"}, LAC=${servingCellInfo.lac ?: "N/A"}, ${servingCellInfo.signalDbm ?: 0} dBm"
+                "CID=${servingCellInfo.cid ?: "N/A"}, LAC=${servingCellInfo.lac ?: "N/A"}, $signalStr"
         )
     }
     if (cellTowerLocation != null && mastOffsetMeters != null) {
         sb.appendLine(
             "GNSS vs Serving Mast Offset: ${String.format(Locale.US, "%.1f", mastOffsetMeters)}m (Tower Range ±${cellTowerLocation.rangeMeters.toInt()}m)"
         )
+    } else if (servingCellInfo != null) {
+        sb.appendLine("OpenCellID Status: ${openCellIdStatus.message}")
     }
     sb.appendLine("Deadband Drift Eliminated: $filteredJitterCount spikes (${String.format(Locale.US, "%.1f", filteredJitterMeters)}m)")
     sb.appendLine("Geofence Hysteresis Band: ±${settings.geofenceHysteresisMeters.toInt()}m (Accuracy Gate=${settings.geofenceAccuracyGateEnabled})")
     sb.appendLine("")
-    sb.appendLine("Recorded Sessions by Mode (${allSessions.size} total):")
-    TrackingMode.values().forEach { mode ->
-        val group = allSessions.filter { it.trackingMode == mode }
-        val distKm = group.sumOf { it.totalDistanceMeters } / 1000.0
-        sb.appendLine("- ${mode.title}: ${group.size} sessions, ${String.format(Locale.US, "%.2f", distKm)} km total")
+    sb.appendLine("Recorded Sessions by Mode ($totalSessionCount total):")
+    modeStats.forEach { stat ->
+        val distKm = stat.totalDistanceMeters / 1000.0
+        val avgDisplay = stat.weightedAvgSpeedMps * settings.speedUnit.multiplier
+        sb.appendLine(
+            "- ${stat.mode.title}: ${stat.trialCount} sessions, ${String.format(Locale.US, "%.2f", distKm)} km total, avg ${String.format(Locale.US, "%.1f", avgDisplay)} ${settings.speedUnit.label}"
+        )
     }
 
-    val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(Intent.EXTRA_SUBJECT, "GeoTrace SWE2105 Field Benchmark Summary")
-        putExtra(Intent.EXTRA_TEXT, sb.toString())
-        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "GeoTrace SWE2105 Field Benchmark Summary")
+            putExtra(Intent.EXTRA_TEXT, sb.toString())
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(Intent.createChooser(intent, "Share SWE2105 Research Summary"))
+    } catch (e: Exception) {
+        Toast.makeText(
+            context,
+            "Unable to share summary: ${e.localizedMessage ?: "No share app available"}",
+            Toast.LENGTH_SHORT
+        ).show()
     }
-    context.startActivity(Intent.createChooser(intent, "Share SWE2105 Research Summary"))
 }
 
 enum class FieldScenario(
     val chipLabel: String,
     val recommendedMode: TrackingMode,
+    val suggestedHysteresisMeters: Float,
+    val requiresAccuracyGate: Boolean,
     val suggestedHysteresisLabel: String,
     val rationale: String
 ) {
     OUTDOOR_SURVEY(
         chipLabel = "Outdoor Walk",
         recommendedMode = TrackingMode.HIGH_ACCURACY,
-        suggestedHysteresisLabel = "±5m Tight or ±10m Std",
+        suggestedHysteresisMeters = 5f,
+        requiresAccuracyGate = false,
+        suggestedHysteresisLabel = "±5m Tight",
         rationale = "1 Hz GNSS captures true pedestrian displacement and Doppler speed while dual-radius geofencing stops gate boundary flapping."
     ),
     INDOOR_CAMPUS(
         chipLabel = "Indoor Hall",
         recommendedMode = TrackingMode.BALANCED,
+        suggestedHysteresisMeters = 10f,
+        requiresAccuracyGate = true,
         suggestedHysteresisLabel = "±10m Std + Accuracy Gate",
         rationale = "Concrete roofs attenuate L1 GPS signals; Network/Wi-Fi fusion keeps a stable ±15–40m lock without draining battery searching for satellites."
     ),
     DAILY_TRANSIT(
         chipLabel = "Boda Transit",
         recommendedMode = TrackingMode.BALANCED,
+        suggestedHysteresisMeters = 10f,
+        requiresAccuracyGate = false,
         suggestedHysteresisLabel = "±10m Std",
         rationale = "Balances 5s trajectory updates with moderate battery (~5–10 mA) across urban routes."
     ),
     ANTI_THEFT_STANDBY(
         chipLabel = "24/7 Low Battery",
         recommendedMode = TrackingMode.POWER_SAVER,
+        suggestedHysteresisMeters = 20f,
+        requiresAccuracyGate = true,
         suggestedHysteresisLabel = "±20m Wide + Accuracy Gate",
         rationale = "Uses TelephonyManager cell IDs and OpenCellID mast centroids with <2 mA draw while avoiding accidental geofence triggers from coarse cells."
     )
