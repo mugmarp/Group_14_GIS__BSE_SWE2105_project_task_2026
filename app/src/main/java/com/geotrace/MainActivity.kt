@@ -181,9 +181,20 @@ fun MainAppScreen(
         val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
         val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
         if (fineGranted || coarseGranted) {
-            viewModel.startStandbyLocationUpdates()
-            viewModel.refreshCellTowers()
-            groupViewModel.ensureProtectionStartedIfEligible()
+            scope.launch {
+                viewModel.awaitInitialRestore()
+                val restored = viewModel.activeSession.value
+                if (restored != null) {
+                    viewModel.stopStandbyLocationUpdates()
+                    if (!restored.isPaused && !com.geotrace.service.LocationForegroundService.isServiceActive) {
+                        com.geotrace.service.LocationForegroundService.startService(context, restored.trackingMode)
+                    }
+                } else {
+                    viewModel.startStandbyLocationUpdates()
+                }
+                viewModel.refreshCellTowers()
+                groupViewModel.ensureProtectionStartedIfEligible()
+            }
             if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
@@ -206,7 +217,14 @@ fun MainAppScreen(
         if (notGranted.isNotEmpty()) {
             permissionLauncher.launch(notGranted.toTypedArray())
         } else {
-            if (!viewModel.hasActiveStandbyUpdates()) {
+            viewModel.awaitInitialRestore()
+            val restored = viewModel.activeSession.value
+            if (restored != null) {
+                viewModel.stopStandbyLocationUpdates()
+                if (!restored.isPaused && !com.geotrace.service.LocationForegroundService.isServiceActive) {
+                    com.geotrace.service.LocationForegroundService.startService(context, restored.trackingMode)
+                }
+            } else if (!viewModel.hasActiveStandbyUpdates()) {
                 viewModel.startStandbyLocationUpdates()
             }
             viewModel.refreshCellTowers()

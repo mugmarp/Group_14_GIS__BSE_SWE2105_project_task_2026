@@ -198,6 +198,11 @@ class LocationRepository(private val context: Context) {
     @Volatile
     private var consecutiveSlowSamples: Int = 0
 
+    @Volatile
+    private var resetAnchorOnNextFix: Boolean = false
+
+    private val initialRestoreDeferred = kotlinx.coroutines.CompletableDeferred<Unit>()
+
     private val transitionCooldownLock = Any()
     private val lastNotifiedTransitionMs = mutableMapOf<String, Pair<Boolean, Long>>()
 
@@ -205,13 +210,21 @@ class LocationRepository(private val context: Context) {
         loadInitialData()
     }
 
+    suspend fun awaitInitialRestore() {
+        initialRestoreDeferred.await()
+    }
+
     private fun loadInitialData() {
         scope.launch {
-            loadGeofences()
-            restoreActiveSessionIfAny()
-            loadSessions()
-            loadAlerts()
-            loadOfflineMapRegions()
+            try {
+                loadGeofences()
+                restoreActiveSessionIfAny()
+                loadSessions()
+                loadAlerts()
+                loadOfflineMapRegions()
+            } finally {
+                initialRestoreDeferred.complete(Unit)
+            }
         }
     }
 
@@ -258,6 +271,7 @@ class LocationRepository(private val context: Context) {
             _activeTrailPoints.value = restoredPoints
             _activeWaypoints.value = restoredWaypoints
             stationaryAnchorPoint = restoredPoints.lastOrNull()
+            resetAnchorOnNextFix = synced.isPaused
         }
     }
 
@@ -336,6 +350,7 @@ class LocationRepository(private val context: Context) {
             smoothedSpeedMps = 0f
             stationaryAnchorPoint = null
             consecutiveSlowSamples = 0
+            resetAnchorOnNextFix = false
             loadSessionsInternal()
             session
         }
@@ -377,8 +392,9 @@ class LocationRepository(private val context: Context) {
             }
             dbHelper.writableDatabase.update(LocationDbHelper.TABLE_SESSIONS, cv, "id = ?", arrayOf(current.id))
             _activeSession.value = updated
-            stationaryAnchorPoint = _currentLocation.value
+            stationaryAnchorPoint = null
             consecutiveSlowSamples = 0
+            resetAnchorOnNextFix = true
             loadSessionsInternal()
             updated
         }
@@ -475,17 +491,28 @@ class LocationRepository(private val context: Context) {
         smoothedSpeedMps = 0f
         stationaryAnchorPoint = null
         consecutiveSlowSamples = 0
+        resetAnchorOnNextFix = false
         loadSessionsInternal()
         return updated
     }
 
     suspend fun recordLocation(rawPoint: LocationPoint) = withContext(Dispatchers.IO) {
-        // Discard null island and NaN glitch coordinates
-        if ((rawPoint.latitude == 0.0 && rawPoint.longitude == 0.0) || rawPoint.latitude.isNaN() || rawPoint.longitude.isNaN()) {
+        // Discard invalid, out-of-range, NaN, and Null-Island glitch coordinates
+        if (!rawPoint.latitude.isFinite() || !rawPoint.longitude.isFinite() ||
+            rawPoint.latitude !in -90.0..90.0 || rawPoint.longitude !in -180.0..180.0 ||
+            (rawPoint.latitude == 0.0 && rawPoint.longitude == 0.0)
+        ) {
             return@withContext
         }
 
-        val pointForGeofence: LocationPoint = recordingMutex.withLock {
+        val normalizedTimestamp = rawPoint.timestamp.takeIf { it > 0L } ?: System.currentTimeMillis()
+        val safePoint = if (normalizedTimestamp != rawPoint.timestamp) {
+            rawPoint.copy(timestamp = normalizedTimestamp)
+        } else {
+            rawPoint
+        }
+
+        val pointForGeofence: LocationPoint? = recordingMutex.withLock {
             val session = _activeSession.value
             val isActivelyRecording = session != null && session.isRecording && !session.isPaused
             val prevPoint = if (isActivelyRecording) {
@@ -494,63 +521,84 @@ class LocationRepository(private val context: Context) {
                 _currentLocation.value
             }
 
-        var additionalDistance = 0.0
-        var candidateSpeed = rawPoint.speed
-        var isProviderSwitch = false
+            var additionalDistance = 0.0
+            var candidateSpeed = safePoint.speed
+            var isProviderSwitch = false
+            var forcePostResumePersist = false
 
-        if (prevPoint != null) {
-            isProviderSwitch = (prevPoint.provider == "cellular") != (rawPoint.provider == "cellular")
-            if (isProviderSwitch) {
-                // Switching between Cell Tower mast coords and GNSS/Fused coords must not inflate distance or speed
+            if (isActivelyRecording && resetAnchorOnNextFix) {
+                // First fix after resuming from pause: re-anchor without bridging distance moved while paused
+                resetAnchorOnNextFix = false
+                forcePostResumePersist = true
                 additionalDistance = 0.0
-                stationaryAnchorPoint = rawPoint
+                stationaryAnchorPoint = safePoint
                 consecutiveSlowSamples = 0
-                if (candidateSpeed < 0.45f) {
-                    candidateSpeed = 0f
-                }
+                candidateSpeed = if (candidateSpeed >= 0.45f) candidateSpeed.coerceIn(0f, 55f) else 0f
                 smoothedSpeedMps = candidateSpeed
-            } else {
-                val anchor = stationaryAnchorPoint ?: prevPoint
-                val distFromPrev = calculateDistanceMeters(prevPoint.latitude, prevPoint.longitude, rawPoint.latitude, rawPoint.longitude)
-                val distFromAnchor = calculateDistanceMeters(anchor.latitude, anchor.longitude, rawPoint.latitude, rawPoint.longitude)
-                val dtPrevSec = ((rawPoint.timestamp - prevPoint.timestamp) / 1000.0).coerceAtLeast(0.1)
-                val dtAnchorSec = ((rawPoint.timestamp - anchor.timestamp) / 1000.0).coerceAtLeast(0.1)
-                val impliedSpeedFromPrev = (distFromPrev / dtPrevSec).toFloat()
-                val impliedSpeedFromAnchor = (distFromAnchor / dtAnchorSec).toFloat()
-
-                // Discard sudden GPS teleportation/multipath spike (> 5km or > 200 km/h)
-                if (distFromPrev > 5000.0 || impliedSpeedFromPrev > 55.0f) {
+            } else if (prevPoint != null) {
+                isProviderSwitch = (prevPoint.provider == "cellular") != (safePoint.provider == "cellular")
+                if (isProviderSwitch) {
+                    // Switching between Cell Tower mast coords and GNSS/Fused coords must not inflate distance or speed
                     additionalDistance = 0.0
-                    candidateSpeed = smoothedSpeedMps
+                    stationaryAnchorPoint = safePoint
+                    consecutiveSlowSamples = 0
+                    if (candidateSpeed < 0.45f) {
+                        candidateSpeed = 0f
+                    }
+                    smoothedSpeedMps = candidateSpeed
                 } else {
+                    val anchor = stationaryAnchorPoint ?: prevPoint
+                    val distFromPrev = calculateDistanceMeters(prevPoint.latitude, prevPoint.longitude, safePoint.latitude, safePoint.longitude)
+                    val distFromAnchor = calculateDistanceMeters(anchor.latitude, anchor.longitude, safePoint.latitude, safePoint.longitude)
+                    val dtPrevSec = ((safePoint.timestamp - prevPoint.timestamp) / 1000.0).coerceAtLeast(0.1)
+                    val dtAnchorSec = ((safePoint.timestamp - anchor.timestamp) / 1000.0).coerceAtLeast(0.1)
+                    val impliedSpeedFromPrev = (distFromPrev / dtPrevSec).toFloat()
+                    val impliedSpeedFromAnchor = (distFromAnchor / dtAnchorSec).toFloat()
+
+                    // Discard genuine short-delta teleport/multipath spikes before updating UI, DB, or geofences,
+                    // while allowing legitimate recovery after long tunnel/signal gaps (> 60s at realistic speed).
+                    val isUnphysicalTeleport =
+                        (impliedSpeedFromPrev > 65.0f && (distFromPrev > 150.0 || safePoint.accuracy > 40f)) ||
+                            (distFromPrev > 5000.0 && dtPrevSec < 90.0)
+                    if (isUnphysicalTeleport) {
+                        return@withLock null
+                    }
+
+                    val isLongGapReanchor = distFromPrev > 5000.0 && dtPrevSec >= 90.0
                     val deadband = jitterThresholdMeters
                     val movedPastDeadband = deadband <= 0f || distFromAnchor >= deadband
-                    val dopplerIndicatesMovement = rawPoint.speed >= 0.55f // >= ~2.0 km/h GNSS Doppler
+                    val dopplerIndicatesMovement = safePoint.speed >= 0.55f // >= ~2.0 km/h GNSS Doppler
 
-                    if (movedPastDeadband) {
+                    if (isLongGapReanchor) {
+                        // Re-anchor safely after multi-kilometer tunnel/outage gap without fabricating a straight-line jump
+                        additionalDistance = 0.0
+                        stationaryAnchorPoint = safePoint
+                        consecutiveSlowSamples = 0
+                        candidateSpeed = if (safePoint.speed >= 0.45f) safePoint.speed.coerceIn(0f, 55f) else 0f
+                    } else if (movedPastDeadband) {
                         // Advance anchor and credit full accumulated displacement (no lost 1.1-1.4m walking strides)
                         additionalDistance = distFromAnchor
-                        stationaryAnchorPoint = rawPoint
+                        stationaryAnchorPoint = safePoint
                         consecutiveSlowSamples = 0
 
                         // Recover displacement speed when chip Doppler is missing (Balanced/Cell) or under-reads in pocket
                         candidateSpeed = when {
-                            rawPoint.provider == "cellular" -> impliedSpeedFromAnchor.coerceIn(0f, 35f)
-                            rawPoint.speed <= 0.1f && dtAnchorSec >= 0.3 -> impliedSpeedFromAnchor.coerceIn(0f, 45f)
-                            rawPoint.speed < 0.6f && impliedSpeedFromAnchor >= 0.6f && rawPoint.accuracy <= 25f ->
+                            safePoint.provider == "cellular" -> impliedSpeedFromAnchor.coerceIn(0f, 35f)
+                            safePoint.speed <= 0.1f && dtAnchorSec >= 0.3 -> impliedSpeedFromAnchor.coerceIn(0f, 45f)
+                            safePoint.speed < 0.6f && impliedSpeedFromAnchor >= 0.6f && safePoint.accuracy <= 25f ->
                                 impliedSpeedFromAnchor.coerceIn(0f, 45f)
-                            rawPoint.speed < 0.45f && impliedSpeedFromAnchor < 0.45f -> 0f
-                            else -> rawPoint.speed
+                            safePoint.speed < 0.45f && impliedSpeedFromAnchor < 0.45f -> 0f
+                            else -> safePoint.speed
                         }
                     } else if (dopplerIndicatesMovement) {
                         // Moving slowly on a 1s tick (< 1.5m step) with clear GNSS Doppler: preserve velocity & hold anchor
                         // so the next tick accumulates >= deadband without losing distance or crashing EMA to 0.
                         additionalDistance = 0.0
                         consecutiveSlowSamples = 0
-                        candidateSpeed = rawPoint.speed
+                        candidateSpeed = safePoint.speed
                     } else {
                         // Genuine sub-deadband drift while stationary or very slow start
-                        if (distFromPrev > 0.05 && (dtAnchorSec >= 2.0 || rawPoint.speed < 0.25f)) {
+                        if (distFromPrev > 0.05 && (dtAnchorSec >= 2.0 || safePoint.speed < 0.25f)) {
                             _filteredJitterMeters.value += distFromPrev
                             _filteredJitterCount.value += 1
                         }
@@ -559,27 +607,26 @@ class LocationRepository(private val context: Context) {
                         candidateSpeed = 0f
                     }
                 }
+            } else {
+                stationaryAnchorPoint = safePoint
+                consecutiveSlowSamples = 0
+                if (candidateSpeed < 0.45f) {
+                    candidateSpeed = 0f
+                }
             }
-        } else {
-            stationaryAnchorPoint = rawPoint
-            consecutiveSlowSamples = 0
-            if (candidateSpeed < 0.45f) {
-                candidateSpeed = 0f
-            }
-        }
 
-        // Smooth EMA velocity display without instant-zero dropouts on a single 1s sub-deadband sample
-        smoothedSpeedMps = when {
-            isProviderSwitch -> candidateSpeed
-            candidateSpeed <= 0f -> {
-                if (consecutiveSlowSamples >= 3 || smoothedSpeedMps < 0.35f) 0f
-                else 0.55f * smoothedSpeedMps
+            // Smooth EMA velocity display without instant-zero dropouts on a single 1s sub-deadband sample
+            smoothedSpeedMps = when {
+                isProviderSwitch || forcePostResumePersist -> candidateSpeed
+                candidateSpeed <= 0f -> {
+                    if (consecutiveSlowSamples >= 3 || smoothedSpeedMps < 0.35f) 0f
+                    else 0.55f * smoothedSpeedMps
+                }
+                smoothedSpeedMps <= 0f -> candidateSpeed
+                else -> (0.45f * candidateSpeed) + (0.55f * smoothedSpeedMps)
             }
-            smoothedSpeedMps <= 0f -> candidateSpeed
-            else -> (0.45f * candidateSpeed) + (0.55f * smoothedSpeedMps)
-        }
 
-            val point = rawPoint.copy(speed = smoothedSpeedMps)
+            val point = safePoint.copy(speed = smoothedSpeedMps)
             _currentLocation.value = point
 
             if (isActivelyRecording && session != null) {
@@ -587,8 +634,9 @@ class LocationRepository(private val context: Context) {
                 val isFirstPoint = lastSaved == null
                 val elapsedSinceLastSavedMs = if (lastSaved != null) (point.timestamp - lastSaved.timestamp) else Long.MAX_VALUE
                 val accuracyImproved = lastSaved != null && (lastSaved.accuracy - point.accuracy >= 10f)
-                // Deduplicate stationary 1s bloat: persist immediately on movement/switch/first-fix/accuracy jump, else 15s stationary heartbeat
+                // Deduplicate stationary 1s bloat: persist immediately on movement/switch/first-fix/resume/accuracy jump, else 15s stationary heartbeat
                 val shouldPersistTrackpoint = isFirstPoint ||
+                    forcePostResumePersist ||
                     additionalDistance > 0.0 ||
                     isProviderSwitch ||
                     accuracyImproved ||
@@ -639,8 +687,10 @@ class LocationRepository(private val context: Context) {
             point
         }
 
-        // Check geofences with dual-radius hysteresis & accuracy gating
-        checkGeofences(pointForGeofence.latitude, pointForGeofence.longitude, pointForGeofence.accuracy, pointForGeofence.provider)
+        if (pointForGeofence != null) {
+            // Check geofences with dual-radius hysteresis & accuracy gating
+            checkGeofences(pointForGeofence.latitude, pointForGeofence.longitude, pointForGeofence.accuracy, pointForGeofence.provider)
+        }
     }
 
     suspend fun dropWaypoint(name: String, note: String = ""): TrailWaypoint? = withContext(Dispatchers.IO) {

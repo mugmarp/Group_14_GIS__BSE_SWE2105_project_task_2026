@@ -821,9 +821,13 @@ fun MapScreen(
                                     Spacer(modifier = Modifier.height(8.dp))
                                     FilledTonalButton(
                                         onClick = {
-                                            val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-                                            sessionNameInput = "Field Trail $timeStr"
-                                            showStartDialog = true
+                                            if (!com.geotrace.service.LocationForegroundService.hasLocationPermission(context)) {
+                                                Toast.makeText(context, "Grant Location permission to record a field trail.", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                                                sessionNameInput = "Field Trail $timeStr"
+                                                showStartDialog = true
+                                            }
                                         },
                                         shape = RoundedCornerShape(10.dp),
                                         modifier = Modifier
@@ -1056,9 +1060,13 @@ fun MapScreen(
                         border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.55f)),
                         modifier = Modifier
                             .clickable {
-                                val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-                                sessionNameInput = "Field Trail $timeStr"
-                                showStartDialog = true
+                                if (!com.geotrace.service.LocationForegroundService.hasLocationPermission(context)) {
+                                    Toast.makeText(context, "Grant Location permission to record a field trail.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                                    sessionNameInput = "Field Trail $timeStr"
+                                    showStartDialog = true
+                                }
                             }
                             .testTag("start_track_btn")
                     ) {
@@ -1508,7 +1516,10 @@ fun MapScreen(
                 Button(
                     onClick = {
                         val name = sessionNameInput.ifBlank { "Field Trail" }
-                        viewModel.startTracking(name, trackingMode)
+                        val started = viewModel.startTracking(name, trackingMode)
+                        if (!started) {
+                            Toast.makeText(context, "Location permission is required to record a trail.", Toast.LENGTH_SHORT).show()
+                        }
                         showStartDialog = false
                     },
                     colors = ButtonDefaults.buttonColors(

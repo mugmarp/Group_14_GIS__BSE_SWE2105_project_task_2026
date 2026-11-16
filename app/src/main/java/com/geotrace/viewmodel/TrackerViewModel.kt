@@ -193,7 +193,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         standbyCellJob?.cancel()
         standbyCellJob = viewModelScope.launch {
             while (isActive) {
-                if (activeSession.value == null) {
+                if (activeSession.value == null && !LocationForegroundService.isCellDiagnosticsActive) {
                     val towers = cellManager.readCurrentCellTowers()
                     repository.updateCellTowers(towers)
                 }
@@ -233,7 +233,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 )
                 _allCellTowerLocations.value = allResolved
 
-                // In Cell-Only mode: fall back to OpenCellID-resolved serving tower immediately on switch or staleness
+                // In Cell-Only mode: fall back to OpenCellID-resolved serving tower immediately on switch, or on staleness when service diagnostics isn't driving it
                 if (mode == TrackingMode.POWER_SAVER) {
                     _cellTowerLocation.value?.let { towerLoc ->
                         val now = System.currentTimeMillis()
@@ -241,7 +241,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                         val isCurrentNonCellular = loc != null && loc.provider != "cellular"
                         val isCurrentStale = loc == null || (now - loc.timestamp > 25_000L)
                         val changedTower = lastCellularFallbackKey != towerKey
-                        if (isCurrentNonCellular || isCurrentStale || (changedTower && (now - lastCellularFallbackTimeMs >= 10_000L))) {
+                        val serviceDrivesCell = LocationForegroundService.isCellDiagnosticsActive
+                        if (isCurrentNonCellular || (!serviceDrivesCell && (isCurrentStale || (changedTower && (now - lastCellularFallbackTimeMs >= 10_000L))))) {
                             lastCellularFallbackKey = towerKey
                             lastCellularFallbackTimeMs = now
                             val fallbackPoint = LocationPoint(
@@ -268,6 +269,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     @android.annotation.SuppressLint("MissingPermission")
     fun startStandbyLocationUpdates(targetMode: TrackingMode = trackingMode.value) {
         stopStandbyLocationUpdates()
+        if (activeSession.value != null) return
+        if (!LocationForegroundService.hasLocationPermission(getApplication())) return
         if (targetMode == TrackingMode.HIGH_ACCURACY) {
             requestLastKnownLocation(forceIfCellular = true)
         }
@@ -290,55 +293,63 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                         android.os.Looper.getMainLooper()
                     )
                 } catch (_: SecurityException) {
+                    standbyCallback = null
                 } catch (_: Exception) {
+                    standbyCallback = null
                 }
             }
 
             TrackingMode.BALANCED -> {
-                val lm = systemLocationManager
-                val networkEnabled = try {
-                    lm?.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) == true
-                } catch (_: Exception) {
-                    false
-                }
-
-                if (networkEnabled && lm != null) {
-                    val listener = createStandbyNetworkListener(targetMode)
-                    standbyNetworkListener = listener
-                    try {
-                        lm.requestLocationUpdates(
-                            android.location.LocationManager.NETWORK_PROVIDER,
-                            targetMode.intervalMs,
-                            targetMode.minDistanceMeters,
-                            listener,
-                            android.os.Looper.getMainLooper()
-                        )
-                    } catch (_: SecurityException) {
-                    } catch (_: Exception) {
-                    }
-                } else {
-                    val request = com.google.android.gms.location.LocationRequest.Builder(
-                        com.google.android.gms.location.Priority.PRIORITY_BALANCED_POWER_ACCURACY,
-                        targetMode.intervalMs
+                val request = com.google.android.gms.location.LocationRequest.Builder(
+                    com.google.android.gms.location.Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+                    targetMode.intervalMs
+                )
+                    .setMinUpdateDistanceMeters(targetMode.minDistanceMeters)
+                    .setMinUpdateIntervalMillis(targetMode.intervalMs / 2)
+                    .build()
+                standbyCallback = createStandbyFusedCallback(targetMode)
+                try {
+                    fusedLocationClient.requestLocationUpdates(
+                        request,
+                        standbyCallback!!,
+                        android.os.Looper.getMainLooper()
                     )
-                        .setMinUpdateDistanceMeters(targetMode.minDistanceMeters)
-                        .setMinUpdateIntervalMillis(targetMode.intervalMs)
-                        .build()
-                    standbyCallback = createStandbyFusedCallback(targetMode)
-                    try {
-                        fusedLocationClient.requestLocationUpdates(
-                            request,
-                            standbyCallback!!,
-                            android.os.Looper.getMainLooper()
-                        )
-                    } catch (_: SecurityException) {
+                } catch (_: SecurityException) {
+                    standbyCallback = null
+                } catch (_: Exception) {
+                    standbyCallback = null
+                    val lm = systemLocationManager
+                    val networkEnabled = try {
+                        lm?.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) == true
                     } catch (_: Exception) {
+                        false
+                    }
+                    if (networkEnabled && lm != null) {
+                        val listener = createStandbyNetworkListener(targetMode)
+                        standbyNetworkListener = listener
+                        try {
+                            lm.requestLocationUpdates(
+                                android.location.LocationManager.NETWORK_PROVIDER,
+                                targetMode.intervalMs,
+                                targetMode.minDistanceMeters,
+                                listener,
+                                android.os.Looper.getMainLooper()
+                            )
+                        } catch (_: SecurityException) {
+                            standbyNetworkListener = null
+                        } catch (_: Exception) {
+                            standbyNetworkListener = null
+                        }
                     }
                 }
             }
 
             TrackingMode.POWER_SAVER -> {
-                // In Cell-Only mode, cell polling + OpenCellID leads; coarse NETWORK_PROVIDER only acts as passive fallback if OpenCellID returns null
+                // When foreground service is already running protection in POWER_SAVER, it manages cell diagnostics + coarse fallback
+                if (LocationForegroundService.isServiceActive) {
+                    return
+                }
+                // Otherwise register coarse NETWORK_PROVIDER / LOW_POWER passive fallback if OpenCellID returns null
                 val lm = systemLocationManager
                 val networkEnabled = try {
                     lm?.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER) == true
@@ -357,7 +368,9 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                             android.os.Looper.getMainLooper()
                         )
                     } catch (_: SecurityException) {
+                        standbyNetworkListener = null
                     } catch (_: Exception) {
+                        standbyNetworkListener = null
                     }
                 } else {
                     val request = com.google.android.gms.location.LocationRequest.Builder(
@@ -375,7 +388,9 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                             android.os.Looper.getMainLooper()
                         )
                     } catch (_: SecurityException) {
+                        standbyCallback = null
                     } catch (_: Exception) {
+                        standbyCallback = null
                     }
                 }
             }
@@ -420,6 +435,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         }
 
         if (activeSession.value == null) {
+            val normalizedTime = loc.time.takeIf { it > 0L } ?: System.currentTimeMillis()
             val p = LocationPoint(
                 latitude = loc.latitude,
                 longitude = loc.longitude,
@@ -428,7 +444,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
                 bearing = if (loc.hasBearing()) loc.bearing else 0f,
                 provider = loc.provider ?: "fused",
-                timestamp = loc.time,
+                timestamp = normalizedTime,
                 sessionId = "standby"
             )
             viewModelScope.launch {
@@ -457,9 +473,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         try {
             fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
                 val cur = currentLocation.value
-                val isFreshLastKnown = loc != null && (System.currentTimeMillis() - loc.time) < 20_000L
+                val isFreshLastKnown = loc != null && loc.time > 0L && (System.currentTimeMillis() - loc.time) < 20_000L
                 val shouldApply = cur == null || (forceIfCellular && cur.provider == "cellular" && isFreshLastKnown)
                 if (loc != null && shouldApply) {
+                    val normalizedTime = loc.time.takeIf { it > 0L } ?: System.currentTimeMillis()
                     val p = LocationPoint(
                         latitude = loc.latitude,
                         longitude = loc.longitude,
@@ -468,7 +485,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                         altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
                         bearing = if (loc.hasBearing()) loc.bearing else 0f,
                         provider = loc.provider ?: "fused",
-                        timestamp = loc.time,
+                        timestamp = normalizedTime,
                         sessionId = "real_initial"
                     )
                     viewModelScope.launch {
@@ -483,7 +500,14 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun startTracking(sessionName: String, mode: TrackingMode) {
+    suspend fun awaitInitialRestore() {
+        repository.awaitInitialRestore()
+    }
+
+    fun startTracking(sessionName: String, mode: TrackingMode): Boolean {
+        if (!LocationForegroundService.hasLocationPermission(getApplication())) {
+            return false
+        }
         viewModelScope.launch {
             _inspectedTrail.value = null
             stopStandbyLocationUpdates()
@@ -491,6 +515,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             repository.startNewSession(sessionName, mode)
             LocationForegroundService.startService(getApplication(), mode)
         }
+        return true
     }
 
     fun pauseTracking() {

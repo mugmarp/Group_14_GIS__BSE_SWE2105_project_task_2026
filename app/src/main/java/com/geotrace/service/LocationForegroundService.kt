@@ -97,6 +97,10 @@ class LocationForegroundService : Service() {
         var isServiceActive: Boolean = false
             private set
 
+        @Volatile
+        var isCellDiagnosticsActive: Boolean = false
+            private set
+
         fun updateMode(context: Context, mode: TrackingMode) {
             if (!isServiceActive || !hasLocationPermission(context)) return
             val intent = Intent(context, LocationForegroundService::class.java).apply {
@@ -227,9 +231,13 @@ class LocationForegroundService : Service() {
                 val mode = parseMode(modeStr)
                 currentMode = mode
                 lastModeSwitchMs = System.currentTimeMillis()
+                val isSessionPaused = repo.activeSession.value?.isPaused == true
                 if (isRecordingSession || repo.activeSession.value != null) {
                     ensureForeground(buildStatusNotification(mode))
-                    requestLocationUpdates(mode)
+                    if (!isSessionPaused) {
+                        requestLocationUpdates(mode)
+                        startPeriodicCellDiagnostics()
+                    }
                 } else if (isProtectionActive || (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this))) {
                     ensureForeground(buildStatusNotification(mode))
                     requestProtectionLocationUpdates()
@@ -278,34 +286,74 @@ class LocationForegroundService : Service() {
                 }
             }
             ACTION_PAUSE -> {
+                // Release high-drain GNSS/WakeLock/cell loops immediately while paused
+                releaseWakeLock()
+                stopCellDiagnostics()
+                stopLocationUpdatesOnly()
                 serviceScope.launch {
                     repo.pauseCurrentSession()
                     ensureForeground(buildStatusNotification(currentMode))
+                    if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this@LocationForegroundService)) {
+                        isProtectionActive = true
+                        requestProtectionLocationUpdates()
+                        startProtectionHeartbeat()
+                    }
                 }
             }
             ACTION_RESUME -> {
+                // Satisfy startForegroundService contract synchronously before DB I/O
+                ensureForeground(buildStatusNotification(currentMode))
                 serviceScope.launch {
-                    repo.resumeCurrentSession()
-                    isRecordingSession = true
-                    ensureForeground(buildStatusNotification(currentMode))
+                    val resumed = repo.resumeCurrentSession()
+                    if (resumed != null) {
+                        isRecordingSession = true
+                        currentMode = repo.trackingMode.value
+                        lastModeSwitchMs = System.currentTimeMillis()
+                        startForegroundTracking(currentMode)
+                    } else if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this@LocationForegroundService)) {
+                        isRecordingSession = false
+                        isProtectionActive = true
+                        startLightweightProtectionMode()
+                    } else {
+                        isRecordingSession = false
+                        stopForegroundAndSelf()
+                    }
                 }
             }
             ACTION_STOP -> {
                 stopTrackingOrDowngradeInternal()
             }
             null -> {
-                // Restarted by system (START_STICKY) after process kill
-                if (repo.activeSession.value != null) {
-                    isRecordingSession = true
-                    currentMode = repo.trackingMode.value
-                    startForegroundTracking(currentMode)
-                } else if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this)) {
-                    isProtectionActive = true
-                    groupRepo.ensurePersonalDevicesListenerActive()
-                    startLightweightProtectionMode()
-                } else {
-                    stopForegroundAndSelf()
-                    return START_NOT_STICKY
+                // Restarted by system (START_STICKY) after process kill: satisfy foreground immediately, then await DB restore
+                if (hasLocationPermission(this)) {
+                    ensureForeground(buildStatusNotification(repo.trackingMode.value))
+                }
+                serviceScope.launch {
+                    repo.awaitInitialRestore()
+                    val restored = repo.activeSession.value
+                    if (restored != null) {
+                        isRecordingSession = true
+                        currentMode = restored.trackingMode
+                        isProtectionActive = groupRepo.isBackgroundProtectionActiveAndSignedIn()
+                        if (restored.isPaused) {
+                            releaseWakeLock()
+                            stopCellDiagnostics()
+                            stopLocationUpdatesOnly()
+                            ensureForeground(buildStatusNotification(currentMode))
+                            if (isProtectionActive && hasLocationPermission(this@LocationForegroundService)) {
+                                requestProtectionLocationUpdates()
+                                startProtectionHeartbeat()
+                            }
+                        } else {
+                            startForegroundTracking(currentMode)
+                        }
+                    } else if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this@LocationForegroundService)) {
+                        isProtectionActive = true
+                        groupRepo.ensurePersonalDevicesListenerActive()
+                        startLightweightProtectionMode()
+                    } else {
+                        stopForegroundAndSelf()
+                    }
                 }
             }
         }
@@ -341,8 +389,7 @@ class LocationForegroundService : Service() {
         currentMode = repo.trackingMode.value
         ensureForeground(buildStatusNotification(currentMode))
         releaseWakeLock()
-        cellDiagnosticsJob?.cancel()
-        cellDiagnosticsJob = null
+        stopCellDiagnostics()
         if (currentMode == TrackingMode.POWER_SAVER) {
             startPeriodicCellDiagnostics()
         }
@@ -363,6 +410,7 @@ class LocationForegroundService : Service() {
                 try {
                     fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
                         if (loc != null) {
+                            val normalizedTime = loc.time.takeIf { it > 0L } ?: System.currentTimeMillis()
                             val point = LocationPoint(
                                 latitude = loc.latitude,
                                 longitude = loc.longitude,
@@ -371,7 +419,7 @@ class LocationForegroundService : Service() {
                                 altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
                                 bearing = if (loc.hasBearing()) loc.bearing else 0f,
                                 provider = loc.provider ?: "fused",
-                                timestamp = loc.time,
+                                timestamp = normalizedTime,
                                 sessionId = "protection"
                             )
                             serviceScope.launch {
@@ -506,47 +554,50 @@ class LocationForegroundService : Service() {
             }
 
             TrackingMode.BALANCED -> {
-                val lm = systemLocationManager
-                val networkEnabled = try {
-                    lm?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true
-                } catch (_: Exception) {
-                    false
+                // Prefer Play Services Fused Balanced (Wi-Fi/Cell/sensor fusion), falling back to NETWORK_PROVIDER
+                val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, mode.intervalMs)
+                    .setMinUpdateDistanceMeters(mode.minDistanceMeters)
+                    .setMinUpdateIntervalMillis(mode.intervalMs / 2)
+                    .build()
+                val callback = object : LocationCallback() {
+                    override fun onLocationResult(result: LocationResult) {
+                        result.lastLocation?.let { onNewLocationReceived(it) }
+                    }
                 }
-
-                if (networkEnabled && lm != null) {
-                    val listener = object : LocationListener {
-                        override fun onLocationChanged(location: Location) {
-                            onNewLocationReceived(location)
+                locationCallback = callback
+                try {
+                    fusedLocationClient.requestLocationUpdates(request, callback, Looper.getMainLooper())
+                } catch (_: SecurityException) {
+                    locationCallback = null
+                } catch (_: Exception) {
+                    locationCallback = null
+                    val lm = systemLocationManager
+                    val networkEnabled = try {
+                        lm?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true
+                    } catch (_: Exception) {
+                        false
+                    }
+                    if (networkEnabled && lm != null) {
+                        val listener = object : LocationListener {
+                            override fun onLocationChanged(location: Location) {
+                                onNewLocationReceived(location)
+                            }
+                            @Deprecated("Deprecated in Java")
+                            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                            override fun onProviderEnabled(provider: String) {}
+                            override fun onProviderDisabled(provider: String) {}
                         }
-                        @Deprecated("Deprecated in Java")
-                        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-                        override fun onProviderEnabled(provider: String) {}
-                        override fun onProviderDisabled(provider: String) {}
-                    }
-                    networkLocationListener = listener
-                    try {
-                        lm.requestLocationUpdates(
-                            LocationManager.NETWORK_PROVIDER,
-                            mode.intervalMs,
-                            mode.minDistanceMeters,
-                            listener,
-                            Looper.getMainLooper()
-                        )
-                    } catch (_: SecurityException) {
-                    }
-                } else {
-                    val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, mode.intervalMs)
-                        .setMinUpdateDistanceMeters(mode.minDistanceMeters)
-                        .setMinUpdateIntervalMillis(mode.intervalMs)
-                        .build()
-                    locationCallback = object : LocationCallback() {
-                        override fun onLocationResult(result: LocationResult) {
-                            result.lastLocation?.let { onNewLocationReceived(it) }
+                        networkLocationListener = listener
+                        try {
+                            lm.requestLocationUpdates(
+                                LocationManager.NETWORK_PROVIDER,
+                                mode.intervalMs,
+                                mode.minDistanceMeters,
+                                listener,
+                                Looper.getMainLooper()
+                            )
+                        } catch (_: SecurityException) {
                         }
-                    }
-                    try {
-                        fusedLocationClient.requestLocationUpdates(request, locationCallback!!, Looper.getMainLooper())
-                    } catch (_: SecurityException) {
                     }
                 }
             }
@@ -625,12 +676,7 @@ class LocationForegroundService : Service() {
             return
         }
 
-        val priority = if (activeMode == TrackingMode.HIGH_ACCURACY) {
-            Priority.PRIORITY_BALANCED_POWER_ACCURACY
-        } else {
-            Priority.PRIORITY_BALANCED_POWER_ACCURACY
-        }
-        val request = LocationRequest.Builder(priority, 60_000L)
+        val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 60_000L)
             .setMinUpdateDistanceMeters(25f)
             .setMinUpdateIntervalMillis(30_000L)
             .build()
@@ -676,6 +722,7 @@ class LocationForegroundService : Service() {
             }
         }
 
+        val normalizedTime = loc.time.takeIf { it > 0L } ?: System.currentTimeMillis()
         val point = LocationPoint(
             latitude = loc.latitude,
             longitude = loc.longitude,
@@ -684,14 +731,14 @@ class LocationForegroundService : Service() {
             altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
             bearing = if (loc.hasBearing()) loc.bearing else 0f,
             provider = loc.provider ?: "fused",
-            timestamp = loc.time,
+            timestamp = normalizedTime,
             sessionId = activeSession?.id ?: if (isRecordingSession) "foreground" else "protection"
         )
 
         serviceScope.launch {
             repo.recordLocation(point)
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (activeSession != null && isForegroundStarted) {
+            if (activeSession != null && !activeSession.isPaused && isForegroundStarted) {
                 nm.notify(NOTIFICATION_ID, buildStatusNotification(effectiveMode))
             }
 
@@ -707,8 +754,15 @@ class LocationForegroundService : Service() {
         }
     }
 
+    private fun stopCellDiagnostics() {
+        isCellDiagnosticsActive = false
+        cellDiagnosticsJob?.cancel()
+        cellDiagnosticsJob = null
+    }
+
     private fun startPeriodicCellDiagnostics() {
         if (cellDiagnosticsJob?.isActive == true) return
+        isCellDiagnosticsActive = true
         cellDiagnosticsJob = serviceScope.launch {
             val app = application as LocationTrackerApp
             val repo = app.repository
@@ -717,8 +771,9 @@ class LocationForegroundService : Service() {
                 val towers = cellManager.readCurrentCellTowers()
                 repo.updateCellTowers(towers)
 
+                val modeNow = repo.trackingMode.value
                 // Resolve serving mast in background too so POWER_SAVER stays strictly cellular even with UI closed
-                if (repo.trackingMode.value == TrackingMode.POWER_SAVER) {
+                if (modeNow == TrackingMode.POWER_SAVER) {
                     val serving = towers.firstOrNull { it.isRegistered } ?: towers.firstOrNull()
                     if (serving != null) {
                         val towerLoc = OpenCellIdClient.resolveCellLocation(
@@ -752,14 +807,14 @@ class LocationForegroundService : Service() {
                                     val latestSync = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
                                     if (now - latestSync >= throttleMs) {
                                         lastCloudSyncMs = now
-                                        groupRepo.syncDeviceAndGroupTelemetry(cellPoint, repo.trackingMode.value.name)
+                                        groupRepo.syncDeviceAndGroupTelemetry(cellPoint, modeNow.name)
                                     }
                                 }
                             }
                         }
                     }
                 }
-                delay(10000L)
+                delay(if (modeNow == TrackingMode.POWER_SAVER) 10_000L else 25_000L)
             }
         }
     }
@@ -867,8 +922,7 @@ class LocationForegroundService : Service() {
 
         isRecordingSession = false
         releaseWakeLock()
-        cellDiagnosticsJob?.cancel()
-        cellDiagnosticsJob = null
+        stopCellDiagnostics()
 
         serviceScope.launch {
             if (repo.activeSession.value != null) {
@@ -901,8 +955,7 @@ class LocationForegroundService : Service() {
     private fun stopForegroundAndSelf() {
         isServiceActive = false
         releaseWakeLock()
-        cellDiagnosticsJob?.cancel()
-        cellDiagnosticsJob = null
+        stopCellDiagnostics()
         stopProtectionHeartbeat()
         val wasForeground = isForegroundStarted
         isForegroundStarted = false
@@ -916,8 +969,7 @@ class LocationForegroundService : Service() {
         super.onDestroy()
         isServiceActive = false
         stopLocationUpdatesOnly()
-        cellDiagnosticsJob?.cancel()
-        cellDiagnosticsJob = null
+        stopCellDiagnostics()
         stopProtectionHeartbeat()
         releaseWakeLock()
         isForegroundStarted = false
