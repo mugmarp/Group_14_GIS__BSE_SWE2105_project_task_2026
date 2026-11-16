@@ -15,10 +15,14 @@ import com.geotrace.model.LocationPoint
 import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineDownloadProgress
 import com.geotrace.model.OfflineMapRegion
+import com.geotrace.model.SearchPlaceResult
+import com.geotrace.model.SearchResultSource
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
 import com.geotrace.model.TrailWaypoint
 import com.geotrace.service.LocationForegroundService
+import com.geotrace.service.PlaceSearchManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
@@ -119,6 +123,20 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val offlineMapRegions: StateFlow<List<OfflineMapRegion>> = repository.offlineMapRegions
     val offlineDownloadProgress: StateFlow<OfflineDownloadProgress> = offlineMapManager.downloadProgress
     val offlineCacheSizeMb: StateFlow<Float> = offlineMapManager.cacheSizeMb
+    val offlinePlacesCount: StateFlow<Int> = repository.offlinePlacesCount
+
+    val placeSearchManager = PlaceSearchManager(application)
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+    private val _searchResults = MutableStateFlow<List<SearchPlaceResult>>(emptyList())
+    val searchResults: StateFlow<List<SearchPlaceResult>> = _searchResults.asStateFlow()
+    private val _isSearchingOnline = MutableStateFlow(false)
+    val isSearchingOnline: StateFlow<Boolean> = _isSearchingOnline.asStateFlow()
+    private val _isNetworkOnline = MutableStateFlow(placeSearchManager.isNetworkConnected())
+    val isNetworkOnline: StateFlow<Boolean> = _isNetworkOnline.asStateFlow()
+    private val _selectedSearchPin = MutableStateFlow<SearchPlaceResult?>(null)
+    val selectedSearchPin: StateFlow<SearchPlaceResult?> = _selectedSearchPin.asStateFlow()
+    private var searchJob: Job? = null
 
     private val _currentMapBoundingBox = MutableStateFlow<org.osmdroid.util.BoundingBox?>(null)
     val currentMapBoundingBox: StateFlow<org.osmdroid.util.BoundingBox?> = _currentMapBoundingBox.asStateFlow()
@@ -714,6 +732,13 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             onCompleted = { region ->
                 viewModelScope.launch {
                     repository.saveOfflineMapRegion(region)
+                    // Best-effort offline POI & street index pre-cache inside downloaded bounding box
+                    launch(Dispatchers.IO) {
+                        val pois = placeSearchManager.fetchRegionPoisForOfflineCache(region)
+                        if (pois.isNotEmpty()) {
+                            repository.saveOfflinePlaces(region.id, pois)
+                        }
+                    }
                 }
             }
         )
@@ -825,5 +850,189 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             content = "Geofencing API alert active for $zoneName",
             notificationId = 2999
         )
+    }
+
+    fun refreshSearchNetworkStatus() {
+        _isNetworkOnline.value = placeSearchManager.isNetworkConnected()
+    }
+
+    fun updateSearchQuery(
+        query: String,
+        deviceAndPeerTargets: List<SearchPlaceResult> = emptyList()
+    ) {
+        _searchQuery.value = query
+        searchJob?.cancel()
+        val trimmed = query.trim()
+        val onlineNow = placeSearchManager.isNetworkConnected()
+        _isNetworkOnline.value = onlineNow
+
+        searchJob = viewModelScope.launch {
+            val curLoc = currentLocation.value
+            fun withDist(item: SearchPlaceResult): SearchPlaceResult {
+                val d = curLoc?.let { repository.calculateDistanceMeters(it.latitude, it.longitude, item.latitude, item.longitude) }
+                return item.copy(distanceMeters = d)
+            }
+
+            val localMatches = mutableListOf<SearchPlaceResult>()
+
+            // 1. Direct coordinate / DMS / geo URI / Maps link parser (0ms offline)
+            val parsedCoord = placeSearchManager.parseDirectCoordinates(trimmed)
+            if (parsedCoord != null) {
+                localMatches.add(withDist(parsedCoord))
+            }
+
+            // 2. Recent searches (shown when blank or matching query)
+            val recents = placeSearchManager.loadRecentSearches().filter {
+                trimmed.isBlank() ||
+                    it.name.contains(trimmed, ignoreCase = true) ||
+                    it.subtitle.contains(trimmed, ignoreCase = true)
+            }.map { withDist(it) }
+
+            // 3. Local Geofence Safe Zones
+            val safeZoneMatches = geofenceZones.value.filter {
+                trimmed.isBlank() ||
+                    it.name.contains(trimmed, ignoreCase = true) ||
+                    it.category.label.contains(trimmed, ignoreCase = true)
+            }.take(if (trimmed.isBlank()) 4 else 8).map { z ->
+                withDist(
+                    SearchPlaceResult(
+                        id = "zone_${z.id}",
+                        name = z.name,
+                        subtitle = "${z.category.label} • ${z.radiusMeters.toInt()}m radius",
+                        latitude = z.latitude,
+                        longitude = z.longitude,
+                        source = SearchResultSource.SAFE_ZONE
+                    )
+                )
+            }
+
+            // 4. Saved Offline Map Regions
+            val regionMatches = offlineMapRegions.value.filter {
+                trimmed.isBlank() || it.name.contains(trimmed, ignoreCase = true)
+            }.take(4).map { reg ->
+                withDist(
+                    SearchPlaceResult(
+                        id = "reg_${reg.id}",
+                        name = reg.name,
+                        subtitle = "${reg.tileType.label} • Offline cached area",
+                        latitude = reg.centerLat,
+                        longitude = reg.centerLng,
+                        source = SearchResultSource.OFFLINE_REGION,
+                        bboxNorth = reg.northLat,
+                        bboxSouth = reg.southLat,
+                        bboxEast = reg.eastLng,
+                        bboxWest = reg.westLng
+                    )
+                )
+            }
+
+            // 5. Active & Inspected Waypoints
+            val wpts = (activeWaypoints.value + (inspectedTrail.value?.waypoints ?: emptyList()))
+                .distinctBy { it.id }
+                .filter {
+                    trimmed.isNotBlank() && (
+                        it.name.contains(trimmed, ignoreCase = true) ||
+                            it.note.contains(trimmed, ignoreCase = true)
+                        )
+                }
+                .take(6)
+                .map { wp ->
+                    withDist(
+                        SearchPlaceResult(
+                            id = "wpt_${wp.id}",
+                            name = wp.name,
+                            subtitle = wp.note.ifBlank { "Manual Trail Waypoint" },
+                            latitude = wp.latitude,
+                            longitude = wp.longitude,
+                            source = SearchResultSource.WAYPOINT
+                        )
+                    )
+                }
+
+            // 6. Active Group Members, Personal Fleet Devices & P2P Peers
+            val deviceMatches = deviceAndPeerTargets.filter {
+                trimmed.isNotBlank() && (
+                    it.name.contains(trimmed, ignoreCase = true) ||
+                        it.subtitle.contains(trimmed, ignoreCase = true)
+                    )
+            }.take(6).map { withDist(it) }
+
+            // 7. Cached Offline POIs from downloaded regions (SQLite LIKE query)
+            val offlinePoiMatches = if (trimmed.isNotBlank()) {
+                repository.searchOfflinePlaces(trimmed, limit = 15).map { poi ->
+                    withDist(
+                        SearchPlaceResult(
+                            id = "poi_${poi.id}",
+                            name = poi.name,
+                            subtitle = poi.subtitle,
+                            latitude = poi.latitude,
+                            longitude = poi.longitude,
+                            source = SearchResultSource.OFFLINE_POI
+                        )
+                    )
+                }
+            } else {
+                emptyList()
+            }
+
+            localMatches.addAll(recents)
+            localMatches.addAll(safeZoneMatches)
+            localMatches.addAll(wpts)
+            localMatches.addAll(deviceMatches)
+            localMatches.addAll(regionMatches)
+            localMatches.addAll(offlinePoiMatches)
+
+            val dedupLocal = deduplicateSearchResults(localMatches)
+            _searchResults.value = dedupLocal
+
+            // 8. Online Geocoding (debounced) when query >= 2 chars, not a direct coordinate, and device is online
+            if (trimmed.length >= 2 && parsedCoord == null && onlineNow) {
+                _isSearchingOnline.value = true
+                delay(350L)
+                if (!isActive) return@launch
+                val viewBox = _currentMapBoundingBox.value
+                val biasLat = curLoc?.latitude ?: viewBox?.centerLatitude
+                val biasLon = curLoc?.longitude ?: viewBox?.centerLongitude
+                val onlineRaw = placeSearchManager.searchOnline(trimmed, biasLat, biasLon, viewBox)
+                if (isActive) {
+                    val onlineWithDist = onlineRaw.map { withDist(it) }
+                    _searchResults.value = deduplicateSearchResults(dedupLocal + onlineWithDist)
+                    _isSearchingOnline.value = false
+                }
+            } else {
+                _isSearchingOnline.value = false
+            }
+        }
+    }
+
+    private fun deduplicateSearchResults(items: List<SearchPlaceResult>): List<SearchPlaceResult> {
+        val seen = HashSet<String>()
+        val out = mutableListOf<SearchPlaceResult>()
+        for (item in items) {
+            val key = "${item.source.name}:${item.name.lowercase(java.util.Locale.US)}:${
+                String.format(java.util.Locale.US, "%.4f,%.4f", item.latitude, item.longitude)
+            }"
+            if (seen.add(key)) {
+                out.add(item)
+            }
+        }
+        return out
+    }
+
+    fun selectSearchResult(place: SearchPlaceResult) {
+        if (place.source != SearchResultSource.DEVICE_OR_PEER) {
+            placeSearchManager.saveRecentSearch(place)
+        }
+        _isMapFollowPaused.value = true
+        _selectedSearchPin.value = place.copy(requestedAtMs = System.currentTimeMillis())
+    }
+
+    fun clearSelectedSearchPin() {
+        _selectedSearchPin.value = null
+    }
+
+    fun clearRecentSearches(deviceAndPeerTargets: List<SearchPlaceResult> = emptyList()) {
+        placeSearchManager.clearRecentSearches()
+        updateSearchQuery(_searchQuery.value, deviceAndPeerTargets)
     }
 }

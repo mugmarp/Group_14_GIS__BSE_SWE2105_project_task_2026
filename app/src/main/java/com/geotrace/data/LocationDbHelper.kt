@@ -15,7 +15,7 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
 
     companion object {
         const val DATABASE_NAME = "gis_tracker.db"
-        const val DATABASE_VERSION = 4
+        const val DATABASE_VERSION = 5
 
         const val TABLE_POINTS = "location_points"
         const val TABLE_SESSIONS = "tracking_sessions"
@@ -23,6 +23,7 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         const val TABLE_GEOFENCES = "geofence_zones"
         const val TABLE_ALERTS = "geofence_alerts"
         const val TABLE_OFFLINE_MAPS = "offline_map_regions"
+        const val TABLE_OFFLINE_PLACES = "offline_places"
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -138,6 +139,23 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
             )
             """.trimIndent()
         )
+
+        db.execSQL(
+            """
+            CREATE TABLE $TABLE_OFFLINE_PLACES (
+                id TEXT PRIMARY KEY,
+                region_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                category TEXT NOT NULL,
+                subtitle TEXT NOT NULL DEFAULT '',
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                FOREIGN KEY (region_id) REFERENCES $TABLE_OFFLINE_MAPS(id) ON DELETE CASCADE
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_offline_places_name ON $TABLE_OFFLINE_PLACES(name)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_offline_places_region ON $TABLE_OFFLINE_PLACES(region_id)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -186,6 +204,24 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
                 """.trimIndent()
             )
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_waypoints_session ON $TABLE_WAYPOINTS(session_id, timestamp)")
+        }
+        if (oldVersion < 5) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS $TABLE_OFFLINE_PLACES (
+                    id TEXT PRIMARY KEY,
+                    region_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    subtitle TEXT NOT NULL DEFAULT '',
+                    latitude REAL NOT NULL,
+                    longitude REAL NOT NULL,
+                    FOREIGN KEY (region_id) REFERENCES $TABLE_OFFLINE_MAPS(id) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_offline_places_name ON $TABLE_OFFLINE_PLACES(name)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_offline_places_region ON $TABLE_OFFLINE_PLACES(region_id)")
         }
     }
 }

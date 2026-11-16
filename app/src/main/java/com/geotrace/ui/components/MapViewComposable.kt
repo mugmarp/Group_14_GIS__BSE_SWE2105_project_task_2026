@@ -138,6 +138,8 @@ fun MapViewComposable(
     trailWaypoints: List<com.geotrace.model.TrailWaypoint> = emptyList(),
     inspectedTrailName: String? = null,
     inspectedTrailSummary: String? = null,
+    selectedSearchPin: com.geotrace.model.SearchPlaceResult? = null,
+    onClearSearchPin: (() -> Unit)? = null,
     isFollowPaused: Boolean = false,
     onFollowPausedByUser: (() -> Unit)? = null,
     onClearInspectedTrail: (() -> Unit)? = null,
@@ -235,6 +237,9 @@ fun MapViewComposable(
     val droppedPinDrawable = remember(context) {
         createPinBadgeDrawable(context, "•", android.graphics.Color.parseColor("#7C3AED"))
     }
+    val searchPinDrawable = remember(context) {
+        createPinBadgeDrawable(context, "★", android.graphics.Color.parseColor("#0F766E"))
+    }
 
     // Cache member & peer avatar drawables to prevent per-second Bitmap allocations
     val avatarDrawableCache = remember { mutableMapOf<String, android.graphics.drawable.Drawable>() }
@@ -319,6 +324,37 @@ fun MapViewComposable(
                 750L
             )
             hasCenteredOnFirstFix = true
+        }
+    }
+
+    // Pan & zoom onto a searched place, safe zone, offline POI, or coordinate
+    LaunchedEffect(selectedSearchPin?.requestedAtMs, mapViewRef) {
+        val place = selectedSearchPin ?: return@LaunchedEffect
+        val map = mapViewRef ?: return@LaunchedEffect
+        selectedMarkerInfo = null
+        droppedInspectPin = null
+        hasCenteredOnFirstFix = true
+        val n = place.bboxNorth
+        val s = place.bboxSouth
+        val e = place.bboxEast
+        val w = place.bboxWest
+        if (n != null && s != null && e != null && w != null && (n - s) > 0.002 && (e - w) > 0.002) {
+            val box = BoundingBox(n.coerceIn(-85.0, 85.0), e.coerceIn(-180.0, 180.0), s.coerceIn(-85.0, 85.0), w.coerceIn(-180.0, 180.0))
+            map.post {
+                try {
+                    map.zoomToBoundingBox(box, true, 120)
+                } catch (_: Exception) {
+                    map.controller.animateTo(GeoPoint(place.latitude, place.longitude), 15.5, 750L)
+                }
+            }
+        } else {
+            val targetZoom = when (place.source) {
+                com.geotrace.model.SearchResultSource.COORDINATE,
+                com.geotrace.model.SearchResultSource.WAYPOINT,
+                com.geotrace.model.SearchResultSource.OFFLINE_POI -> 17.2
+                else -> 16.5
+            }
+            map.controller.animateTo(GeoPoint(place.latitude, place.longitude), targetZoom, 750L)
         }
     }
 
@@ -895,6 +931,25 @@ fun MapViewComposable(
                     map.overlays.add(pinMarker)
                 }
 
+                // 6c. Render active Search Result pin if selected
+                selectedSearchPin?.let { place ->
+                    if (isValidCoordinate(place.latitude, place.longitude)) {
+                        val searchMarker = Marker(map).apply {
+                            position = GeoPoint(place.latitude, place.longitude)
+                            title = place.name
+                            infoWindow = null
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            icon = searchPinDrawable
+                            setOnMarkerClickListener { _, _ ->
+                                selectedMarkerInfo = null
+                                droppedInspectPin = null
+                                true
+                            }
+                        }
+                        map.overlays.add(searchMarker)
+                    }
+                }
+
                 // 7. Interactive map tap / long-press handler (coordinate picker, dismiss, or drop inspect pin)
                 val eventsOverlay = MapEventsOverlay(object : MapEventsReceiver {
                     override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
@@ -932,20 +987,26 @@ fun MapViewComposable(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Unified Bottom-Start Marker Inspect / Inspected Trail / Target Focus Card (single contextual card, zero overlap)
+        // Unified Bottom-Start Marker Inspect / Search Pin / Inspected Trail / Target Focus Card (single contextual card, zero overlap)
         val activeFocus = if (!isMapPickMode && selectedMarkerInfo == null) focusedTarget else null
-        val isInspectingHistoryTrail = !isMapPickMode && selectedMarkerInfo == null && activeFocus == null && inspectedTrailName != null
+        val activeSearch = if (!isMapPickMode && selectedMarkerInfo == null && activeFocus == null) selectedSearchPin else null
+        val isInspectingHistoryTrail = !isMapPickMode && selectedMarkerInfo == null && activeFocus == null && activeSearch == null && inspectedTrailName != null
         val inspectCardTitle = selectedMarkerInfo?.title
             ?: activeFocus?.label
+            ?: activeSearch?.name
             ?: if (isInspectingHistoryTrail) inspectedTrailName else null
         val inspectCardDetail = selectedMarkerInfo?.detail
             ?: activeFocus?.subtitle
+            ?: activeSearch?.let { p ->
+                val coordStr = com.geotrace.ui.screens.formatCoordinates(p.latitude, p.longitude, settings.coordinateFormat)
+                if (p.subtitle.isNotBlank()) "$coordStr • ${p.subtitle}" else coordStr
+            }
             ?: if (isInspectingHistoryTrail) inspectedTrailSummary else null
         val inspectCardBadge = selectedMarkerInfo?.badge
-            ?: if (activeFocus != null) "LOCATING" else if (isInspectingHistoryTrail) "SAVED TRAIL" else null
+            ?: if (activeFocus != null) "LOCATING" else activeSearch?.source?.badge ?: if (isInspectingHistoryTrail) "SAVED TRAIL" else null
 
-        val inspectLat = selectedMarkerInfo?.latitude ?: activeFocus?.latitude
-        val inspectLon = selectedMarkerInfo?.longitude ?: activeFocus?.longitude
+        val inspectLat = selectedMarkerInfo?.latitude ?: activeFocus?.latitude ?: activeSearch?.latitude
+        val inspectLon = selectedMarkerInfo?.longitude ?: activeFocus?.longitude ?: activeSearch?.longitude
         val hasInspectCoords = inspectLat != null && inspectLon != null && (inspectLat != 0.0 || inspectLon != 0.0)
 
         if (inspectCardTitle != null && inspectCardBadge != null) {
@@ -1084,6 +1145,7 @@ fun MapViewComposable(
                                     droppedInspectPin = null
                                 }
                                 activeFocus != null -> onClearFocusTarget?.invoke()
+                                activeSearch != null -> onClearSearchPin?.invoke()
                                 isInspectingHistoryTrail -> onClearInspectedTrail?.invoke()
                             }
                         },
@@ -1128,6 +1190,7 @@ fun MapViewComposable(
             val isActivelyFollowing = settings.followUserLocation &&
                 !isFollowPaused &&
                 focusedTarget == null &&
+                selectedSearchPin == null &&
                 inspectedTrailName == null
             FloatingActionButton(
                 onClick = {

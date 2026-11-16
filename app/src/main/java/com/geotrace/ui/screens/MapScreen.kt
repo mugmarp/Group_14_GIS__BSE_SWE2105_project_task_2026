@@ -56,6 +56,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
@@ -99,9 +100,12 @@ import androidx.compose.ui.unit.sp
 import com.geotrace.model.CoordinateFormat
 import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MapTileType
+import com.geotrace.model.SearchPlaceResult
+import com.geotrace.model.SearchResultSource
 import com.geotrace.model.TrackingMode
 import com.geotrace.ui.components.MapViewComposable
 import com.geotrace.ui.components.OfflineMapsDialog
+import com.geotrace.ui.components.PlaceSearchDialog
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.GroupViewModel
 import com.geotrace.viewmodel.TrackerViewModel
@@ -140,6 +144,12 @@ fun MapScreen(
     val isPickingGeofenceCenter by viewModel.isPickingGeofenceCenter.collectAsState()
     val geofencePickDraft by viewModel.geofencePickDraft.collectAsState()
     val isMapFollowPaused by viewModel.isMapFollowPaused.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
+    val searchResults by viewModel.searchResults.collectAsState()
+    val isSearchingOnline by viewModel.isSearchingOnline.collectAsState()
+    val isNetworkOnline by viewModel.isNetworkOnline.collectAsState()
+    val offlinePlacesCount by viewModel.offlinePlacesCount.collectAsState()
+    val selectedSearchPin by viewModel.selectedSearchPin.collectAsState()
 
     val currentUser by (groupViewModel?.currentUser ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
     val activeGroup by (groupViewModel?.activeGroup ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
@@ -170,6 +180,46 @@ fun MapScreen(
     val hasQuickLocateTargets = remoteGroupMembers.isNotEmpty() ||
         deduplicatedPersonalDevices.isNotEmpty() ||
         nearbyPeers.isNotEmpty()
+    val deviceSearchTargets = remember(remoteGroupMembers, deduplicatedPersonalDevices, nearbyPeers) {
+        buildList {
+            remoteGroupMembers.filter { it.latitude != 0.0 || it.longitude != 0.0 }.forEach { m ->
+                add(
+                    SearchPlaceResult(
+                        id = "grp_${m.id}",
+                        name = m.displayName,
+                        subtitle = "Group Member • Battery ${m.batteryPercent}%",
+                        latitude = m.latitude,
+                        longitude = m.longitude,
+                        source = SearchResultSource.DEVICE_OR_PEER
+                    )
+                )
+            }
+            deduplicatedPersonalDevices.filter { it.latitude != 0.0 || it.longitude != 0.0 }.forEach { d ->
+                add(
+                    SearchPlaceResult(
+                        id = "dev_${d.deviceId}",
+                        name = d.deviceName.ifBlank { d.deviceModel },
+                        subtitle = "${d.deviceModel} • Fleet Device",
+                        latitude = d.latitude,
+                        longitude = d.longitude,
+                        source = SearchResultSource.DEVICE_OR_PEER
+                    )
+                )
+            }
+            nearbyPeers.filter { it.latitude != 0.0 || it.longitude != 0.0 }.forEach { p ->
+                add(
+                    SearchPlaceResult(
+                        id = "p2p_${p.endpointId}",
+                        name = p.displayName,
+                        subtitle = "P2P Mesh Peer",
+                        latitude = p.latitude,
+                        longitude = p.longitude,
+                        source = SearchResultSource.DEVICE_OR_PEER
+                    )
+                )
+            }
+        }
+    }
 
     var showStartDialog by remember { mutableStateOf(false) }
     var showWaypointDialog by remember { mutableStateOf(false) }
@@ -178,6 +228,7 @@ fun MapScreen(
     var showProfileDialog by remember { mutableStateOf(false) }
     var showOfflineMapsDialog by remember { mutableStateOf(false) }
     var showDevicesSheet by remember { mutableStateOf(false) }
+    var showSearchDialog by remember { mutableStateOf(false) }
     var sessionNameInput by remember { mutableStateOf("") }
     var isHeaderExpanded by remember { mutableStateOf(false) }
     var vectorCoordsCopied by remember { mutableStateOf(false) }
@@ -297,6 +348,10 @@ fun MapScreen(
             trailWaypoints = displayedWaypoints,
             inspectedTrailName = if (activeSession == null) inspectedTrail?.session?.name else null,
             inspectedTrailSummary = if (activeSession == null) inspectedSummary else null,
+            selectedSearchPin = selectedSearchPin,
+            onClearSearchPin = {
+                viewModel.clearSelectedSearchPin()
+            },
             isFollowPaused = isMapFollowPaused,
             onFollowPausedByUser = {
                 viewModel.setMapFollowPaused(true)
@@ -312,6 +367,7 @@ fun MapScreen(
             onRecenterSelf = {
                 groupViewModel?.clearMapFocusTarget()
                 viewModel.clearInspectedTrail()
+                viewModel.clearSelectedSearchPin()
                 viewModel.setMapFollowPaused(false)
             },
             offlineRegionsCount = offlineMapRegions.size,
@@ -817,6 +873,46 @@ fun MapScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Place & Coordinate Search Pill
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = colorScheme.surface,
+                    shadowElevation = 3.dp,
+                    border = BorderStroke(
+                        1.dp,
+                        if (selectedSearchPin != null) colorScheme.primary else colorScheme.outlineVariant
+                    ),
+                    modifier = Modifier
+                        .clickable {
+                            viewModel.refreshSearchNetworkStatus()
+                            viewModel.updateSearchQuery(searchQuery, deviceSearchTargets)
+                            showSearchDialog = true
+                        }
+                        .testTag("open_search_pill")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Search places or coordinates",
+                            tint = colorScheme.primary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = selectedSearchPin?.name ?: "Search",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.width(if (selectedSearchPin != null) 88.dp else 46.dp)
+                        )
+                    }
+                }
+
                 // Floating Positioning Profile Pill
                 Surface(
                     shape = RoundedCornerShape(20.dp),
@@ -1433,6 +1529,30 @@ fun MapScreen(
                 groupViewModel?.focusMapOnTarget(target)
             },
             onDismiss = { showOfflineMapsDialog = false }
+        )
+    }
+
+    if (showSearchDialog) {
+        PlaceSearchDialog(
+            query = searchQuery,
+            results = searchResults,
+            isSearchingOnline = isSearchingOnline,
+            isNetworkOnline = isNetworkOnline,
+            offlinePlacesCount = offlinePlacesCount,
+            offlineRegionsCount = offlineMapRegions.size,
+            onQueryChange = { newQ ->
+                viewModel.updateSearchQuery(newQ, deviceSearchTargets)
+            },
+            onSelectResult = { place ->
+                groupViewModel?.clearMapFocusTarget()
+                viewModel.clearInspectedTrail()
+                viewModel.selectSearchResult(place)
+                showSearchDialog = false
+            },
+            onClearRecents = {
+                viewModel.clearRecentSearches(deviceSearchTargets)
+            },
+            onDismiss = { showSearchDialog = false }
         )
     }
 

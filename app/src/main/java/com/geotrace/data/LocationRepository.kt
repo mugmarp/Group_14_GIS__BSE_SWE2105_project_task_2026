@@ -11,6 +11,7 @@ import com.geotrace.model.GeofenceZone
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineMapRegion
+import com.geotrace.model.OfflinePlacePoi
 import com.geotrace.model.SpeedUnit
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
@@ -62,6 +63,9 @@ class LocationRepository(private val context: Context) {
 
     private val _offlineMapRegions = MutableStateFlow<List<OfflineMapRegion>>(emptyList())
     val offlineMapRegions: StateFlow<List<OfflineMapRegion>> = _offlineMapRegions.asStateFlow()
+
+    private val _offlinePlacesCount = MutableStateFlow(0)
+    val offlinePlacesCount: StateFlow<Int> = _offlinePlacesCount.asStateFlow()
 
     private val prefs = context.getSharedPreferences("geotrace_prefs", Context.MODE_PRIVATE)
 
@@ -1255,6 +1259,95 @@ class LocationRepository(private val context: Context) {
             }
         }
         _offlineMapRegions.value = list
+        refreshOfflinePlacesCountInternal()
+    }
+
+    private fun refreshOfflinePlacesCountInternal() {
+        try {
+            val db = dbHelper.readableDatabase
+            db.rawQuery("SELECT COUNT(*) FROM ${LocationDbHelper.TABLE_OFFLINE_PLACES}", null).use { c ->
+                if (c.moveToFirst()) {
+                    _offlinePlacesCount.value = c.getInt(0)
+                }
+            }
+        } catch (_: Exception) {
+            _offlinePlacesCount.value = 0
+        }
+    }
+
+    suspend fun saveOfflinePlaces(regionId: String, places: List<OfflinePlacePoi>) = withContext(Dispatchers.IO) {
+        val db = dbHelper.writableDatabase
+        db.beginTransaction()
+        try {
+            db.delete(LocationDbHelper.TABLE_OFFLINE_PLACES, "region_id = ?", arrayOf(regionId))
+            for (poi in places) {
+                val cv = ContentValues().apply {
+                    put("id", poi.id)
+                    put("region_id", poi.regionId)
+                    put("name", poi.name)
+                    put("category", poi.category)
+                    put("subtitle", poi.subtitle)
+                    put("latitude", poi.latitude)
+                    put("longitude", poi.longitude)
+                }
+                db.insertWithOnConflict(
+                    LocationDbHelper.TABLE_OFFLINE_PLACES,
+                    null,
+                    cv,
+                    android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        refreshOfflinePlacesCountInternal()
+    }
+
+    suspend fun searchOfflinePlaces(query: String, limit: Int = 25): List<OfflinePlacePoi> = withContext(Dispatchers.IO) {
+        val list = mutableListOf<OfflinePlacePoi>()
+        val trimmed = query.trim()
+        val db = dbHelper.readableDatabase
+        val cursor = if (trimmed.isBlank()) {
+            db.query(
+                LocationDbHelper.TABLE_OFFLINE_PLACES,
+                null,
+                null,
+                null,
+                null,
+                null,
+                "name ASC",
+                limit.toString()
+            )
+        } else {
+            val likeArg = "%$trimmed%"
+            db.query(
+                LocationDbHelper.TABLE_OFFLINE_PLACES,
+                null,
+                "name LIKE ? COLLATE NOCASE OR category LIKE ? COLLATE NOCASE OR subtitle LIKE ? COLLATE NOCASE",
+                arrayOf(likeArg, likeArg, likeArg),
+                null,
+                null,
+                "name ASC",
+                limit.toString()
+            )
+        }
+        cursor.use { c ->
+            while (c.moveToNext()) {
+                list.add(
+                    OfflinePlacePoi(
+                        id = c.getString(c.getColumnIndexOrThrow("id")),
+                        regionId = c.getString(c.getColumnIndexOrThrow("region_id")),
+                        name = c.getString(c.getColumnIndexOrThrow("name")),
+                        category = c.getString(c.getColumnIndexOrThrow("category")),
+                        subtitle = c.getString(c.getColumnIndexOrThrow("subtitle")),
+                        latitude = c.getDouble(c.getColumnIndexOrThrow("latitude")),
+                        longitude = c.getDouble(c.getColumnIndexOrThrow("longitude"))
+                    )
+                )
+            }
+        }
+        list
     }
 
     suspend fun saveOfflineMapRegion(region: OfflineMapRegion) = withContext(Dispatchers.IO) {
@@ -1284,12 +1377,14 @@ class LocationRepository(private val context: Context) {
 
     suspend fun deleteOfflineMapRegion(id: String) = withContext(Dispatchers.IO) {
         val db = dbHelper.writableDatabase
+        db.delete(LocationDbHelper.TABLE_OFFLINE_PLACES, "region_id = ?", arrayOf(id))
         db.delete(LocationDbHelper.TABLE_OFFLINE_MAPS, "id = ?", arrayOf(id))
         loadOfflineMapRegions()
     }
 
     suspend fun clearAllOfflineMapRegions() = withContext(Dispatchers.IO) {
         val db = dbHelper.writableDatabase
+        db.delete(LocationDbHelper.TABLE_OFFLINE_PLACES, null, null)
         db.delete(LocationDbHelper.TABLE_OFFLINE_MAPS, null, null)
         loadOfflineMapRegions()
     }
