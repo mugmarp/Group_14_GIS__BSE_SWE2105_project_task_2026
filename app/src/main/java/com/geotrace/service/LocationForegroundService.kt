@@ -52,6 +52,8 @@ class LocationForegroundService : Service() {
 
         const val ACTION_START = "ACTION_START_TRACKING"
         const val ACTION_UPDATE_MODE = "ACTION_UPDATE_MODE"
+        const val ACTION_PAUSE = "ACTION_PAUSE_TRACKING"
+        const val ACTION_RESUME = "ACTION_RESUME_TRACKING"
         const val ACTION_STOP = "ACTION_STOP_TRACKING"
         const val ACTION_START_PROTECTION = "ACTION_START_PROTECTION"
         const val ACTION_STOP_PROTECTION = "ACTION_STOP_PROTECTION"
@@ -113,6 +115,25 @@ class LocationForegroundService : Service() {
             } catch (_: Exception) {
                 // Service wasn't running
             }
+        }
+
+        fun pauseTracking(context: Context) {
+            if (!isServiceActive) return
+            val intent = Intent(context, LocationForegroundService::class.java).apply {
+                action = ACTION_PAUSE
+            }
+            try {
+                context.startService(intent)
+            } catch (_: Exception) {
+            }
+        }
+
+        fun resumeTracking(context: Context) {
+            if (!hasLocationPermission(context)) return
+            val intent = Intent(context, LocationForegroundService::class.java).apply {
+                action = ACTION_RESUME
+            }
+            safeStartForegroundService(context, intent)
         }
 
         fun startProtectionMode(context: Context): Boolean {
@@ -256,6 +277,19 @@ class LocationForegroundService : Service() {
                     ensureForeground(buildStatusNotification(currentMode))
                 }
             }
+            ACTION_PAUSE -> {
+                serviceScope.launch {
+                    repo.pauseCurrentSession()
+                    ensureForeground(buildStatusNotification(currentMode))
+                }
+            }
+            ACTION_RESUME -> {
+                serviceScope.launch {
+                    repo.resumeCurrentSession()
+                    isRecordingSession = true
+                    ensureForeground(buildStatusNotification(currentMode))
+                }
+            }
             ACTION_STOP -> {
                 stopTrackingOrDowngradeInternal()
             }
@@ -387,18 +421,27 @@ class LocationForegroundService : Service() {
         val calibratedPoint = repo.currentLocation.value
 
         if (activeSession != null || isRecordingSession) {
+            if (activeSession?.isPaused == true) {
+                return buildNotification(
+                    title = "Paused: ${activeSession.name}",
+                    content = "Dist: ${activeSession.formattedDistance} • ${activeSession.pointCount} pts • Tap Resume when ready",
+                    isRecordingUi = true,
+                    isPausedUi = true
+                )
+            }
             return if (calibratedPoint != null && activeSession != null) {
                 val speedKmh = calibratedPoint.speedKmh
                 val gait = calibratedPoint.gaitLabel
                 val distFormatted = activeSession.formattedDistance
                 val title = "Tracking (${mode.title}): ${activeSession.name}"
                 val content = "Dist: $distFormatted | Speed: ${String.format(Locale.US, "%.1f", speedKmh)} km/h ($gait) | Acc: ±${calibratedPoint.accuracy.toInt()}m"
-                buildNotification(title, content, isRecordingUi = true)
+                buildNotification(title, content, isRecordingUi = true, isPausedUi = false)
             } else {
                 buildNotification(
                     title = "GeoTrace Active (${mode.title})",
                     content = "Acquiring live location telemetry...",
-                    isRecordingUi = true
+                    isRecordingUi = true,
+                    isPausedUi = false
                 )
             }
         }
@@ -408,7 +451,8 @@ class LocationForegroundService : Service() {
         return buildNotification(
             title = "GeoTrace 24/7 Protection • $callsign",
             content = "$privacyTag • Locatable even when closed",
-            isRecordingUi = false
+            isRecordingUi = false,
+            isPausedUi = false
         )
     }
 
@@ -746,7 +790,12 @@ class LocationForegroundService : Service() {
         protectionHeartbeatJob = null
     }
 
-    private fun buildNotification(title: String, content: String, isRecordingUi: Boolean): Notification {
+    private fun buildNotification(
+        title: String,
+        content: String,
+        isRecordingUi: Boolean,
+        isPausedUi: Boolean = false
+    ): Notification {
         val openIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
@@ -764,9 +813,9 @@ class LocationForegroundService : Service() {
             actionIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val actionLabel = if (isRecordingUi) "Stop Recording" else "Pause Protection"
+        val actionLabel = if (isRecordingUi) "Stop & Save" else "Pause Protection"
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(content)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
@@ -775,7 +824,25 @@ class LocationForegroundService : Service() {
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .build()
+
+        if (isRecordingUi) {
+            val toggleIntent = Intent(this, LocationForegroundService::class.java).apply {
+                action = if (isPausedUi) ACTION_RESUME else ACTION_PAUSE
+            }
+            val pendingToggle = PendingIntent.getService(
+                this,
+                if (isPausedUi) 3 else 4,
+                toggleIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(
+                if (isPausedUi) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause,
+                if (isPausedUi) "Resume" else "Pause",
+                pendingToggle
+            )
+        }
+
+        return builder.build()
     }
 
     private fun createNotificationChannel() {

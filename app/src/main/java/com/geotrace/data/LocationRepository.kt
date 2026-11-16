@@ -14,12 +14,15 @@ import com.geotrace.model.OfflineMapRegion
 import com.geotrace.model.SpeedUnit
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
+import com.geotrace.model.TrailWaypoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.UUID
 import kotlin.math.atan2
@@ -31,6 +34,7 @@ class LocationRepository(private val context: Context) {
 
     private val dbHelper = LocationDbHelper(context)
     private val scope = CoroutineScope(Dispatchers.IO)
+    private val recordingMutex = Mutex()
 
     private val _currentLocation = MutableStateFlow<LocationPoint?>(null)
     val currentLocation: StateFlow<LocationPoint?> = _currentLocation.asStateFlow()
@@ -40,6 +44,9 @@ class LocationRepository(private val context: Context) {
 
     private val _activeTrailPoints = MutableStateFlow<List<LocationPoint>>(emptyList())
     val activeTrailPoints: StateFlow<List<LocationPoint>> = _activeTrailPoints.asStateFlow()
+
+    private val _activeWaypoints = MutableStateFlow<List<TrailWaypoint>>(emptyList())
+    val activeWaypoints: StateFlow<List<TrailWaypoint>> = _activeWaypoints.asStateFlow()
 
     private val _allSessions = MutableStateFlow<List<TrackingSession>>(emptyList())
     val allSessions: StateFlow<List<TrackingSession>> = _allSessions.asStateFlow()
@@ -196,10 +203,74 @@ class LocationRepository(private val context: Context) {
     private fun loadInitialData() {
         scope.launch {
             loadGeofences()
+            restoreActiveSessionIfAny()
             loadSessions()
             loadAlerts()
             loadOfflineMapRegions()
         }
+    }
+
+    private suspend fun restoreActiveSessionIfAny() = recordingMutex.withLock {
+        val db = dbHelper.writableDatabase
+        val openSessions = mutableListOf<TrackingSession>()
+        val cursor = db.query(
+            LocationDbHelper.TABLE_SESSIONS,
+            null,
+            "is_recording = 1",
+            null,
+            null,
+            null,
+            "start_time DESC"
+        )
+        cursor.use { c ->
+            while (c.moveToNext()) {
+                openSessions.add(readSessionFromCursor(c))
+            }
+        }
+        if (openSessions.isEmpty()) return@withLock
+
+        val latest = openSessions.first()
+        // Any older stale orphaned sessions get finalized cleanly to their last recorded point timestamp
+        if (openSessions.size > 1) {
+            for (orphan in openSessions.drop(1)) {
+                finalizeOrphanSession(db, orphan)
+            }
+        }
+
+        // Restore active session points and waypoints into StateFlows
+        val restoredPoints = queryPointsSync(db, latest.id)
+        val restoredWaypoints = queryWaypointsSync(db, latest.id)
+        // If active session was dead for > 20 minutes (e.g. crashed long ago with 0 foreground service), auto-finalize instead of running forever
+        val lastActivityMs = restoredPoints.lastOrNull()?.timestamp ?: latest.startTime
+        if (System.currentTimeMillis() - lastActivityMs > 20L * 60L * 1000L && !latest.isPaused) {
+            finalizeOrphanSession(db, latest, lastPointMs = lastActivityMs)
+        } else {
+            val synced = latest.copy(
+                pointCount = restoredPoints.size.coerceAtLeast(latest.pointCount),
+                waypointCount = restoredWaypoints.size.coerceAtLeast(latest.waypointCount)
+            )
+            _activeSession.value = synced
+            _activeTrailPoints.value = restoredPoints
+            _activeWaypoints.value = restoredWaypoints
+            stationaryAnchorPoint = restoredPoints.lastOrNull()
+        }
+    }
+
+    private fun finalizeOrphanSession(
+        db: android.database.sqlite.SQLiteDatabase,
+        session: TrackingSession,
+        lastPointMs: Long? = null
+    ) {
+        val points = queryPointsSync(db, session.id)
+        val endMs = lastPointMs ?: points.lastOrNull()?.timestamp ?: session.startTime
+        val cv = ContentValues().apply {
+            put("is_recording", 0)
+            put("is_paused", 0)
+            put("pause_started_ms", null as Long?)
+            put("end_time", endMs.coerceAtLeast(session.startTime))
+            put("point_count", points.size.coerceAtLeast(session.pointCount))
+        }
+        db.update(LocationDbHelper.TABLE_SESSIONS, cv, "id = ?", arrayOf(session.id))
     }
 
     suspend fun setTrackingMode(mode: TrackingMode) = withContext(Dispatchers.IO) {
@@ -218,41 +289,106 @@ class LocationRepository(private val context: Context) {
     }
 
     suspend fun startNewSession(name: String = "Track ${System.currentTimeMillis() % 10000}", mode: TrackingMode = _trackingMode.value): TrackingSession = withContext(Dispatchers.IO) {
-        val id = UUID.randomUUID().toString()
-        val session = TrackingSession(
-            id = id,
-            name = name,
-            startTime = System.currentTimeMillis(),
-            trackingMode = mode,
-            isRecording = true
-        )
+        recordingMutex.withLock {
+            val existing = _activeSession.value
+            if (existing != null) {
+                stopCurrentSessionInternal(existing)
+            }
+            val id = UUID.randomUUID().toString()
+            val session = TrackingSession(
+                id = id,
+                name = name.trim().ifBlank { "Field Trail" },
+                startTime = System.currentTimeMillis(),
+                trackingMode = mode,
+                isRecording = true,
+                isPaused = false,
+                pausedAccumulatedMs = 0L,
+                pauseStartedMs = null,
+                waypointCount = 0
+            )
 
-        val db = dbHelper.writableDatabase
-        val cv = ContentValues().apply {
-            put("id", session.id)
-            put("name", session.name)
-            put("start_time", session.startTime)
-            put("distance", 0.0)
-            put("avg_speed", 0.0)
-            put("max_speed", 0.0)
-            put("point_count", 0)
-            put("tracking_mode", session.trackingMode.name)
-            put("is_recording", 1)
+            val db = dbHelper.writableDatabase
+            val cv = ContentValues().apply {
+                put("id", session.id)
+                put("name", session.name)
+                put("start_time", session.startTime)
+                put("distance", 0.0)
+                put("avg_speed", 0.0)
+                put("max_speed", 0.0)
+                put("point_count", 0)
+                put("waypoint_count", 0)
+                put("tracking_mode", session.trackingMode.name)
+                put("is_recording", 1)
+                put("is_paused", 0)
+                put("paused_accumulated_ms", 0L)
+                putNull("pause_started_ms")
+            }
+            db.insert(LocationDbHelper.TABLE_SESSIONS, null, cv)
+
+            _activeSession.value = session
+            _activeTrailPoints.value = emptyList()
+            _activeWaypoints.value = emptyList()
+            smoothedSpeedMps = 0f
+            stationaryAnchorPoint = null
+            consecutiveSlowSamples = 0
+            loadSessionsInternal()
+            session
         }
-        db.insert(LocationDbHelper.TABLE_SESSIONS, null, cv)
+    }
 
-        _activeSession.value = session
-        _activeTrailPoints.value = emptyList()
-        smoothedSpeedMps = 0f
-        stationaryAnchorPoint = null
-        consecutiveSlowSamples = 0
-        loadSessions()
-        session
+    suspend fun pauseCurrentSession(): TrackingSession? = withContext(Dispatchers.IO) {
+        recordingMutex.withLock {
+            val current = _activeSession.value ?: return@withLock null
+            if (!current.isRecording || current.isPaused) return@withLock current
+            val now = System.currentTimeMillis()
+            val updated = current.copy(isPaused = true, pauseStartedMs = now)
+            val cv = ContentValues().apply {
+                put("is_paused", 1)
+                put("pause_started_ms", now)
+            }
+            dbHelper.writableDatabase.update(LocationDbHelper.TABLE_SESSIONS, cv, "id = ?", arrayOf(current.id))
+            _activeSession.value = updated
+            loadSessionsInternal()
+            updated
+        }
+    }
+
+    suspend fun resumeCurrentSession(): TrackingSession? = withContext(Dispatchers.IO) {
+        recordingMutex.withLock {
+            val current = _activeSession.value ?: return@withLock null
+            if (!current.isRecording || !current.isPaused) return@withLock current
+            val now = System.currentTimeMillis()
+            val extraPaused = current.pauseStartedMs?.let { (now - it).coerceAtLeast(0L) } ?: 0L
+            val newAccumulated = current.pausedAccumulatedMs + extraPaused
+            val updated = current.copy(
+                isPaused = false,
+                pausedAccumulatedMs = newAccumulated,
+                pauseStartedMs = null
+            )
+            val cv = ContentValues().apply {
+                put("is_paused", 0)
+                put("paused_accumulated_ms", newAccumulated)
+                putNull("pause_started_ms")
+            }
+            dbHelper.writableDatabase.update(LocationDbHelper.TABLE_SESSIONS, cv, "id = ?", arrayOf(current.id))
+            _activeSession.value = updated
+            stationaryAnchorPoint = _currentLocation.value
+            consecutiveSlowSamples = 0
+            loadSessionsInternal()
+            updated
+        }
     }
 
     suspend fun stopCurrentSession(): TrackingSession? = withContext(Dispatchers.IO) {
-        val current = _activeSession.value ?: return@withContext null
+        recordingMutex.withLock {
+            val current = _activeSession.value ?: return@withLock null
+            stopCurrentSessionInternal(current)
+        }
+    }
+    private suspend fun stopCurrentSessionInternal(current: TrackingSession): TrackingSession {
         val endTime = System.currentTimeMillis()
+        val finalPausedAcc = current.pausedAccumulatedMs +
+            (current.pauseStartedMs?.let { (endTime - it).coerceAtLeast(0L) } ?: 0L)
         val db = dbHelper.writableDatabase
 
         // Audit points in SQLite database using anchor-based accumulation so walking steps < 1.5m sum accurately
@@ -297,35 +433,45 @@ class LocationRepository(private val context: Context) {
         }
 
         val finalDistance = if (current.totalDistanceMeters > 0.0) current.totalDistanceMeters else dbDistance
-        val finalCount = if (current.pointCount > 0) current.pointCount else dbCount
-        val elapsedSec = ((endTime - current.startTime) / 1000.0).coerceAtLeast(1.0)
-        val finalAvgSpeed = (finalDistance / elapsedSec) * 3.6
+        val finalCount = if (dbCount > 0) dbCount else current.pointCount
+        val activeDurationSec = ((endTime - current.startTime - finalPausedAcc) / 1000.0).coerceAtLeast(1.0)
+        val finalAvgSpeed = (finalDistance / activeDurationSec) * 3.6
+        val finalWaypointCount = queryWaypointsSync(db, current.id).size.coerceAtLeast(current.waypointCount)
 
         val updated = current.copy(
             endTime = endTime,
             totalDistanceMeters = finalDistance,
             pointCount = finalCount,
+            waypointCount = finalWaypointCount,
             avgSpeedKmh = finalAvgSpeed,
-            isRecording = false
+            isRecording = false,
+            isPaused = false,
+            pausedAccumulatedMs = finalPausedAcc,
+            pauseStartedMs = null
         )
 
         val cv = ContentValues().apply {
             put("end_time", endTime)
             put("is_recording", 0)
+            put("is_paused", 0)
+            put("paused_accumulated_ms", finalPausedAcc)
+            putNull("pause_started_ms")
             put("distance", finalDistance)
             put("avg_speed", finalAvgSpeed)
             put("max_speed", updated.maxSpeedKmh)
             put("point_count", finalCount)
+            put("waypoint_count", finalWaypointCount)
         }
         db.update(LocationDbHelper.TABLE_SESSIONS, cv, "id = ?", arrayOf(current.id))
 
         _activeSession.value = null
         _activeTrailPoints.value = emptyList()
+        _activeWaypoints.value = emptyList()
         smoothedSpeedMps = 0f
         stationaryAnchorPoint = null
         consecutiveSlowSamples = 0
-        loadSessions()
-        updated
+        loadSessionsInternal()
+        return updated
     }
 
     suspend fun recordLocation(rawPoint: LocationPoint) = withContext(Dispatchers.IO) {
@@ -334,12 +480,14 @@ class LocationRepository(private val context: Context) {
             return@withContext
         }
 
-        val session = _activeSession.value
-        val prevPoint = if (session != null && session.isRecording) {
-            _activeTrailPoints.value.lastOrNull()
-        } else {
-            _currentLocation.value
-        }
+        val pointForGeofence: LocationPoint = recordingMutex.withLock {
+            val session = _activeSession.value
+            val isActivelyRecording = session != null && session.isRecording && !session.isPaused
+            val prevPoint = if (isActivelyRecording) {
+                _activeTrailPoints.value.lastOrNull() ?: _currentLocation.value
+            } else {
+                _currentLocation.value
+            }
 
         var additionalDistance = 0.0
         var candidateSpeed = rawPoint.speed
@@ -426,53 +574,131 @@ class LocationRepository(private val context: Context) {
             else -> (0.45f * candidateSpeed) + (0.55f * smoothedSpeedMps)
         }
 
-        val point = rawPoint.copy(speed = smoothedSpeedMps)
-        _currentLocation.value = point
+            val point = rawPoint.copy(speed = smoothedSpeedMps)
+            _currentLocation.value = point
 
-        if (session != null && session.isRecording) {
-            val db = dbHelper.writableDatabase
-            val cv = ContentValues().apply {
-                put("session_id", session.id)
-                put("latitude", point.latitude)
-                put("longitude", point.longitude)
-                put("accuracy", point.accuracy)
-                put("speed", point.speed)
-                put("altitude", point.altitude)
-                put("bearing", point.bearing)
-                put("provider", point.provider)
-                put("timestamp", point.timestamp)
+            if (isActivelyRecording && session != null) {
+                val lastSaved = _activeTrailPoints.value.lastOrNull()
+                val isFirstPoint = lastSaved == null
+                val elapsedSinceLastSavedMs = if (lastSaved != null) (point.timestamp - lastSaved.timestamp) else Long.MAX_VALUE
+                val accuracyImproved = lastSaved != null && (lastSaved.accuracy - point.accuracy >= 10f)
+                // Deduplicate stationary 1s bloat: persist immediately on movement/switch/first-fix/accuracy jump, else 15s stationary heartbeat
+                val shouldPersistTrackpoint = isFirstPoint ||
+                    additionalDistance > 0.0 ||
+                    isProviderSwitch ||
+                    accuracyImproved ||
+                    elapsedSinceLastSavedMs >= 15_000L
+
+                if (shouldPersistTrackpoint) {
+                    val db = dbHelper.writableDatabase
+                    val cv = ContentValues().apply {
+                        put("session_id", session.id)
+                        put("latitude", point.latitude)
+                        put("longitude", point.longitude)
+                        put("accuracy", point.accuracy)
+                        put("speed", point.speed)
+                        put("altitude", point.altitude)
+                        put("bearing", point.bearing)
+                        put("provider", point.provider)
+                        put("timestamp", point.timestamp)
+                    }
+                    db.insert(LocationDbHelper.TABLE_POINTS, null, cv)
+
+                    _activeTrailPoints.value = _activeTrailPoints.value + point
+
+                    val newDistance = session.totalDistanceMeters + additionalDistance
+                    val newPointCount = session.pointCount + 1
+                    val currentSpeedKmh = point.speedKmh.toDouble()
+                    val newMaxSpeed = if (additionalDistance > 0.0) maxOf(session.maxSpeedKmh, currentSpeedKmh) else session.maxSpeedKmh
+
+                    val elapsedSec = session.currentDurationSeconds(point.timestamp).toDouble().coerceAtLeast(1.0)
+                    val newAvgSpeed = (newDistance / elapsedSec) * 3.6
+
+                    val updatedSession = session.copy(
+                        totalDistanceMeters = newDistance,
+                        pointCount = newPointCount,
+                        maxSpeedKmh = newMaxSpeed,
+                        avgSpeedKmh = newAvgSpeed
+                    )
+                    _activeSession.value = updatedSession
+
+                    val updateCv = ContentValues().apply {
+                        put("distance", newDistance)
+                        put("avg_speed", newAvgSpeed)
+                        put("max_speed", newMaxSpeed)
+                        put("point_count", newPointCount)
+                    }
+                    db.update(LocationDbHelper.TABLE_SESSIONS, updateCv, "id = ?", arrayOf(session.id))
+                }
             }
-            db.insert(LocationDbHelper.TABLE_POINTS, null, cv)
-
-            _activeTrailPoints.value = _activeTrailPoints.value + point
-
-            val newDistance = session.totalDistanceMeters + additionalDistance
-            val newPointCount = session.pointCount + 1
-            val currentSpeedKmh = point.speedKmh.toDouble()
-            val newMaxSpeed = if (additionalDistance > 0.0) maxOf(session.maxSpeedKmh, currentSpeedKmh) else session.maxSpeedKmh
-
-            val elapsedSec = ((point.timestamp - session.startTime) / 1000.0).coerceAtLeast(1.0)
-            val newAvgSpeed = (newDistance / elapsedSec) * 3.6
-
-            val updatedSession = session.copy(
-                totalDistanceMeters = newDistance,
-                pointCount = newPointCount,
-                maxSpeedKmh = newMaxSpeed,
-                avgSpeedKmh = newAvgSpeed
-            )
-            _activeSession.value = updatedSession
-
-            val updateCv = ContentValues().apply {
-                put("distance", newDistance)
-                put("avg_speed", newAvgSpeed)
-                put("max_speed", newMaxSpeed)
-                put("point_count", newPointCount)
-            }
-            db.update(LocationDbHelper.TABLE_SESSIONS, updateCv, "id = ?", arrayOf(session.id))
+            point
         }
 
         // Check geofences with dual-radius hysteresis & accuracy gating
-        checkGeofences(point.latitude, point.longitude, point.accuracy, point.provider)
+        checkGeofences(pointForGeofence.latitude, pointForGeofence.longitude, pointForGeofence.accuracy, pointForGeofence.provider)
+    }
+
+    suspend fun dropWaypoint(name: String, note: String = ""): TrailWaypoint? = withContext(Dispatchers.IO) {
+        recordingMutex.withLock {
+            val session = _activeSession.value ?: return@withLock null
+            val loc = _currentLocation.value ?: return@withLock null
+            val wp = TrailWaypoint(
+                id = UUID.randomUUID().toString(),
+                sessionId = session.id,
+                name = name.trim().ifBlank { "Waypoint #${_activeWaypoints.value.size + 1}" },
+                note = note.trim(),
+                latitude = loc.latitude,
+                longitude = loc.longitude,
+                altitude = loc.altitude,
+                accuracy = loc.accuracy,
+                timestamp = System.currentTimeMillis()
+            )
+            val db = dbHelper.writableDatabase
+            val cv = ContentValues().apply {
+                put("id", wp.id)
+                put("session_id", wp.sessionId)
+                put("name", wp.name)
+                put("note", wp.note)
+                put("latitude", wp.latitude)
+                put("longitude", wp.longitude)
+                put("altitude", wp.altitude)
+                put("accuracy", wp.accuracy)
+                put("timestamp", wp.timestamp)
+            }
+            db.insert(LocationDbHelper.TABLE_WAYPOINTS, null, cv)
+
+            val newList = _activeWaypoints.value + wp
+            _activeWaypoints.value = newList
+            val updatedSession = session.copy(waypointCount = newList.size)
+            _activeSession.value = updatedSession
+            db.update(
+                LocationDbHelper.TABLE_SESSIONS,
+                ContentValues().apply { put("waypoint_count", newList.size) },
+                "id = ?",
+                arrayOf(session.id)
+            )
+            loadSessionsInternal()
+            wp
+        }
+    }
+
+    suspend fun renameSession(sessionId: String, newName: String) = withContext(Dispatchers.IO) {
+        val cleaned = newName.trim()
+        if (cleaned.isBlank()) return@withContext
+        recordingMutex.withLock {
+            val db = dbHelper.writableDatabase
+            db.update(
+                LocationDbHelper.TABLE_SESSIONS,
+                ContentValues().apply { put("name", cleaned) },
+                "id = ?",
+                arrayOf(sessionId)
+            )
+            val current = _activeSession.value
+            if (current != null && current.id == sessionId) {
+                _activeSession.value = current.copy(name = cleaned)
+            }
+            loadSessionsInternal()
+        }
     }
 
     fun updateCellTowers(towers: List<CellTowerInfo>) {
@@ -480,6 +706,10 @@ class LocationRepository(private val context: Context) {
     }
 
     suspend fun loadSessions() = withContext(Dispatchers.IO) {
+        loadSessionsInternal()
+    }
+
+    private fun loadSessionsInternal() {
         val db = dbHelper.readableDatabase
         val list = mutableListOf<TrackingSession>()
         val cursor: Cursor = db.query(
@@ -489,33 +719,50 @@ class LocationRepository(private val context: Context) {
         )
         cursor.use { c ->
             while (c.moveToNext()) {
-                val modeStr = c.getString(c.getColumnIndexOrThrow("tracking_mode"))
-                val mode = try {
-                    TrackingMode.valueOf(modeStr)
-                } catch (e: Exception) {
-                    TrackingMode.HIGH_ACCURACY
-                }
-                list.add(
-                    TrackingSession(
-                        id = c.getString(c.getColumnIndexOrThrow("id")),
-                        name = c.getString(c.getColumnIndexOrThrow("name")),
-                        startTime = c.getLong(c.getColumnIndexOrThrow("start_time")),
-                        endTime = if (c.isNull(c.getColumnIndexOrThrow("end_time"))) null else c.getLong(c.getColumnIndexOrThrow("end_time")),
-                        totalDistanceMeters = c.getDouble(c.getColumnIndexOrThrow("distance")),
-                        avgSpeedKmh = c.getDouble(c.getColumnIndexOrThrow("avg_speed")),
-                        maxSpeedKmh = c.getDouble(c.getColumnIndexOrThrow("max_speed")),
-                        pointCount = c.getInt(c.getColumnIndexOrThrow("point_count")),
-                        trackingMode = mode,
-                        isRecording = c.getInt(c.getColumnIndexOrThrow("is_recording")) == 1
-                    )
-                )
+                list.add(readSessionFromCursor(c))
             }
         }
         _allSessions.value = list
     }
 
+    private fun readSessionFromCursor(c: Cursor): TrackingSession {
+        val modeStr = c.getString(c.getColumnIndexOrThrow("tracking_mode"))
+        val mode = try {
+            TrackingMode.valueOf(modeStr)
+        } catch (_: Exception) {
+            TrackingMode.HIGH_ACCURACY
+        }
+        val wpIdx = c.getColumnIndex("waypoint_count")
+        val pausedIdx = c.getColumnIndex("is_paused")
+        val pausedAccIdx = c.getColumnIndex("paused_accumulated_ms")
+        val pauseStartIdx = c.getColumnIndex("pause_started_ms")
+        return TrackingSession(
+            id = c.getString(c.getColumnIndexOrThrow("id")),
+            name = c.getString(c.getColumnIndexOrThrow("name")),
+            startTime = c.getLong(c.getColumnIndexOrThrow("start_time")),
+            endTime = if (c.isNull(c.getColumnIndexOrThrow("end_time"))) null else c.getLong(c.getColumnIndexOrThrow("end_time")),
+            totalDistanceMeters = c.getDouble(c.getColumnIndexOrThrow("distance")),
+            avgSpeedKmh = c.getDouble(c.getColumnIndexOrThrow("avg_speed")),
+            maxSpeedKmh = c.getDouble(c.getColumnIndexOrThrow("max_speed")),
+            pointCount = c.getInt(c.getColumnIndexOrThrow("point_count")),
+            waypointCount = if (wpIdx >= 0) c.getInt(wpIdx) else 0,
+            trackingMode = mode,
+            isRecording = c.getInt(c.getColumnIndexOrThrow("is_recording")) == 1,
+            isPaused = pausedIdx >= 0 && c.getInt(pausedIdx) == 1,
+            pausedAccumulatedMs = if (pausedAccIdx >= 0) c.getLong(pausedAccIdx) else 0L,
+            pauseStartedMs = if (pauseStartIdx >= 0 && !c.isNull(pauseStartIdx)) c.getLong(pauseStartIdx) else null
+        )
+    }
+
     suspend fun getPointsForSession(sessionId: String): List<LocationPoint> = withContext(Dispatchers.IO) {
-        val db = dbHelper.readableDatabase
+        queryPointsSync(dbHelper.readableDatabase, sessionId)
+    }
+
+    suspend fun getWaypointsForSession(sessionId: String): List<TrailWaypoint> = withContext(Dispatchers.IO) {
+        queryWaypointsSync(dbHelper.readableDatabase, sessionId)
+    }
+
+    private fun queryPointsSync(db: android.database.sqlite.SQLiteDatabase, sessionId: String): List<LocationPoint> {
         val list = mutableListOf<LocationPoint>()
         val cursor = db.query(
             LocationDbHelper.TABLE_POINTS,
@@ -543,18 +790,58 @@ class LocationRepository(private val context: Context) {
                 )
             }
         }
-        list
+        return list
+    }
+
+    private fun queryWaypointsSync(db: android.database.sqlite.SQLiteDatabase, sessionId: String): List<TrailWaypoint> {
+        val list = mutableListOf<TrailWaypoint>()
+        val cursor = db.query(
+            LocationDbHelper.TABLE_WAYPOINTS,
+            null,
+            "session_id = ?",
+            arrayOf(sessionId),
+            null, null,
+            "timestamp ASC"
+        )
+        cursor.use { c ->
+            while (c.moveToNext()) {
+                list.add(
+                    TrailWaypoint(
+                        id = c.getString(c.getColumnIndexOrThrow("id")),
+                        sessionId = c.getString(c.getColumnIndexOrThrow("session_id")),
+                        name = c.getString(c.getColumnIndexOrThrow("name")),
+                        note = c.getString(c.getColumnIndexOrThrow("note")),
+                        latitude = c.getDouble(c.getColumnIndexOrThrow("latitude")),
+                        longitude = c.getDouble(c.getColumnIndexOrThrow("longitude")),
+                        altitude = c.getDouble(c.getColumnIndexOrThrow("altitude")),
+                        accuracy = c.getFloat(c.getColumnIndexOrThrow("accuracy")),
+                        timestamp = c.getLong(c.getColumnIndexOrThrow("timestamp"))
+                    )
+                )
+            }
+        }
+        return list
     }
 
     suspend fun deleteSession(sessionId: String) = withContext(Dispatchers.IO) {
-        val db = dbHelper.writableDatabase
-        db.delete(LocationDbHelper.TABLE_POINTS, "session_id = ?", arrayOf(sessionId))
-        db.delete(LocationDbHelper.TABLE_SESSIONS, "id = ?", arrayOf(sessionId))
-        if (_activeSession.value?.id == sessionId) {
-            _activeSession.value = null
-            _activeTrailPoints.value = emptyList()
+        recordingMutex.withLock {
+            val db = dbHelper.writableDatabase
+            db.beginTransaction()
+            try {
+                db.delete(LocationDbHelper.TABLE_WAYPOINTS, "session_id = ?", arrayOf(sessionId))
+                db.delete(LocationDbHelper.TABLE_POINTS, "session_id = ?", arrayOf(sessionId))
+                db.delete(LocationDbHelper.TABLE_SESSIONS, "id = ?", arrayOf(sessionId))
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            if (_activeSession.value?.id == sessionId) {
+                _activeSession.value = null
+                _activeTrailPoints.value = emptyList()
+                _activeWaypoints.value = emptyList()
+            }
+            loadSessionsInternal()
         }
-        loadSessions()
     }
 
     suspend fun loadGeofences() = withContext(Dispatchers.IO) {

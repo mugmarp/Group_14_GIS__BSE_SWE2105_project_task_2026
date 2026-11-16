@@ -35,12 +35,14 @@ import androidx.compose.material.icons.filled.Balance
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
@@ -110,6 +112,8 @@ fun MapScreen(
     val currentLocation by viewModel.currentLocation.collectAsState()
     val activeSession by viewModel.activeSession.collectAsState()
     val trailPoints by viewModel.activeTrailPoints.collectAsState()
+    val activeWaypoints by viewModel.activeWaypoints.collectAsState()
+    val inspectedTrail by viewModel.inspectedTrail.collectAsState()
     val trackingMode by viewModel.trackingMode.collectAsState()
     val geofenceZones by viewModel.geofenceZones.collectAsState()
     val settings by viewModel.settings.collectAsState()
@@ -146,16 +150,29 @@ fun MapScreen(
         nearbyPeers.isNotEmpty()
 
     var showStartDialog by remember { mutableStateOf(false) }
+    var showWaypointDialog by remember { mutableStateOf(false) }
+    var waypointNameInput by remember { mutableStateOf("") }
+    var waypointNoteInput by remember { mutableStateOf("") }
     var showProfileDialog by remember { mutableStateOf(false) }
     var showOfflineMapsDialog by remember { mutableStateOf(false) }
     var showDevicesSheet by remember { mutableStateOf(false) }
     var sessionNameInput by remember { mutableStateOf("") }
     var isHeaderExpanded by remember { mutableStateOf(false) }
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    var liveRecordingNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     androidx.compose.runtime.LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(15_000L)
             nowMs = System.currentTimeMillis()
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(activeSession?.id, activeSession?.isPaused) {
+        if (activeSession != null) {
+            liveRecordingNowMs = System.currentTimeMillis()
+            while (activeSession != null && activeSession?.isPaused == false) {
+                kotlinx.coroutines.delay(1000L)
+                liveRecordingNowMs = System.currentTimeMillis()
+            }
         }
     }
 
@@ -172,10 +189,16 @@ fun MapScreen(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
+        val displayedTrailPoints = if (activeSession != null) trailPoints else (inspectedTrail?.points ?: trailPoints)
+        val displayedWaypoints = if (activeSession != null) activeWaypoints else (inspectedTrail?.waypoints ?: activeWaypoints)
+        val inspectedSummary = inspectedTrail?.let {
+            "${it.session.formattedDistance} • ${it.session.formattedDuration} • ${it.points.size} pts • ${it.waypoints.size} wpts"
+        }
+
         // Persistent Full-Bleed Spatial Viewport with Google Maps-style Bottom Layer Sheet & Unified Inspect Card
         MapViewComposable(
             currentLocation = currentLocation,
-            trailPoints = trailPoints,
+            trailPoints = displayedTrailPoints,
             geofenceZones = geofenceZones,
             cellTowerLocation = cellTowerLocation,
             allCellTowers = allCellTowers,
@@ -185,11 +208,18 @@ fun MapScreen(
             nearbyPeers = nearbyPeers,
             focusedTarget = mapFocusTarget,
             isRecording = activeSession != null,
+            trailWaypoints = displayedWaypoints,
+            inspectedTrailName = if (activeSession == null) inspectedTrail?.session?.name else null,
+            inspectedTrailSummary = if (activeSession == null) inspectedSummary else null,
+            onClearInspectedTrail = {
+                viewModel.clearInspectedTrail()
+            },
             onClearFocusTarget = {
                 groupViewModel?.clearMapFocusTarget()
             },
             onRecenterSelf = {
                 groupViewModel?.clearMapFocusTarget()
+                viewModel.clearInspectedTrail()
                 viewModel.toggleFollowUser(true)
             },
             offlineRegionsCount = offlineMapRegions.size,
@@ -227,6 +257,7 @@ fun MapScreen(
                 shadowElevation = 3.dp,
                 modifier = Modifier
                     .fillMaxWidth()
+                    .clip(RoundedCornerShape(22.dp))
                     .animateContentSize()
                     .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(22.dp))
                     .testTag("telemetry_hud_card")
@@ -234,6 +265,7 @@ fun MapScreen(
                 Column {
                     // Top Accent Line (Telemetry Tier Indicator)
                     val accentLineColor = when {
+                        activeSession?.isPaused == true -> customColors.warning
                         activeSession != null -> colorScheme.error
                         currentLocation != null -> colorScheme.tertiary
                         else -> customColors.warning
@@ -271,7 +303,7 @@ fun MapScreen(
                                         .background(accentLineColor)
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Column {
+                                Column(modifier = Modifier.padding(end = 8.dp)) {
                                     Text(
                                         text = if (isHeaderExpanded) "GeoTrace Live Telemetry" else "GeoTrace",
                                         fontSize = 13.sp,
@@ -280,13 +312,20 @@ fun MapScreen(
                                     )
                                     Text(
                                         text = if (!isHeaderExpanded) {
+                                            // Collapsed HUD: show live sensor telemetry (speed, accuracy, trackpoints) — never duplicate bottom pill timer/distance
+                                            val fixText = if (currentLocation != null) {
+                                                "${String.format(Locale.US, "%.1f", compactSpeed)} ${settings.speedUnit.label} • ±${currentLocation?.accuracy?.toInt()}m"
+                                            } else {
+                                                "Awaiting fix"
+                                            }
                                             when {
-                                                activeSession != null -> "REC ${activeSession?.formattedDuration} • ${activeSession?.formattedDistance}"
-                                                currentLocation != null -> "${String.format(Locale.US, "%.1f", compactSpeed)} ${settings.speedUnit.label} • ±${currentLocation?.accuracy?.toInt()}m"
-                                                else -> "Awaiting fix"
+                                                activeSession?.isPaused == true -> "PAUSED • $fixText"
+                                                activeSession != null -> "$fixText • ${trailPoints.size} pts"
+                                                else -> fixText
                                             }
                                         } else {
                                             when {
+                                                activeSession?.isPaused == true -> "PAUSED • ${activeSession?.name}"
                                                 activeSession != null -> "RECORDING • ${activeSession?.name}"
                                                 trackingMode == TrackingMode.POWER_SAVER -> "CELLULAR ONLY • BASE STATION TELEMETRY"
                                                 currentLocation?.provider == "cellular" -> "CELLULAR FIX • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
@@ -315,11 +354,12 @@ fun MapScreen(
                                         color = customColors.surfaceContainerLow,
                                         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
                                         modifier = Modifier
+                                            .height(40.dp)
                                             .clickable { isHeaderExpanded = true }
                                             .testTag("toggle_header_btn")
                                     ) {
                                         Row(
-                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                            modifier = Modifier.padding(horizontal = 10.dp),
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
@@ -333,17 +373,17 @@ fun MapScreen(
                                                 imageVector = Icons.Default.KeyboardArrowDown,
                                                 contentDescription = "Expand Telemetry HUD",
                                                 tint = colorScheme.primary,
-                                                modifier = Modifier.size(15.dp)
+                                                modifier = Modifier.size(16.dp)
                                             )
                                         }
                                     }
                                 }
 
-                                // Hamburger Menu on the RIGHT
+                                // Hamburger Menu on the RIGHT (44dp accessible target)
                                 IconButton(
                                     onClick = onOpenMenu,
                                     modifier = Modifier
-                                        .size(36.dp)
+                                        .size(44.dp)
                                         .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
                                         .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
                                         .testTag("menu_btn")
@@ -440,11 +480,16 @@ fun MapScreen(
                                     Box(modifier = Modifier.width(1.dp).height(32.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
                                     Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
                                         TelemetryMetric(
-                                            label = "WAYPOINTS",
+                                            label = "TRACKPOINTS",
                                             value = "${trailPoints.size}",
                                             unit = "pts",
                                             valueColor = colorScheme.onSurface,
-                                            subtitle = if (activeSession?.isRecording == true) "Recording" else "Standby"
+                                            subtitle = when {
+                                                activeWaypoints.isNotEmpty() -> "${activeWaypoints.size} wpts"
+                                                activeSession?.isPaused == true -> "Paused"
+                                                activeSession?.isRecording == true -> "Auto-log"
+                                                else -> "Standby"
+                                            }
                                         )
                                     }
                                 }
@@ -453,21 +498,53 @@ fun MapScreen(
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
-                                        Text(
-                                            text = "ACTIVE SESSION: ${activeSession?.formattedDuration}",
-                                            fontSize = 11.sp,
-                                            color = colorScheme.onSurfaceVariant,
-                                            fontFamily = FontFamily.Monospace,
-                                            fontWeight = FontWeight.Medium
-                                        )
-                                        Text(
-                                            text = "${activeSession?.name}",
-                                            fontSize = 11.sp,
-                                            color = colorScheme.primary,
-                                            fontWeight = FontWeight.Bold
-                                        )
+                                        FilledTonalButton(
+                                            onClick = {
+                                                waypointNameInput = "Waypoint #${activeWaypoints.size + 1}"
+                                                waypointNoteInput = ""
+                                                showWaypointDialog = true
+                                            },
+                                            enabled = currentLocation != null,
+                                            shape = RoundedCornerShape(10.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(40.dp)
+                                                .testTag("drop_waypoint_hud_btn")
+                                        ) {
+                                            Icon(Icons.Default.Flag, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text("Pin Waypoint", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        }
+
+                                        val isPaused = activeSession?.isPaused == true
+                                        FilledTonalButton(
+                                            onClick = {
+                                                if (isPaused) viewModel.resumeTracking() else viewModel.pauseTracking()
+                                            },
+                                            shape = RoundedCornerShape(10.dp),
+                                            colors = ButtonDefaults.filledTonalButtonColors(
+                                                containerColor = if (isPaused) colorScheme.tertiaryContainer else colorScheme.surfaceVariant,
+                                                contentColor = if (isPaused) colorScheme.onTertiaryContainer else colorScheme.onSurfaceVariant
+                                            ),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .height(40.dp)
+                                                .testTag("pause_resume_hud_btn")
+                                        ) {
+                                            Icon(
+                                                imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = if (isPaused) "Resume Trail" else "Pause Trail",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
                                     }
                                 } else if (!isPickingGeofenceCenter) {
                                     Spacer(modifier = Modifier.height(8.dp))
@@ -480,7 +557,7 @@ fun MapScreen(
                                         shape = RoundedCornerShape(10.dp),
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(36.dp)
+                                            .height(40.dp)
                                             .testTag("start_track_hud_btn")
                                     ) {
                                         Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -844,62 +921,74 @@ fun MapScreen(
             }
         }
 
-        // Active Recording Pill (shown ONLY while actively recording; hidden in standby for zero bottom clutter)
+        // Slim Single-Row Recording Pill (shown ONLY while actively recording; leaves 78dp right clearance for Zoom FABs)
         if (!isPickingGeofenceCenter && activeSession != null) {
-            // Floating Recording Action Pill (Active Recording State)
+            val session = activeSession!!
+            val isPaused = session.isPaused
+            val accentPillColor = if (isPaused) customColors.warning else colorScheme.error
             Surface(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 12.dp)
+                    .align(Alignment.BottomStart)
+                    .padding(start = 14.dp, end = 78.dp, bottom = 14.dp)
                     .testTag("floating_recording_pill"),
                 shape = RoundedCornerShape(24.dp),
                 color = colorScheme.surface,
                 shadowElevation = 6.dp,
-                border = BorderStroke(1.5.dp, colorScheme.error.copy(alpha = 0.7f))
+                border = BorderStroke(1.5.dp, accentPillColor.copy(alpha = 0.7f))
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp)
+                    modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 4.dp, bottom = 4.dp)
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(9.dp)
+                            .size(8.dp)
                             .clip(CircleShape)
-                            .background(colorScheme.error)
+                            .background(accentPillColor)
+                    )
+                    Spacer(modifier = Modifier.width(7.dp))
+                    Text(
+                        text = "${session.formatDuration(liveRecordingNowMs)} • ${session.formattedDistance}",
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = accentPillColor,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Column {
-                        Text(
-                            text = "REC • ${activeSession?.formattedDuration}",
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.error
-                        )
-                        Text(
-                            text = activeSession?.formattedDistance ?: "0 m",
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colorScheme.onSurfaceVariant
+                    IconButton(
+                        onClick = {
+                            if (isPaused) viewModel.resumeTracking() else viewModel.pauseTracking()
+                        },
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("pause_resume_pill_btn")
+                    ) {
+                        Icon(
+                            imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                            contentDescription = if (isPaused) "Resume Recording" else "Pause Recording",
+                            tint = if (isPaused) colorScheme.tertiary else colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(19.dp)
                         )
                     }
-                    Spacer(modifier = Modifier.width(12.dp))
                     Button(
                         onClick = { viewModel.stopTracking() },
                         modifier = Modifier
-                            .height(38.dp)
+                            .height(36.dp)
                             .testTag("stop_track_btn"),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = colorScheme.error,
                             contentColor = colorScheme.onError
                         ),
-                        shape = RoundedCornerShape(19.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 0.dp)
+                        shape = RoundedCornerShape(18.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                     ) {
-                        Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(17.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            "STOP & SAVE",
+                            text = "Stop",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -907,6 +996,82 @@ fun MapScreen(
                 }
             }
         }
+    }
+
+    // Drop Manual Waypoint (<wpt>) Dialog
+    if (showWaypointDialog) {
+        val loc = currentLocation
+        AlertDialog(
+            onDismissRequest = { showWaypointDialog = false },
+            title = {
+                Text(
+                    "Pin Field Waypoint",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = colorScheme.onSurface
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = if (loc != null) {
+                            "Marks an individual GIS waypoint (<wpt>) at ${formatCoordinates(loc.latitude, loc.longitude, settings.coordinateFormat)} (±${loc.accuracy.toInt()}m)."
+                        } else {
+                            "Waiting for location fix..."
+                        },
+                        fontSize = 12.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = waypointNameInput,
+                        onValueChange = { waypointNameInput = it },
+                        label = { Text("Waypoint Name", fontSize = 12.sp) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("waypoint_name_input")
+                    )
+                    OutlinedTextField(
+                        value = waypointNoteInput,
+                        onValueChange = { waypointNoteInput = it },
+                        label = { Text("Field Note (Optional)", fontSize = 12.sp) },
+                        singleLine = true,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("waypoint_note_input")
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.dropWaypoint(waypointNameInput, waypointNoteInput) { wp ->
+                            if (wp != null) {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Pinned ${wp.name}",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                        showWaypointDialog = false
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.testTag("confirm_drop_waypoint_btn")
+                ) {
+                    Text("Save Waypoint", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showWaypointDialog = false }) {
+                    Text("Cancel", fontSize = 12.sp)
+                }
+            },
+            shape = RoundedCornerShape(16.dp),
+            containerColor = colorScheme.surface
+        )
     }
 
     // Positioning Engine & Battery Profile Modal Dialog
@@ -1354,8 +1519,8 @@ private data class ProfileInfo(
 
 private fun getProfileInfo(mode: TrackingMode, colorScheme: androidx.compose.material3.ColorScheme): ProfileInfo {
     return when (mode) {
-        TrackingMode.HIGH_ACCURACY -> ProfileInfo(Icons.Default.Bolt, "GNSS High-Accuracy (1s)", "~25mA", colorScheme.primary)
-        TrackingMode.BALANCED -> ProfileInfo(Icons.Default.Balance, "Balanced Fused (5s)", "~8mA", colorScheme.secondary)
+        TrackingMode.HIGH_ACCURACY -> ProfileInfo(Icons.Default.Bolt, "GNSS 1s", "~25mA", colorScheme.primary)
+        TrackingMode.BALANCED -> ProfileInfo(Icons.Default.Balance, "Fused 5s", "~8mA", colorScheme.secondary)
         TrackingMode.POWER_SAVER -> ProfileInfo(Icons.Default.CellTower, "Cell Only", "<2mA", colorScheme.tertiary)
     }
 }

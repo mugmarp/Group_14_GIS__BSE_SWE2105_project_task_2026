@@ -15,13 +15,19 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
 
     companion object {
         const val DATABASE_NAME = "gis_tracker.db"
-        const val DATABASE_VERSION = 3
+        const val DATABASE_VERSION = 4
 
         const val TABLE_POINTS = "location_points"
         const val TABLE_SESSIONS = "tracking_sessions"
+        const val TABLE_WAYPOINTS = "trail_waypoints"
         const val TABLE_GEOFENCES = "geofence_zones"
         const val TABLE_ALERTS = "geofence_alerts"
         const val TABLE_OFFLINE_MAPS = "offline_map_regions"
+    }
+
+    override fun onConfigure(db: SQLiteDatabase) {
+        super.onConfigure(db)
+        db.setForeignKeyConstraintsEnabled(true)
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -36,8 +42,12 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
                 avg_speed REAL NOT NULL DEFAULT 0.0,
                 max_speed REAL NOT NULL DEFAULT 0.0,
                 point_count INTEGER NOT NULL DEFAULT 0,
+                waypoint_count INTEGER NOT NULL DEFAULT 0,
                 tracking_mode TEXT NOT NULL,
-                is_recording INTEGER NOT NULL DEFAULT 0
+                is_recording INTEGER NOT NULL DEFAULT 0,
+                is_paused INTEGER NOT NULL DEFAULT 0,
+                paused_accumulated_ms INTEGER NOT NULL DEFAULT 0,
+                pause_started_ms INTEGER
             )
             """.trimIndent()
         )
@@ -61,6 +71,25 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         )
 
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_points_session ON $TABLE_POINTS(session_id, timestamp)")
+
+        db.execSQL(
+            """
+            CREATE TABLE $TABLE_WAYPOINTS (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                altitude REAL NOT NULL DEFAULT 0.0,
+                accuracy REAL NOT NULL DEFAULT 0.0,
+                timestamp INTEGER NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES $TABLE_SESSIONS(id) ON DELETE CASCADE
+            )
+            """.trimIndent()
+        )
+
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_waypoints_session ON $TABLE_WAYPOINTS(session_id, timestamp)")
 
         db.execSQL(
             """
@@ -134,6 +163,29 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
                 )
                 """.trimIndent()
             )
+        }
+        if (oldVersion < 4) {
+            db.execSQL("ALTER TABLE $TABLE_SESSIONS ADD COLUMN waypoint_count INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE $TABLE_SESSIONS ADD COLUMN is_paused INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE $TABLE_SESSIONS ADD COLUMN paused_accumulated_ms INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE $TABLE_SESSIONS ADD COLUMN pause_started_ms INTEGER")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS $TABLE_WAYPOINTS (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    note TEXT NOT NULL DEFAULT '',
+                    latitude REAL NOT NULL,
+                    longitude REAL NOT NULL,
+                    altitude REAL NOT NULL DEFAULT 0.0,
+                    accuracy REAL NOT NULL DEFAULT 0.0,
+                    timestamp INTEGER NOT NULL,
+                    FOREIGN KEY (session_id) REFERENCES $TABLE_SESSIONS(id) ON DELETE CASCADE
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_waypoints_session ON $TABLE_WAYPOINTS(session_id, timestamp)")
         }
     }
 }

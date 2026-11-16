@@ -72,6 +72,18 @@ data class LocationPoint(
         }
 }
 
+data class TrailWaypoint(
+    val id: String,
+    val sessionId: String,
+    val name: String,
+    val note: String = "",
+    val latitude: Double,
+    val longitude: Double,
+    val altitude: Double = 0.0,
+    val accuracy: Float = 0f,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 data class TrackingSession(
     val id: String,
     val name: String,
@@ -81,33 +93,42 @@ data class TrackingSession(
     val avgSpeedKmh: Double = 0.0,
     val maxSpeedKmh: Double = 0.0,
     val pointCount: Int = 0,
+    val waypointCount: Int = 0,
     val trackingMode: TrackingMode = TrackingMode.HIGH_ACCURACY,
-    val isRecording: Boolean = false
+    val isRecording: Boolean = false,
+    val isPaused: Boolean = false,
+    val pausedAccumulatedMs: Long = 0L,
+    val pauseStartedMs: Long? = null
 ) {
-    val durationSeconds: Long
-        get() {
-            val end = endTime ?: System.currentTimeMillis()
-            return ((end - startTime) / 1000).coerceAtLeast(0)
+    fun currentDurationSeconds(nowMs: Long = System.currentTimeMillis()): Long {
+        val effectiveEnd = endTime ?: pauseStartedMs ?: nowMs
+        val activeMs = (effectiveEnd - startTime - pausedAccumulatedMs).coerceAtLeast(0L)
+        return activeMs / 1000L
+    }
+
+    fun formatDuration(nowMs: Long = System.currentTimeMillis()): String {
+        val totalSec = currentDurationSeconds(nowMs)
+        val hours = totalSec / 3600
+        val minutes = (totalSec % 3600) / 60
+        val seconds = totalSec % 60
+        return if (hours > 0) {
+            String.format(java.util.Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+        } else {
+            String.format(java.util.Locale.US, "%02d:%02d", minutes, seconds)
         }
+    }
+
+    val durationSeconds: Long
+        get() = currentDurationSeconds()
 
     val formattedDuration: String
-        get() {
-            val totalSec = durationSeconds
-            val hours = totalSec / 3600
-            val minutes = (totalSec % 3600) / 60
-            val seconds = totalSec % 60
-            return if (hours > 0) {
-                String.format("%02d:%02d:%02d", hours, minutes, seconds)
-            } else {
-                String.format("%02d:%02d", minutes, seconds)
-            }
-        }
+        get() = formatDuration()
 
     val formattedDistance: String
         get() = if (totalDistanceMeters >= 1000) {
-            String.format("%.2f km", totalDistanceMeters / 1000.0)
+            String.format(java.util.Locale.US, "%.2f km", totalDistanceMeters / 1000.0)
         } else {
-            String.format("%.0f m", totalDistanceMeters)
+            String.format(java.util.Locale.US, "%.0f m", totalDistanceMeters)
         }
 
     val avgPaceMinPerKm: String

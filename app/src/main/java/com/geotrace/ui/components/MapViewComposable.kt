@@ -112,6 +112,10 @@ fun MapViewComposable(
     nearbyPeers: List<com.geotrace.model.P2PPeer> = emptyList(),
     focusedTarget: com.geotrace.model.MapFocusTarget? = null,
     isRecording: Boolean = false,
+    trailWaypoints: List<com.geotrace.model.TrailWaypoint> = emptyList(),
+    inspectedTrailName: String? = null,
+    inspectedTrailSummary: String? = null,
+    onClearInspectedTrail: (() -> Unit)? = null,
     onClearFocusTarget: (() -> Unit)? = null,
     onRecenterSelf: (() -> Unit)? = null,
     offlineRegionsCount: Int = 0,
@@ -163,6 +167,7 @@ fun MapViewComposable(
 
     // Cache member & peer avatar drawables to prevent per-second Bitmap allocations
     val avatarDrawableCache = remember { mutableMapOf<String, android.graphics.drawable.Drawable>() }
+    val waypointDrawableCache = remember { mutableMapOf<Int, android.graphics.drawable.Drawable>() }
 
     // Transparent street/place labels overlay for Satellite Hybrid mode
     val hybridLabelsProvider = remember(context) {
@@ -190,9 +195,9 @@ fun MapViewComposable(
         }
     }
 
-    // Auto-center map when first genuine location fix arrives, or if followUserLocation is enabled (and not locked on another device)
-    LaunchedEffect(currentLocation, settings.followUserLocation, focusedTarget) {
-        if (focusedTarget == null && currentLocation != null) {
+    // Auto-center map when first genuine location fix arrives, or if followUserLocation is enabled (and not locked on another device or inspecting a saved trail)
+    LaunchedEffect(currentLocation, settings.followUserLocation, focusedTarget, inspectedTrailName) {
+        if (inspectedTrailName == null && focusedTarget == null && currentLocation != null) {
             if (!hasCenteredOnFirstFix || settings.followUserLocation) {
                 mapViewRef?.controller?.animateTo(
                     GeoPoint(currentLocation.latitude, currentLocation.longitude),
@@ -202,6 +207,27 @@ fun MapViewComposable(
                 hasCenteredOnFirstFix = true
             }
         }
+    }
+
+    // Zoom to inspected saved trail when selected from History
+    LaunchedEffect(inspectedTrailName, trailPoints.size, trailWaypoints.size, mapViewRef) {
+        val map = mapViewRef ?: return@LaunchedEffect
+        if (inspectedTrailName == null) return@LaunchedEffect
+        val geoPts = trailPoints.map { GeoPoint(it.latitude, it.longitude) } +
+            trailWaypoints.map { GeoPoint(it.latitude, it.longitude) }
+        if (geoPts.size >= 2) {
+            val box = BoundingBox.fromGeoPointsSafe(geoPts)
+            map.post {
+                try {
+                    map.zoomToBoundingBox(box, true, 120)
+                } catch (_: Exception) {
+                    map.controller.animateTo(geoPts.first(), 16.5, 700L)
+                }
+            }
+        } else if (geoPts.size == 1) {
+            map.controller.animateTo(geoPts.first(), 17.0, 700L)
+        }
+        hasCenteredOnFirstFix = true
     }
 
     // Pan & zoom smoothly onto a requested remote device, group member, or P2P peer
@@ -355,6 +381,30 @@ fun MapViewComposable(
                         }
                     }
                     map.overlays.add(endMarker)
+                }
+
+                // 1b. Draw Manual Waypoints (<wpt> field POIs distinct from automated trackpoints)
+                val wpOrange = android.graphics.Color.parseColor("#EA580C")
+                trailWaypoints.forEachIndexed { index, wp ->
+                    if (isValidCoordinate(wp.latitude, wp.longitude)) {
+                        val iconBadge = waypointDrawableCache.getOrPut(index + 1) {
+                            createPinBadgeDrawable(context, "W${index + 1}", wpOrange)
+                        }
+                        val wpMarker = Marker(map).apply {
+                            position = GeoPoint(wp.latitude, wp.longitude)
+                            title = wp.name
+                            val notePrefix = if (wp.note.isNotBlank()) "${wp.note} • " else ""
+                            snippet = "${notePrefix}Acc ±${wp.accuracy.toInt()}m • ${String.format(Locale.US, "%.5f°, %.5f°", wp.latitude, wp.longitude)}"
+                            infoWindow = null
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            icon = iconBadge
+                            setOnMarkerClickListener { m, _ ->
+                                selectedMarkerInfo = MarkerInspectData(m.title ?: wp.name, m.snippet ?: "", "WAYPOINT")
+                                true
+                            }
+                        }
+                        map.overlays.add(wpMarker)
+                    }
                 }
 
                 // 2. Draw Current User Location Marker & Accuracy Circle
@@ -689,11 +739,17 @@ fun MapViewComposable(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Unified Bottom-Start Marker Inspect / Target Focus Card (single contextual card, zero overlap)
+        // Unified Bottom-Start Marker Inspect / Inspected Trail / Target Focus Card (single contextual card, zero overlap)
         val activeFocus = if (!isMapPickMode && selectedMarkerInfo == null) focusedTarget else null
-        val inspectCardTitle = selectedMarkerInfo?.title ?: activeFocus?.label
-        val inspectCardDetail = selectedMarkerInfo?.detail ?: activeFocus?.subtitle
-        val inspectCardBadge = selectedMarkerInfo?.badge ?: if (activeFocus != null) "LOCATING" else null
+        val isInspectingHistoryTrail = !isMapPickMode && selectedMarkerInfo == null && activeFocus == null && inspectedTrailName != null
+        val inspectCardTitle = selectedMarkerInfo?.title
+            ?: activeFocus?.label
+            ?: if (isInspectingHistoryTrail) inspectedTrailName else null
+        val inspectCardDetail = selectedMarkerInfo?.detail
+            ?: activeFocus?.subtitle
+            ?: if (isInspectingHistoryTrail) inspectedTrailSummary else null
+        val inspectCardBadge = selectedMarkerInfo?.badge
+            ?: if (activeFocus != null) "LOCATING" else if (isInspectingHistoryTrail) "SAVED TRAIL" else null
 
         if (inspectCardTitle != null && inspectCardBadge != null) {
             Surface(
@@ -706,7 +762,7 @@ fun MapViewComposable(
                     .padding(
                         start = 14.dp,
                         end = 80.dp,
-                        bottom = if (isRecording) 74.dp else 16.dp
+                        bottom = if (isRecording) 70.dp else 16.dp
                     )
                     .widthIn(max = 300.dp)
                     .testTag(if (selectedMarkerInfo != null) "marker_inspect_card" else "map_focus_banner")
@@ -767,13 +823,13 @@ fun MapViewComposable(
                     }
                     IconButton(
                         onClick = {
-                            if (selectedMarkerInfo != null) {
-                                selectedMarkerInfo = null
-                            } else {
-                                onClearFocusTarget?.invoke()
+                            when {
+                                selectedMarkerInfo != null -> selectedMarkerInfo = null
+                                activeFocus != null -> onClearFocusTarget?.invoke()
+                                isInspectingHistoryTrail -> onClearInspectedTrail?.invoke()
                             }
                         },
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(40.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,

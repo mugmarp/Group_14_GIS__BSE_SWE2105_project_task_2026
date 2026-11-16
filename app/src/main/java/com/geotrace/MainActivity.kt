@@ -329,7 +329,20 @@ fun MainAppScreen(
                 )
                 Screen.HISTORY -> HistoryScreen(
                     viewModel = viewModel,
-                    onNavigateBack = { currentScreen = Screen.MAP }
+                    onNavigateBack = { currentScreen = Screen.MAP },
+                    onViewTrailOnMap = { session ->
+                        viewModel.inspectSessionOnMap(session) { hasData ->
+                            if (hasData) {
+                                currentScreen = Screen.MAP
+                            } else {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "No coordinates logged in this trail yet.",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    }
                 )
                 Screen.RESEARCH -> ResearchAnalysisScreen(
                     viewModel = viewModel,

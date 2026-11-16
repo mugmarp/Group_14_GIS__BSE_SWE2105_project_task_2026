@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.geotrace.LocationTrackerApp
+import com.geotrace.data.export.ExportFormat
 import com.geotrace.data.export.TrackExporter
 import com.geotrace.model.CellTowerInfo
 import com.geotrace.model.GeofenceCategory
@@ -16,6 +17,7 @@ import com.geotrace.model.OfflineDownloadProgress
 import com.geotrace.model.OfflineMapRegion
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
+import com.geotrace.model.TrailWaypoint
 import com.geotrace.service.LocationForegroundService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -37,6 +39,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val currentLocation: StateFlow<LocationPoint?> = repository.currentLocation
     val activeSession: StateFlow<TrackingSession?> = repository.activeSession
     val activeTrailPoints: StateFlow<List<LocationPoint>> = repository.activeTrailPoints
+    val activeWaypoints: StateFlow<List<TrailWaypoint>> = repository.activeWaypoints
     val allSessions: StateFlow<List<TrackingSession>> = repository.allSessions
     val geofenceZones: StateFlow<List<GeofenceZone>> = repository.geofenceZones
     val recentAlerts = repository.recentAlerts
@@ -44,6 +47,24 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val trackingMode: StateFlow<TrackingMode> = repository.trackingMode
     val filteredJitterMeters: StateFlow<Double> = repository.filteredJitterMeters
     val filteredJitterCount: StateFlow<Int> = repository.filteredJitterCount
+
+    data class InspectedTrail(
+        val session: TrackingSession,
+        val points: List<LocationPoint>,
+        val waypoints: List<TrailWaypoint>
+    )
+
+    data class ExportPayload(
+        val sessionName: String,
+        val format: ExportFormat,
+        val content: String,
+        val suggestedFileName: String,
+        val trackpointCount: Int,
+        val waypointCount: Int
+    )
+
+    private val _inspectedTrail = MutableStateFlow<InspectedTrail?>(null)
+    val inspectedTrail: StateFlow<InspectedTrail?> = _inspectedTrail.asStateFlow()
 
     private val _cellTowerLocation = MutableStateFlow<com.geotrace.model.CellTowerLocation?>(null)
     val cellTowerLocation: StateFlow<com.geotrace.model.CellTowerLocation?> = _cellTowerLocation.asStateFlow()
@@ -429,10 +450,25 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     fun startTracking(sessionName: String, mode: TrackingMode) {
         viewModelScope.launch {
+            _inspectedTrail.value = null
             stopStandbyLocationUpdates()
             repository.setTrackingMode(mode)
             repository.startNewSession(sessionName, mode)
             LocationForegroundService.startService(getApplication(), mode)
+        }
+    }
+
+    fun pauseTracking() {
+        viewModelScope.launch {
+            repository.pauseCurrentSession()
+            LocationForegroundService.pauseTracking(getApplication())
+        }
+    }
+
+    fun resumeTracking() {
+        viewModelScope.launch {
+            repository.resumeCurrentSession()
+            LocationForegroundService.resumeTracking(getApplication())
         }
     }
 
@@ -441,6 +477,13 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             repository.stopCurrentSession()
             LocationForegroundService.stopTrackingOrDowngrade(getApplication())
             startStandbyLocationUpdates()
+        }
+    }
+
+    fun dropWaypoint(name: String, note: String = "", onResult: ((TrailWaypoint?) -> Unit)? = null) {
+        viewModelScope.launch {
+            val wp = repository.dropWaypoint(name, note)
+            onResult?.invoke(wp)
         }
     }
 
@@ -547,31 +590,67 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteSession(sessionId: String) {
         viewModelScope.launch {
+            if (_inspectedTrail.value?.session?.id == sessionId) {
+                _inspectedTrail.value = null
+            }
             repository.deleteSession(sessionId)
         }
     }
 
-    fun exportGpx(session: TrackingSession, onReady: (String) -> Unit) {
+    fun renameSession(sessionId: String, newName: String) {
         viewModelScope.launch {
-            val points = repository.getPointsForSession(session.id)
-            val gpx = TrackExporter.toGpx(session, points)
-            onReady(gpx)
+            repository.renameSession(sessionId, newName)
+            val currentInspected = _inspectedTrail.value
+            if (currentInspected != null && currentInspected.session.id == sessionId) {
+                _inspectedTrail.value = currentInspected.copy(
+                    session = currentInspected.session.copy(name = newName.trim())
+                )
+            }
         }
     }
 
-    fun exportKml(session: TrackingSession, onReady: (String) -> Unit) {
+    fun inspectSessionOnMap(session: TrackingSession, onResult: ((Boolean) -> Unit)? = null) {
         viewModelScope.launch {
             val points = repository.getPointsForSession(session.id)
-            val kml = TrackExporter.toKml(session, points)
-            onReady(kml)
+            val waypoints = repository.getWaypointsForSession(session.id)
+            if (points.isEmpty() && waypoints.isEmpty()) {
+                onResult?.invoke(false)
+                return@launch
+            }
+            toggleFollowUser(false)
+            _inspectedTrail.value = InspectedTrail(session, points, waypoints)
+            onResult?.invoke(true)
         }
     }
 
-    fun exportCsv(session: TrackingSession, onReady: (String) -> Unit) {
+    fun clearInspectedTrail() {
+        _inspectedTrail.value = null
+    }
+
+    fun exportSession(
+        session: TrackingSession,
+        format: ExportFormat,
+        onReady: (ExportPayload?) -> Unit
+    ) {
         viewModelScope.launch {
             val points = repository.getPointsForSession(session.id)
-            val csv = TrackExporter.toCsv(session, points)
-            onReady(csv)
+            val waypoints = repository.getWaypointsForSession(session.id)
+            if (points.isEmpty() && waypoints.isEmpty()) {
+                onReady(null)
+                return@launch
+            }
+            val content = TrackExporter.export(session, points, waypoints, format)
+            val fileName = TrackExporter.buildSafeFileName(session.name, format)
+            onReady(
+                ExportPayload(
+                    sessionName = session.name,
+                    format = format,
+                    content = content,
+                    suggestedFileName = fileName,
+                    trackpointCount = points.size,
+                    waypointCount = waypoints.size
+                )
+            )
         }
     }
 
