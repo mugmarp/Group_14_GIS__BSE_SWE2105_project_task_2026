@@ -39,14 +39,25 @@ object TrackExporter {
     }
 
     private fun formatIsoUtc(timestampMs: Long): String {
-        return isoFormatThreadLocal.get()?.format(Date(timestampMs)) ?: ""
+        val safeTs = timestampMs.takeIf { it > 0L } ?: System.currentTimeMillis()
+        return isoFormatThreadLocal.get()?.format(Date(safeTs)) ?: ""
+    }
+
+    private fun Double.finiteOr(fallback: Double = 0.0): Double = if (isFinite()) this else fallback
+
+    private fun Float.finiteOr(fallback: Float = 0f): Float = if (isFinite()) this else fallback
+
+    private fun isValidCoordinate(lat: Double, lon: Double): Boolean {
+        return lat.isFinite() && lon.isFinite() &&
+            lat in -90.0..90.0 && lon in -180.0..180.0 &&
+            (lat != 0.0 || lon != 0.0)
     }
 
     fun buildSafeFileName(sessionName: String, format: ExportFormat, nowMs: Long = System.currentTimeMillis()): String {
         val sanitizedName = sessionName
             .trim()
             .replace(Regex("[^A-Za-z0-9._-]+"), "_")
-            .trim('_')
+            .trim('_', '.')
             .take(40)
             .ifBlank { "geotrace_trail" }
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date(nowMs))
@@ -69,11 +80,13 @@ object TrackExporter {
         waypoints: List<TrailWaypoint>,
         format: ExportFormat
     ): String {
+        val validPoints = points.filter { isValidCoordinate(it.latitude, it.longitude) }
+        val validWaypoints = waypoints.filter { isValidCoordinate(it.latitude, it.longitude) }
         return when (format) {
-            ExportFormat.GPX -> toGpx(session, points, waypoints)
-            ExportFormat.KML -> toKml(session, points, waypoints)
-            ExportFormat.CSV -> toCsv(session, points, waypoints)
-            ExportFormat.GEOJSON -> toGeoJson(session, points, waypoints)
+            ExportFormat.GPX -> toGpx(session, validPoints, validWaypoints)
+            ExportFormat.KML -> toKml(session, validPoints, validWaypoints)
+            ExportFormat.CSV -> toCsv(session, validPoints, validWaypoints)
+            ExportFormat.GEOJSON -> toGeoJson(session, validPoints, validWaypoints)
         }
     }
 
@@ -82,6 +95,8 @@ object TrackExporter {
         points: List<LocationPoint>,
         waypoints: List<TrailWaypoint> = emptyList()
     ): String {
+        val validPoints = points.filter { isValidCoordinate(it.latitude, it.longitude) }
+        val validWaypoints = waypoints.filter { isValidCoordinate(it.latitude, it.longitude) }
         val sb = StringBuilder()
         sb.append("""<?xml version="1.0" encoding="UTF-8"?>""").append('\n')
         sb.append(
@@ -97,9 +112,9 @@ object TrackExporter {
         sb.append("    <time>${formatIsoUtc(session.startTime)}</time>\n")
         sb.append("  </metadata>\n")
 
-        for (w in waypoints) {
+        for (w in validWaypoints) {
             sb.append("""  <wpt lat="${w.latitude}" lon="${w.longitude}">""").append('\n')
-            sb.append("    <ele>${w.altitude}</ele>\n")
+            sb.append("    <ele>${w.altitude.finiteOr()}</ele>\n")
             sb.append("    <time>${formatIsoUtc(w.timestamp)}</time>\n")
             sb.append("    <name>${escapeXml(w.name)}</name>\n")
             if (w.note.isNotBlank()) {
@@ -107,26 +122,26 @@ object TrackExporter {
             }
             sb.append("    <sym>Flag</sym>\n")
             sb.append("    <extensions>\n")
-            sb.append("      <geotrace:accuracy>${w.accuracy}</geotrace:accuracy>\n")
+            sb.append("      <geotrace:accuracy>${w.accuracy.finiteOr()}</geotrace:accuracy>\n")
             sb.append("    </extensions>\n")
             sb.append("  </wpt>\n")
         }
 
-        if (points.isNotEmpty()) {
+        if (validPoints.isNotEmpty()) {
             sb.append("  <trk>\n")
             sb.append("    <name>${escapeXml(session.name)}</name>\n")
             sb.append("    <type>${escapeXml(session.trackingMode.name)}</type>\n")
-            val segments = segmentTrackPoints(points)
+            val segments = segmentTrackPoints(validPoints)
             for (segment in segments) {
                 sb.append("    <trkseg>\n")
                 for (p in segment) {
                     sb.append("""      <trkpt lat="${p.latitude}" lon="${p.longitude}">""").append('\n')
-                    sb.append("        <ele>${p.altitude}</ele>\n")
+                    sb.append("        <ele>${p.altitude.finiteOr()}</ele>\n")
                     sb.append("        <time>${formatIsoUtc(p.timestamp)}</time>\n")
                     sb.append("        <extensions>\n")
-                    sb.append("          <geotrace:speed_mps>${p.speed}</geotrace:speed_mps>\n")
-                    sb.append("          <geotrace:accuracy_m>${p.accuracy}</geotrace:accuracy_m>\n")
-                    sb.append("          <geotrace:bearing>${p.bearing}</geotrace:bearing>\n")
+                    sb.append("          <geotrace:speed_mps>${p.speed.finiteOr()}</geotrace:speed_mps>\n")
+                    sb.append("          <geotrace:accuracy_m>${p.accuracy.finiteOr()}</geotrace:accuracy_m>\n")
+                    sb.append("          <geotrace:bearing>${p.bearing.finiteOr()}</geotrace:bearing>\n")
                     sb.append("          <geotrace:provider>${escapeXml(p.provider)}</geotrace:provider>\n")
                     sb.append("        </extensions>\n")
                     sb.append("      </trkpt>\n")
@@ -145,13 +160,15 @@ object TrackExporter {
         points: List<LocationPoint>,
         waypoints: List<TrailWaypoint> = emptyList()
     ): String {
+        val validPoints = points.filter { isValidCoordinate(it.latitude, it.longitude) }
+        val validWaypoints = waypoints.filter { isValidCoordinate(it.latitude, it.longitude) }
         val sb = StringBuilder()
         sb.append("""<?xml version="1.0" encoding="UTF-8"?>""").append('\n')
         sb.append("""<kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">""").append('\n')
         sb.append("  <Document>\n")
         sb.append("    <name>${escapeXml(session.name)}</name>\n")
         sb.append(
-            "    <description>${escapeXml("GeoTrace Trail - Distance: ${session.formattedDistance}, Duration: ${session.formattedDuration}, Trackpoints: ${points.size}, Waypoints: ${waypoints.size}")}</description>\n"
+            "    <description>${escapeXml("GeoTrace Trail - Distance: ${session.formattedDistance}, Duration: ${session.formattedDuration}, Trackpoints: ${validPoints.size}, Waypoints: ${validWaypoints.size}")}</description>\n"
         )
         sb.append("    <Style id=\"trackStyle\">\n")
         sb.append("      <LineStyle>\n")
@@ -166,26 +183,26 @@ object TrackExporter {
         sb.append("      </IconStyle>\n")
         sb.append("    </Style>\n")
 
-        if (waypoints.isNotEmpty()) {
+        if (validWaypoints.isNotEmpty()) {
             sb.append("    <Folder>\n")
             sb.append("      <name>Waypoints</name>\n")
-            for (w in waypoints) {
+            for (w in validWaypoints) {
                 sb.append("      <Placemark>\n")
                 sb.append("        <name>${escapeXml(w.name)}</name>\n")
                 val desc = buildString {
                     if (w.note.isNotBlank()) append(w.note).append(" | ")
-                    append("Acc: ±${w.accuracy.toInt()}m | Time: ${formatIsoUtc(w.timestamp)}")
+                    append("Acc: ±${w.accuracy.finiteOr().toInt()}m | Time: ${formatIsoUtc(w.timestamp)}")
                 }
                 sb.append("        <description>${escapeXml(desc)}</description>\n")
                 sb.append("        <TimeStamp><when>${formatIsoUtc(w.timestamp)}</when></TimeStamp>\n")
                 sb.append("        <styleUrl>#waypointStyle</styleUrl>\n")
-                sb.append("        <Point><coordinates>${w.longitude},${w.latitude},${w.altitude}</coordinates></Point>\n")
+                sb.append("        <Point><coordinates>${w.longitude},${w.latitude},${w.altitude.finiteOr()}</coordinates></Point>\n")
                 sb.append("      </Placemark>\n")
             }
             sb.append("    </Folder>\n")
         }
 
-        val segments = segmentTrackPoints(points)
+        val segments = segmentTrackPoints(validPoints)
         if (segments.isNotEmpty()) {
             sb.append("    <Placemark>\n")
             sb.append("      <name>${escapeXml(session.name)}</name>\n")
@@ -214,7 +231,7 @@ object TrackExporter {
             sb.append("${indent}  <when>${formatIsoUtc(p.timestamp)}</when>\n")
         }
         for (p in segment) {
-            sb.append("${indent}  <gx:coord>${p.longitude} ${p.latitude} ${p.altitude}</gx:coord>\n")
+            sb.append("${indent}  <gx:coord>${p.longitude} ${p.latitude} ${p.altitude.finiteOr()}</gx:coord>\n")
         }
         sb.append("${indent}</gx:Track>\n")
     }
@@ -224,10 +241,12 @@ object TrackExporter {
         points: List<LocationPoint>,
         waypoints: List<TrailWaypoint> = emptyList()
     ): String {
+        val validPoints = points.filter { isValidCoordinate(it.latitude, it.longitude) }
+        val validWaypoints = waypoints.filter { isValidCoordinate(it.latitude, it.longitude) }
         val sb = StringBuilder()
         sb.append("RecordType,Label,Note,SessionName,Timestamp,ISO_Time,Latitude,Longitude,Altitude_m,Speed_mps,Speed_kmh,Accuracy_m,Bearing,Provider\n")
         val escapedSession = escapeCsv(session.name)
-        for (w in waypoints) {
+        for (w in validWaypoints) {
             sb.append("WAYPOINT,")
             sb.append("${escapeCsv(w.name)},")
             sb.append("${escapeCsv(w.note)},")
@@ -236,13 +255,13 @@ object TrackExporter {
             sb.append("${formatIsoUtc(w.timestamp)},")
             sb.append("${w.latitude},")
             sb.append("${w.longitude},")
-            sb.append("${w.altitude},")
+            sb.append("${w.altitude.finiteOr()},")
             sb.append("0.0,0.0,")
-            sb.append("${w.accuracy},")
+            sb.append("${w.accuracy.finiteOr()},")
             sb.append("0.0,")
             sb.append("manual_pin\n")
         }
-        for (p in points) {
+        for (p in validPoints) {
             sb.append("TRACKPOINT,")
             sb.append(",")
             sb.append(",")
@@ -251,11 +270,11 @@ object TrackExporter {
             sb.append("${formatIsoUtc(p.timestamp)},")
             sb.append("${p.latitude},")
             sb.append("${p.longitude},")
-            sb.append("${p.altitude},")
-            sb.append("${p.speed},")
-            sb.append("${p.speedKmh},")
-            sb.append("${p.accuracy},")
-            sb.append("${p.bearing},")
+            sb.append("${p.altitude.finiteOr()},")
+            sb.append("${p.speed.finiteOr()},")
+            sb.append("${p.speedKmh.finiteOr()},")
+            sb.append("${p.accuracy.finiteOr()},")
+            sb.append("${p.bearing.finiteOr()},")
             sb.append("${escapeCsv(p.provider)}\n")
         }
         return sb.toString()
@@ -266,16 +285,36 @@ object TrackExporter {
         points: List<LocationPoint>,
         waypoints: List<TrailWaypoint> = emptyList()
     ): String {
+        val validPoints = points.filter { isValidCoordinate(it.latitude, it.longitude) }
+        val validWaypoints = waypoints.filter { isValidCoordinate(it.latitude, it.longitude) }
         val features = JSONArray()
-        val segments = segmentTrackPoints(points)
-        if (segments.isNotEmpty()) {
-            val geometry = if (segments.size == 1) {
+        val allSegments = segmentTrackPoints(validPoints)
+        val lineSegments = allSegments.filter { it.size >= 2 }
+        val singlePointSegments = allSegments.filter { it.size == 1 }.flatten()
+
+        fun buildTrackProperties(pointCount: Int): JSONObject = JSONObject().apply {
+            put("featureType", "track")
+            put("sessionId", session.id)
+            put("name", session.name)
+            put("trackingMode", session.trackingMode.name)
+            put("startTimeUtc", formatIsoUtc(session.startTime))
+            session.endTime?.let { put("endTimeUtc", formatIsoUtc(it)) }
+            put("distanceMeters", session.totalDistanceMeters.finiteOr())
+            put("durationSeconds", session.durationSeconds)
+            put("avgSpeedKmh", session.avgSpeedKmh.finiteOr())
+            put("maxSpeedKmh", session.maxSpeedKmh.finiteOr())
+            put("trackpointCount", pointCount)
+        }
+
+        // RFC 7946 requires LineString (and each MultiLineString part) to have >= 2 positions
+        if (lineSegments.isNotEmpty()) {
+            val geometry = if (lineSegments.size == 1) {
                 val coords = JSONArray().apply {
-                    segments.first().forEach { p ->
+                    lineSegments.first().forEach { p ->
                         put(JSONArray().apply {
                             put(p.longitude)
                             put(p.latitude)
-                            put(p.altitude)
+                            put(p.altitude.finiteOr())
                         })
                     }
                 }
@@ -285,13 +324,13 @@ object TrackExporter {
                 }
             } else {
                 val multiCoords = JSONArray().apply {
-                    segments.forEach { seg ->
+                    lineSegments.forEach { seg ->
                         put(JSONArray().apply {
                             seg.forEach { p ->
                                 put(JSONArray().apply {
                                     put(p.longitude)
                                     put(p.latitude)
-                                    put(p.altitude)
+                                    put(p.altitude.finiteOr())
                                 })
                             }
                         })
@@ -302,33 +341,43 @@ object TrackExporter {
                     put("coordinates", multiCoords)
                 }
             }
-            val props = JSONObject().apply {
-                put("featureType", "track")
-                put("sessionId", session.id)
-                put("name", session.name)
-                put("trackingMode", session.trackingMode.name)
-                put("startTimeUtc", formatIsoUtc(session.startTime))
-                session.endTime?.let { put("endTimeUtc", formatIsoUtc(it)) }
-                put("distanceMeters", session.totalDistanceMeters)
-                put("durationSeconds", session.durationSeconds)
-                put("avgSpeedKmh", session.avgSpeedKmh)
-                put("maxSpeedKmh", session.maxSpeedKmh)
-                put("trackpointCount", points.size)
-            }
             features.put(JSONObject().apply {
                 put("type", "Feature")
                 put("geometry", geometry)
+                put("properties", buildTrackProperties(validPoints.size))
+            })
+        }
+
+        // Preserve any isolated 1-point track segment as a valid RFC 7946 Point feature
+        for (p in singlePointSegments) {
+            val geom = JSONObject().apply {
+                put("type", "Point")
+                put("coordinates", JSONArray().apply {
+                    put(p.longitude)
+                    put(p.latitude)
+                    put(p.altitude.finiteOr())
+                })
+            }
+            val props = buildTrackProperties(1).apply {
+                put("featureType", "track_point")
+                put("timestampUtc", formatIsoUtc(p.timestamp))
+                put("accuracyMeters", p.accuracy.finiteOr().toDouble())
+                put("provider", p.provider)
+            }
+            features.put(JSONObject().apply {
+                put("type", "Feature")
+                put("geometry", geom)
                 put("properties", props)
             })
         }
 
-        for (w in waypoints) {
+        for (w in validWaypoints) {
             val geom = JSONObject().apply {
                 put("type", "Point")
                 put("coordinates", JSONArray().apply {
                     put(w.longitude)
                     put(w.latitude)
-                    put(w.altitude)
+                    put(w.altitude.finiteOr())
                 })
             }
             val props = JSONObject().apply {
@@ -336,7 +385,7 @@ object TrackExporter {
                 put("id", w.id)
                 put("name", w.name)
                 if (w.note.isNotBlank()) put("note", w.note)
-                put("accuracyMeters", w.accuracy.toDouble())
+                put("accuracyMeters", w.accuracy.finiteOr().toDouble())
                 put("timestampUtc", formatIsoUtc(w.timestamp))
             }
             features.put(JSONObject().apply {
@@ -397,7 +446,8 @@ object TrackExporter {
         val timeStr = SimpleDateFormat("HH:mm:ss dd-MMM-yyyy", Locale.getDefault()).format(Date(point.timestamp))
 
         val cellDetails = if (cellTower != null) {
-            "\n📡 Cell Tower: ${cellTower.operatorDisplayName} | CID: ${cellTower.cid ?: "N/A"}, LAC/TAC: ${cellTower.lac ?: "N/A"}, Signal: ${cellTower.signalDbm ?: 0} dBm"
+            val sigLabel = cellTower.signalDbm?.let { "$it dBm" } ?: "N/A"
+            "\n📡 Cell Tower: ${cellTower.operatorDisplayName} | CID: ${cellTower.cid ?: "N/A"}, LAC/TAC: ${cellTower.lac ?: "N/A"}, Signal: $sigLabel"
         } else ""
 
         return """
@@ -411,16 +461,28 @@ object TrackExporter {
     }
 
     private fun escapeXml(input: String): String {
-        return input.replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-            .replace("'", "&apos;")
+        return buildString(input.length) {
+            for (ch in input) {
+                when (ch) {
+                    '&' -> append("&amp;")
+                    '<' -> append("&lt;")
+                    '>' -> append("&gt;")
+                    '"' -> append("&quot;")
+                    '\'' -> append("&apos;")
+                    else -> if (ch == '\t' || ch == '\n' || ch == '\r' || ch.code >= 0x20) append(ch)
+                }
+            }
+        }
     }
 
     private fun escapeCsv(input: String): String {
-        val needsQuotes = input.contains(',') || input.contains('"') || input.contains('\n') || input.contains('\r')
-        if (!needsQuotes) return input
-        return "\"${input.replace("\"", "\"\"")}\""
+        val cleaned = input.replace("\r\n", " ").replace('\n', ' ').replace('\r', ' ')
+        val safeValue = if (cleaned.isNotEmpty() && cleaned[0] in charArrayOf('=', '+', '-', '@', '\t')) {
+            "'$cleaned"
+        } else {
+            cleaned
+        }
+        val needsQuotes = safeValue.contains(',') || safeValue.contains('"') || safeValue != cleaned
+        return if (!needsQuotes) safeValue else "\"${safeValue.replace("\"", "\"\"")}\""
     }
 }

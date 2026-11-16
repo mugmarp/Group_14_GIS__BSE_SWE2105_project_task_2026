@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,8 +29,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Save
@@ -39,6 +42,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,29 +52,42 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.geotrace.data.export.ExportFormat
 import com.geotrace.data.export.TrackExporter
+import com.geotrace.model.CoordinateFormat
 import com.geotrace.model.SpeedUnit
 import com.geotrace.model.TrackingSession
+import com.geotrace.model.TrailWaypoint
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.TrackerViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -87,15 +104,30 @@ fun HistoryScreen(
     }
 
     val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val coroutineScope = rememberCoroutineScope()
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
     val sessions by viewModel.allSessions.collectAsState()
     val settings by viewModel.settings.collectAsState()
+    val exportingSessionId by viewModel.exportingSessionId.collectAsState()
+
+    val hasLiveActiveSession = remember(sessions) { sessions.any { it.isRecording && !it.isPaused } }
+    var liveNowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(hasLiveActiveSession) {
+        while (hasLiveActiveSession) {
+            liveNowMs = System.currentTimeMillis()
+            delay(1000L)
+        }
+    }
 
     var pendingExport by remember { mutableStateOf<TrackerViewModel.ExportPayload?>(null) }
     var sessionToDelete by remember { mutableStateOf<TrackingSession?>(null) }
     var sessionToRename by remember { mutableStateOf<TrackingSession?>(null) }
     var renameInput by remember { mutableStateOf("") }
+    var waypointDialogSession by remember { mutableStateOf<TrackingSession?>(null) }
+    var sessionWaypoints by remember { mutableStateOf<List<TrailWaypoint>>(emptyList()) }
+    var isLoadingWaypoints by remember { mutableStateOf(false) }
 
     // Native Storage Access Framework (SAF) saver for direct Downloads / device storage saving with true file extension
     val saveDocumentLauncher = rememberLauncherForActivityResult(
@@ -103,22 +135,29 @@ fun HistoryScreen(
     ) { uri ->
         val payload = pendingExport
         if (uri != null && payload != null) {
-            try {
-                context.contentResolver.openOutputStream(uri)?.use { stream ->
-                    stream.write(payload.content.toByteArray(Charsets.UTF_8))
+            coroutineScope.launch {
+                try {
+                    withContext(Dispatchers.IO) {
+                        val stream = context.contentResolver.openOutputStream(uri)
+                            ?: throw IOException("Storage provider unavailable")
+                        stream.use { out ->
+                            out.write(payload.content.toByteArray(Charsets.UTF_8))
+                            out.flush()
+                        }
+                    }
+                    Toast.makeText(
+                        context,
+                        "Saved ${payload.suggestedFileName}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    pendingExport = null
+                } catch (e: Exception) {
+                    Toast.makeText(
+                        context,
+                        "Save failed: ${e.localizedMessage ?: "Write error"}",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 }
-                Toast.makeText(
-                    context,
-                    "Saved ${payload.suggestedFileName}",
-                    Toast.LENGTH_SHORT
-                ).show()
-                pendingExport = null
-            } catch (e: Exception) {
-                Toast.makeText(
-                    context,
-                    "Save failed: ${e.localizedMessage ?: "Write error"}",
-                    Toast.LENGTH_SHORT
-                ).show()
             }
         }
     }
@@ -137,15 +176,24 @@ fun HistoryScreen(
         }
     }
 
+    fun openWaypointsDialog(session: TrackingSession) {
+        waypointDialogSession = session
+        sessionWaypoints = emptyList()
+        isLoadingWaypoints = true
+        viewModel.loadWaypointsForSession(session.id) { loaded ->
+            sessionWaypoints = loaded
+            isLoadingWaypoints = false
+        }
+    }
+
     Box(
         modifier = modifier
             .fillMaxSize()
             .background(colorScheme.background)
     ) {
         LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // Header
@@ -164,17 +212,21 @@ fun HistoryScreen(
                         }
                         Spacer(modifier = Modifier.width(4.dp))
                     }
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "Recorded Trails & Telemetry",
-                            fontSize = 18.sp,
+                            fontSize = 17.sp,
                             fontWeight = FontWeight.Bold,
-                            color = colorScheme.onBackground
+                            color = colorScheme.onBackground,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = "SQLite tracks with GPX, KML, CSV & GeoJSON exports",
                             fontSize = 11.sp,
-                            color = colorScheme.onSurfaceVariant
+                            color = colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -213,17 +265,18 @@ fun HistoryScreen(
                                 text = "Start recording on the Live Map screen to capture real outdoor GPS trajectories.",
                                 fontSize = 12.sp,
                                 color = colorScheme.onSurfaceVariant,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                textAlign = TextAlign.Center
                             )
                             if (onNavigateBack != null) {
                                 Spacer(modifier = Modifier.height(16.dp))
                                 Button(
                                     onClick = onNavigateBack,
-                                    shape = RoundedCornerShape(8.dp),
+                                    shape = RoundedCornerShape(10.dp),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = colorScheme.primary,
                                         contentColor = colorScheme.onPrimary
-                                    )
+                                    ),
+                                    modifier = Modifier.height(48.dp)
                                 ) {
                                     Icon(Icons.Default.Route, contentDescription = null, modifier = Modifier.size(16.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
@@ -237,9 +290,15 @@ fun HistoryScreen(
                 items(sessions, key = { it.id }) { session ->
                     SessionHistoryCard(
                         session = session,
+                        liveNowMs = liveNowMs,
                         speedUnit = settings.speedUnit,
+                        isExporting = exportingSessionId == session.id,
+                        exportBusy = exportingSessionId != null,
                         onViewOnMap = if (onViewTrailOnMap != null) {
                             { onViewTrailOnMap(session) }
+                        } else null,
+                        onViewWaypoints = if (session.waypointCount > 0) {
+                            { openWaypointsDialog(session) }
                         } else null,
                         onExport = { format -> triggerExport(session, format) },
                         onRename = {
@@ -251,6 +310,29 @@ fun HistoryScreen(
                 }
             }
         }
+    }
+
+    // Trail Waypoints Inspection & Management Dialog
+    if (waypointDialogSession != null) {
+        val targetSession = waypointDialogSession!!
+        TrailWaypointsDialog(
+            sessionName = targetSession.name,
+            waypoints = sessionWaypoints,
+            isLoading = isLoadingWaypoints,
+            coordinateFormat = settings.coordinateFormat,
+            onCopyCoordinates = { wp ->
+                val formatted = formatCoordinates(wp.latitude, wp.longitude, settings.coordinateFormat)
+                clipboard.setText(AnnotatedString(formatted))
+                Toast.makeText(context, "Copied ${wp.name} coordinates", Toast.LENGTH_SHORT).show()
+            },
+            onDeleteWaypoint = { wp ->
+                viewModel.deleteWaypoint(wp.id, targetSession.id) { remaining ->
+                    sessionWaypoints = remaining
+                    Toast.makeText(context, "Removed ${wp.name}", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onDismiss = { waypointDialogSession = null }
+        )
     }
 
     // Rename Trail Dialog
@@ -279,13 +361,17 @@ fun HistoryScreen(
                         viewModel.renameSession(target.id, renameInput)
                         sessionToRename = null
                     },
-                    enabled = renameInput.isNotBlank()
+                    enabled = renameInput.isNotBlank(),
+                    modifier = Modifier.height(48.dp)
                 ) {
                     Text("Save Name", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { sessionToRename = null }) {
+                TextButton(
+                    onClick = { sessionToRename = null },
+                    modifier = Modifier.height(48.dp)
+                ) {
                     Text("Cancel", fontSize = 12.sp)
                 }
             },
@@ -297,14 +383,23 @@ fun HistoryScreen(
     // Delete Confirmation Dialog
     if (sessionToDelete != null) {
         val target = sessionToDelete!!
+        val deleteMessage = if (target.isRecording) {
+            "\"${target.name}\" is currently recording. Deleting it will stop live tracking and permanently erase ${target.formattedDistance} (${target.pointCount} trackpoints, ${target.waypointCount} waypoints). This cannot be undone."
+        } else {
+            "Permanently delete \"${target.name}\" (${target.formattedDistance}, ${target.pointCount} trackpoints, ${target.waypointCount} waypoints)? This cannot be undone."
+        }
         AlertDialog(
             onDismissRequest = { sessionToDelete = null },
             title = {
-                Text("Delete Recorded Trail?", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                Text(
+                    text = if (target.isRecording) "Stop & Delete Active Trail?" else "Delete Recorded Trail?",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
             },
             text = {
                 Text(
-                    text = "Permanently delete \"${target.name}\" (${target.formattedDistance}, ${target.pointCount} trackpoints)? This cannot be undone.",
+                    text = deleteMessage,
                     fontSize = 13.sp,
                     color = colorScheme.onSurfaceVariant
                 )
@@ -318,13 +413,21 @@ fun HistoryScreen(
                     colors = ButtonDefaults.buttonColors(
                         containerColor = colorScheme.error,
                         contentColor = colorScheme.onError
-                    )
+                    ),
+                    modifier = Modifier.height(48.dp)
                 ) {
-                    Text("Delete", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    Text(
+                        text = if (target.isRecording) "Stop & Delete" else "Delete",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp
+                    )
                 }
             },
             dismissButton = {
-                TextButton(onClick = { sessionToDelete = null }) {
+                TextButton(
+                    onClick = { sessionToDelete = null },
+                    modifier = Modifier.height(48.dp)
+                ) {
                     Text("Cancel", fontSize = 12.sp)
                 }
             },
@@ -337,6 +440,11 @@ fun HistoryScreen(
     if (pendingExport != null) {
         val payload = pendingExport!!
         val previewScroll = rememberScrollState()
+        val previewSnippet = remember(payload) {
+            payload.content.take(4000) + if (payload.content.length > 4000) "\n... [preview truncated]" else ""
+        }
+        val sizeLabel = remember(payload.byteSize) { formatExportSize(payload.byteSize) }
+
         AlertDialog(
             onDismissRequest = { pendingExport = null },
             title = {
@@ -360,7 +468,7 @@ fun HistoryScreen(
             text = {
                 Column {
                     Text(
-                        text = "${payload.trackpointCount} trackpoints • ${payload.waypointCount} waypoints • ${payload.content.lines().size} lines",
+                        text = "${payload.trackpointCount} trackpoints • ${payload.waypointCount} waypoints • ${payload.lineCount} lines • $sizeLabel",
                         color = colorScheme.onSurfaceVariant,
                         fontSize = 11.sp
                     )
@@ -374,7 +482,7 @@ fun HistoryScreen(
                         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f))
                     ) {
                         Text(
-                            text = payload.content.take(4000) + if (payload.content.length > 4000) "\n... [preview truncated]" else "",
+                            text = previewSnippet,
                             color = colorScheme.primary,
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
@@ -395,7 +503,7 @@ fun HistoryScreen(
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier
                                 .weight(1f)
-                                .height(44.dp)
+                                .height(48.dp)
                                 .testTag("save_export_device_btn")
                         ) {
                             Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -405,8 +513,12 @@ fun HistoryScreen(
 
                         Button(
                             onClick = {
-                                shareExportFile(context, payload)
-                                pendingExport = null
+                                coroutineScope.launch {
+                                    val shared = shareExportFile(context, payload)
+                                    if (shared) {
+                                        pendingExport = null
+                                    }
+                                }
                             },
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = colorScheme.primary,
@@ -415,7 +527,7 @@ fun HistoryScreen(
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier
                                 .weight(1f)
-                                .height(44.dp)
+                                .height(48.dp)
                                 .testTag("share_export_btn")
                         ) {
                             Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -428,7 +540,8 @@ fun HistoryScreen(
             confirmButton = {
                 TextButton(
                     onClick = { pendingExport = null },
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.height(48.dp)
                 ) {
                     Text("Close", color = colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 }
@@ -440,16 +553,175 @@ fun HistoryScreen(
 }
 
 @Composable
+private fun TrailWaypointsDialog(
+    sessionName: String,
+    waypoints: List<TrailWaypoint>,
+    isLoading: Boolean,
+    coordinateFormat: CoordinateFormat,
+    onCopyCoordinates: (TrailWaypoint) -> Unit,
+    onDeleteWaypoint: (TrailWaypoint) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
+    val timeFormatter = remember { SimpleDateFormat("dd MMM HH:mm:ss", Locale.getDefault()) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(
+                    text = "Field Waypoints (${waypoints.size})",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = colorScheme.onSurface
+                )
+                Text(
+                    text = sessionName,
+                    fontSize = 11.sp,
+                    color = colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        },
+        text = {
+            when {
+                isLoading -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                    }
+                }
+                waypoints.isEmpty() -> {
+                    Text(
+                        text = "No saved waypoints remain in this trail.",
+                        fontSize = 12.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                }
+                else -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        waypoints.forEachIndexed { idx, wp ->
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = customColors.surfaceContainerLow,
+                                border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(start = 10.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "W${idx + 1} • ${wp.name}",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (wp.note.isNotBlank()) {
+                                            Text(
+                                                text = wp.note,
+                                                fontSize = 11.sp,
+                                                color = colorScheme.onSurfaceVariant,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = formatCoordinates(wp.latitude, wp.longitude, coordinateFormat),
+                                            fontSize = 10.sp,
+                                            fontFamily = FontFamily.Monospace,
+                                            color = colorScheme.primary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        val timeText = remember(wp.timestamp) { timeFormatter.format(Date(wp.timestamp)) }
+                                        Text(
+                                            text = "$timeText • Acc ±${wp.accuracy.toInt()}m • Alt ${wp.altitude.toInt()}m",
+                                            fontSize = 10.sp,
+                                            color = colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { onCopyCoordinates(wp) },
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.ContentCopy,
+                                            contentDescription = "Copy ${wp.name} coordinates",
+                                            tint = colorScheme.primary,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { onDeleteWaypoint(wp) },
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = "Delete ${wp.name}",
+                                            tint = colorScheme.error,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.height(48.dp)
+            ) {
+                Text("Close", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        shape = RoundedCornerShape(16.dp),
+        containerColor = colorScheme.surface
+    )
+}
+
+@Composable
 private fun SessionHistoryCard(
     session: TrackingSession,
+    liveNowMs: Long,
     speedUnit: SpeedUnit,
+    isExporting: Boolean,
+    exportBusy: Boolean,
     onViewOnMap: (() -> Unit)?,
+    onViewWaypoints: (() -> Unit)?,
     onExport: (ExportFormat) -> Unit,
     onRename: () -> Unit,
     onDeleteRequest: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
+    val dateStr = remember(session.startTime) {
+        SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(session.startTime))
+    }
+    val durationLabel = if (session.isRecording) session.formatDuration(liveNowMs) else session.formattedDuration
 
     Card(
         modifier = Modifier
@@ -475,7 +747,7 @@ private fun SessionHistoryCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 4.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 text = session.name,
@@ -502,12 +774,13 @@ private fun SessionHistoryCard(
                                 }
                             }
                         }
-                        val dateStr = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(session.startTime))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 text = dateStr,
                                 fontSize = 11.sp,
-                                color = colorScheme.onSurfaceVariant
+                                color = colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Surface(
@@ -528,7 +801,7 @@ private fun SessionHistoryCard(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(
                             onClick = onRename,
-                            modifier = Modifier.size(44.dp).testTag("rename_session_btn")
+                            modifier = Modifier.size(48.dp).testTag("rename_session_btn")
                         ) {
                             Icon(
                                 Icons.Default.Edit,
@@ -539,7 +812,7 @@ private fun SessionHistoryCard(
                         }
                         IconButton(
                             onClick = onDeleteRequest,
-                            modifier = Modifier.size(44.dp).testTag("delete_session_btn")
+                            modifier = Modifier.size(48.dp).testTag("delete_session_btn")
                         ) {
                             Icon(
                                 Icons.Default.Delete,
@@ -568,7 +841,7 @@ private fun SessionHistoryCard(
                     }
                     Box(modifier = Modifier.width(1.dp).height(30.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
                     Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
-                        MetricItem("DURATION", session.formattedDuration, colorScheme.secondary)
+                        MetricItem("DURATION", durationLabel, colorScheme.secondary)
                     }
                     Box(modifier = Modifier.width(1.dp).height(30.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
                     Box(modifier = Modifier.weight(1.1f).padding(start = 6.dp)) {
@@ -597,58 +870,122 @@ private fun SessionHistoryCard(
                     }
                 }
 
-                if (onViewOnMap != null) {
+                if (onViewOnMap != null || onViewWaypoints != null) {
                     Spacer(modifier = Modifier.height(10.dp))
-                    OutlinedButton(
-                        onClick = onViewOnMap,
-                        shape = RoundedCornerShape(10.dp),
-                        border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f)),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = colorScheme.primary.copy(alpha = 0.06f),
-                            contentColor = colorScheme.primary
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(42.dp)
-                            .testTag("view_trail_map_btn")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Inspect Trail on Map", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        if (onViewOnMap != null) {
+                            OutlinedButton(
+                                onClick = onViewOnMap,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f)),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = colorScheme.primary.copy(alpha = 0.06f),
+                                    contentColor = colorScheme.primary
+                                ),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                                modifier = Modifier
+                                    .weight(1.25f)
+                                    .height(48.dp)
+                                    .testTag("view_trail_map_btn")
+                            ) {
+                                Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = if (onViewWaypoints != null) "Inspect on Map" else "Inspect Trail on Map",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        if (onViewWaypoints != null) {
+                            OutlinedButton(
+                                onClick = onViewWaypoints,
+                                shape = RoundedCornerShape(10.dp),
+                                border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.45f)),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    containerColor = colorScheme.tertiary.copy(alpha = 0.06f),
+                                    contentColor = colorScheme.tertiary
+                                ),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("view_waypoints_btn")
+                            ) {
+                                Icon(Icons.Default.Flag, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = "Waypoints (${session.waypointCount})",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
                     }
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Export Buttons Row (44dp accessible height, real GIS extensions)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    ExportFormatButton(
-                        label = "GPX",
-                        color = colorScheme.primary,
-                        modifier = Modifier.weight(1f).testTag("export_gpx_btn"),
-                        onClick = { onExport(ExportFormat.GPX) }
-                    )
-                    ExportFormatButton(
-                        label = "KML",
-                        color = colorScheme.secondary,
-                        modifier = Modifier.weight(1f).testTag("export_kml_btn"),
-                        onClick = { onExport(ExportFormat.KML) }
-                    )
-                    ExportFormatButton(
-                        label = "CSV",
-                        color = colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f).testTag("export_csv_btn"),
-                        onClick = { onExport(ExportFormat.CSV) }
-                    )
-                    ExportFormatButton(
-                        label = "GeoJSON",
-                        color = colorScheme.tertiary,
-                        modifier = Modifier.weight(1.15f).testTag("export_geojson_btn"),
-                        onClick = { onExport(ExportFormat.GEOJSON) }
-                    )
+                if (isExporting) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Building GIS export...",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colorScheme.primary
+                        )
+                    }
+                } else {
+                    // Export Buttons Row (48dp accessible height, real GIS extensions)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        ExportFormatButton(
+                            label = "GPX",
+                            color = colorScheme.primary,
+                            enabled = !exportBusy,
+                            modifier = Modifier.weight(1f).testTag("export_gpx_btn"),
+                            onClick = { onExport(ExportFormat.GPX) }
+                        )
+                        ExportFormatButton(
+                            label = "KML",
+                            color = colorScheme.secondary,
+                            enabled = !exportBusy,
+                            modifier = Modifier.weight(1f).testTag("export_kml_btn"),
+                            onClick = { onExport(ExportFormat.KML) }
+                        )
+                        ExportFormatButton(
+                            label = "CSV",
+                            color = colorScheme.onSurfaceVariant,
+                            enabled = !exportBusy,
+                            modifier = Modifier.weight(1f).testTag("export_csv_btn"),
+                            onClick = { onExport(ExportFormat.CSV) }
+                        )
+                        ExportFormatButton(
+                            label = "GeoJSON",
+                            color = colorScheme.tertiary,
+                            enabled = !exportBusy,
+                            modifier = Modifier.weight(1.15f).testTag("export_geojson_btn"),
+                            onClick = { onExport(ExportFormat.GEOJSON) }
+                        )
+                    }
                 }
             }
         }
@@ -659,16 +996,18 @@ private fun SessionHistoryCard(
 private fun ExportFormatButton(
     label: String,
     color: Color,
+    enabled: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     OutlinedButton(
         onClick = onClick,
+        enabled = enabled,
         shape = RoundedCornerShape(8.dp),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = color),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
-        modifier = modifier.height(44.dp)
+        modifier = modifier.height(48.dp)
     ) {
         Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
     }
@@ -706,20 +1045,30 @@ private fun MetricItem(label: String, value: String, color: Color, subtitle: Str
     }
 }
 
-private fun shareExportFile(context: Context, payload: TrackerViewModel.ExportPayload) {
-    try {
-        val exportDir = File(context.cacheDir, "exports").apply { mkdirs() }
-        TrackExporter.cleanupOldExportCache(exportDir)
+private fun formatExportSize(bytes: Int): String {
+    return when {
+        bytes >= 1024 * 1024 -> String.format(Locale.US, "%.2f MB", bytes / (1024f * 1024f))
+        bytes >= 1024 -> String.format(Locale.US, "%.1f KB", bytes / 1024f)
+        else -> "$bytes B"
+    }
+}
 
-        val exportFile = File(exportDir, payload.suggestedFileName).apply {
-            writeText(payload.content)
+private suspend fun shareExportFile(context: Context, payload: TrackerViewModel.ExportPayload): Boolean {
+    return try {
+        val uri = withContext(Dispatchers.IO) {
+            val exportDir = File(context.cacheDir, "exports").apply { mkdirs() }
+            TrackExporter.cleanupOldExportCache(exportDir)
+
+            val exportFile = File(exportDir, payload.suggestedFileName).apply {
+                writeText(payload.content, Charsets.UTF_8)
+            }
+
+            androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                exportFile
+            )
         }
-
-        val uri = androidx.core.content.FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            exportFile
-        )
 
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = payload.format.mimeType
@@ -732,11 +1081,13 @@ private fun shareExportFile(context: Context, payload: TrackerViewModel.ExportPa
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         context.startActivity(chooser)
+        true
     } catch (e: Exception) {
         Toast.makeText(
             context,
             "Failed to share ${payload.format.shortCode}: ${e.localizedMessage ?: "Unknown error"}",
             Toast.LENGTH_SHORT
         ).show()
+        false
     }
 }

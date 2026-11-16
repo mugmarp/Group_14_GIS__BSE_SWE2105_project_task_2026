@@ -259,7 +259,11 @@ class LocationRepository(private val context: Context) {
         val restoredPoints = queryPointsSync(db, latest.id)
         val restoredWaypoints = queryWaypointsSync(db, latest.id)
         // If active session was dead for > 20 minutes (e.g. crashed long ago with 0 foreground service), auto-finalize instead of running forever
-        val lastActivityMs = restoredPoints.lastOrNull()?.timestamp ?: latest.startTime
+        val lastActivityMs = maxOf(
+            restoredPoints.lastOrNull()?.timestamp ?: 0L,
+            restoredWaypoints.lastOrNull()?.timestamp ?: 0L,
+            latest.startTime
+        )
         if (System.currentTimeMillis() - lastActivityMs > 20L * 60L * 1000L && !latest.isPaused) {
             finalizeOrphanSession(db, latest, lastPointMs = lastActivityMs)
         } else {
@@ -281,13 +285,28 @@ class LocationRepository(private val context: Context) {
         lastPointMs: Long? = null
     ) {
         val points = queryPointsSync(db, session.id)
-        val endMs = lastPointMs ?: points.lastOrNull()?.timestamp ?: session.startTime
+        val waypoints = queryWaypointsSync(db, session.id)
+        val lastEventMs = maxOf(
+            points.lastOrNull()?.timestamp ?: 0L,
+            waypoints.lastOrNull()?.timestamp ?: 0L,
+            session.pauseStartedMs ?: 0L,
+            session.startTime
+        )
+        val endMs = (lastPointMs ?: lastEventMs).coerceAtLeast(session.startTime)
+        val extraPaused = if (session.isPaused && session.pauseStartedMs != null) {
+            (endMs - session.pauseStartedMs).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        val finalPausedAcc = session.pausedAccumulatedMs + extraPaused
         val cv = ContentValues().apply {
             put("is_recording", 0)
             put("is_paused", 0)
-            put("pause_started_ms", null as Long?)
-            put("end_time", endMs.coerceAtLeast(session.startTime))
+            put("paused_accumulated_ms", finalPausedAcc)
+            putNull("pause_started_ms")
+            put("end_time", endMs)
             put("point_count", points.size.coerceAtLeast(session.pointCount))
+            put("waypoint_count", waypoints.size.coerceAtLeast(session.waypointCount))
         }
         db.update(LocationDbHelper.TABLE_SESSIONS, cv, "id = ?", arrayOf(session.id))
     }
@@ -737,6 +756,27 @@ class LocationRepository(private val context: Context) {
         }
     }
 
+    suspend fun deleteWaypoint(waypointId: String, sessionId: String): List<TrailWaypoint> = withContext(Dispatchers.IO) {
+        recordingMutex.withLock {
+            val db = dbHelper.writableDatabase
+            db.delete(LocationDbHelper.TABLE_WAYPOINTS, "id = ?", arrayOf(waypointId))
+            val remaining = queryWaypointsSync(db, sessionId)
+            db.update(
+                LocationDbHelper.TABLE_SESSIONS,
+                ContentValues().apply { put("waypoint_count", remaining.size) },
+                "id = ?",
+                arrayOf(sessionId)
+            )
+            val current = _activeSession.value
+            if (current != null && current.id == sessionId) {
+                _activeWaypoints.value = remaining
+                _activeSession.value = current.copy(waypointCount = remaining.size)
+            }
+            loadSessionsInternal()
+            remaining
+        }
+    }
+
     suspend fun renameSession(sessionId: String, newName: String) = withContext(Dispatchers.IO) {
         val cleaned = newName.trim()
         if (cleaned.isBlank()) return@withContext
@@ -878,7 +918,7 @@ class LocationRepository(private val context: Context) {
         return list
     }
 
-    suspend fun deleteSession(sessionId: String) = withContext(Dispatchers.IO) {
+    suspend fun deleteSession(sessionId: String): Boolean = withContext(Dispatchers.IO) {
         recordingMutex.withLock {
             val db = dbHelper.writableDatabase
             db.beginTransaction()
@@ -890,12 +930,18 @@ class LocationRepository(private val context: Context) {
             } finally {
                 db.endTransaction()
             }
-            if (_activeSession.value?.id == sessionId) {
+            val wasActive = _activeSession.value?.id == sessionId
+            if (wasActive) {
                 _activeSession.value = null
                 _activeTrailPoints.value = emptyList()
                 _activeWaypoints.value = emptyList()
+                smoothedSpeedMps = 0f
+                stationaryAnchorPoint = null
+                consecutiveSlowSamples = 0
+                resetAnchorOnNextFix = false
             }
             loadSessionsInternal()
+            wasActive
         }
     }
 

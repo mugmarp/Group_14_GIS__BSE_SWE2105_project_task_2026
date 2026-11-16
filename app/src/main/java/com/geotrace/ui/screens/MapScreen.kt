@@ -334,9 +334,10 @@ fun MapScreen(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        val displayedTrailPoints = if (activeSession != null) trailPoints else (inspectedTrail?.points ?: trailPoints)
-        val displayedWaypoints = if (activeSession != null) activeWaypoints else (inspectedTrail?.waypoints ?: activeWaypoints)
-        val inspectedSummary = inspectedTrail?.let {
+        val activeInspect = inspectedTrail
+        val displayedTrailPoints = activeInspect?.points ?: trailPoints
+        val displayedWaypoints = activeInspect?.waypoints ?: activeWaypoints
+        val inspectedSummary = activeInspect?.let {
             "${it.session.formattedDistance} • ${it.session.formattedDuration} • ${it.points.size} pts • ${it.waypoints.size} wpts"
         }
 
@@ -355,9 +356,9 @@ fun MapScreen(
             focusedTarget = resolvedFocusTarget,
             isRecording = activeSession != null,
             trailWaypoints = displayedWaypoints,
-            inspectedTrailId = if (activeSession == null) inspectedTrail?.session?.id else null,
-            inspectedTrailName = if (activeSession == null) inspectedTrail?.session?.name else null,
-            inspectedTrailSummary = if (activeSession == null) inspectedSummary else null,
+            inspectedTrailId = activeInspect?.session?.id,
+            inspectedTrailName = activeInspect?.session?.name,
+            inspectedTrailSummary = inspectedSummary,
             selectedSearchPin = selectedSearchPin,
             onClearSearchPin = {
                 viewModel.clearSelectedSearchPin()
@@ -1380,10 +1381,17 @@ fun MapScreen(
                                     "Pinned ${wp.name}",
                                     android.widget.Toast.LENGTH_SHORT
                                 ).show()
+                            } else {
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Cannot pin waypoint: no location fix available.",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
                             }
                         }
                         showWaypointDialog = false
                     },
+                    enabled = loc != null,
                     shape = RoundedCornerShape(8.dp),
                     modifier = Modifier.testTag("confirm_drop_waypoint_btn")
                 ) {
