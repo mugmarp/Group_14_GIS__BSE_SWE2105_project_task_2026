@@ -128,6 +128,9 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     @Volatile
     var savedMapZoom: Double? = null
 
+    private val _isMapFollowPaused = MutableStateFlow(false)
+    val isMapFollowPaused: StateFlow<Boolean> = _isMapFollowPaused.asStateFlow()
+
     private val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(application)
     private val systemLocationManager = application.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
     private var standbyCallback: com.google.android.gms.location.LocationCallback? = null
@@ -751,6 +754,13 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun toggleFollowUser(follow: Boolean) {
         repository.saveFollowUserLocation(follow)
         _settings.value = _settings.value.copy(followUserLocation = follow)
+        if (follow) {
+            _isMapFollowPaused.value = false
+        }
+    }
+
+    fun setMapFollowPaused(paused: Boolean) {
+        _isMapFollowPaused.value = paused
     }
 
     fun updateJitterThreshold(thresholdMeters: Float) {

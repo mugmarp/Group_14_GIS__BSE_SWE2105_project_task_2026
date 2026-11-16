@@ -1,7 +1,10 @@
 package com.geotrace.ui.components
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Paint
+import android.view.MotionEvent
+import android.view.ViewConfiguration
 import java.util.Locale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -25,13 +28,17 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.GpsNotFixed
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.SatelliteAlt
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
@@ -57,6 +64,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
@@ -88,7 +96,9 @@ import kotlin.math.sin
 private data class MarkerInspectData(
     val title: String,
     val detail: String,
-    val badge: String
+    val badge: String,
+    val latitude: Double? = null,
+    val longitude: Double? = null
 )
 
 private data class CachedGeofenceVisuals(
@@ -128,6 +138,8 @@ fun MapViewComposable(
     trailWaypoints: List<com.geotrace.model.TrailWaypoint> = emptyList(),
     inspectedTrailName: String? = null,
     inspectedTrailSummary: String? = null,
+    isFollowPaused: Boolean = false,
+    onFollowPausedByUser: (() -> Unit)? = null,
     onClearInspectedTrail: (() -> Unit)? = null,
     onClearFocusTarget: (() -> Unit)? = null,
     onRecenterSelf: (() -> Unit)? = null,
@@ -145,9 +157,11 @@ fun MapViewComposable(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnMapCoordinatePicked by rememberUpdatedState(onMapCoordinatePicked)
     val currentIsMapPickMode by rememberUpdatedState(isMapPickMode)
+    val currentOnFollowPausedByUser by rememberUpdatedState(onFollowPausedByUser)
 
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
@@ -158,8 +172,17 @@ fun MapViewComposable(
 
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
     var hasCenteredOnFirstFix by remember { mutableStateOf(initialMapCenter != null) }
+    var isUserInteractingWithMap by remember { mutableStateOf(false) }
     var showLayerMenu by remember { mutableStateOf(false) }
     var selectedMarkerInfo by remember { mutableStateOf<MarkerInspectData?>(null) }
+    var droppedInspectPin by remember { mutableStateOf<GeoPoint?>(null) }
+    var inspectCoordsCopied by remember { mutableStateOf(false) }
+    LaunchedEffect(inspectCoordsCopied, selectedMarkerInfo, focusedTarget?.id) {
+        if (inspectCoordsCopied) {
+            kotlinx.coroutines.delay(1600L)
+            inspectCoordsCopied = false
+        }
+    }
 
     val cachedGeofences = remember(geofenceZones, settings.geofenceHysteresisMeters) {
         val deltaHyst = settings.geofenceHysteresisMeters.toDouble().coerceAtLeast(0.0)
@@ -209,6 +232,9 @@ fun MapViewComposable(
     val trailEndDrawable = remember(context) {
         createPinBadgeDrawable(context, "E", android.graphics.Color.parseColor("#DC2626"))
     }
+    val droppedPinDrawable = remember(context) {
+        createPinBadgeDrawable(context, "•", android.graphics.Color.parseColor("#7C3AED"))
+    }
 
     // Cache member & peer avatar drawables to prevent per-second Bitmap allocations
     val avatarDrawableCache = remember { mutableMapOf<String, android.graphics.drawable.Drawable>() }
@@ -240,21 +266,24 @@ fun MapViewComposable(
         }
     }
 
-    // Auto-center map when first genuine location fix arrives, or if followUserLocation is enabled (and not locked on another device or inspecting a saved trail)
-    LaunchedEffect(currentLocation, settings.followUserLocation, focusedTarget, inspectedTrailName) {
+    // Auto-center map ONLY on first genuine fix, or when followUserLocation is enabled AND user hasn't manually panned/zoomed away.
+    // Never pass targetZoom on follow ticks (prevents fighting pinch-out / zoom-out gestures).
+    LaunchedEffect(currentLocation, settings.followUserLocation, isFollowPaused, focusedTarget, inspectedTrailName) {
         if (inspectedTrailName == null && focusedTarget == null && currentLocation != null) {
-            if (!hasCenteredOnFirstFix || settings.followUserLocation) {
-                val targetZoom = if (!hasCenteredOnFirstFix) {
-                    16.5
-                } else {
-                    mapViewRef?.zoomLevelDouble ?: initialMapZoom ?: 16.5
-                }
-                mapViewRef?.controller?.animateTo(
+            val map = mapViewRef
+            if (!hasCenteredOnFirstFix) {
+                map?.controller?.animateTo(
                     GeoPoint(currentLocation.latitude, currentLocation.longitude),
-                    targetZoom,
+                    16.5,
                     800L
                 )
                 hasCenteredOnFirstFix = true
+            } else if (settings.followUserLocation && !isFollowPaused && !isUserInteractingWithMap) {
+                if (map != null && !map.isAnimating) {
+                    map.controller.animateTo(
+                        GeoPoint(currentLocation.latitude, currentLocation.longitude)
+                    )
+                }
             }
         }
     }
@@ -328,6 +357,13 @@ fun MapViewComposable(
                     setTileSource(MapTileSources.baseTileSourceFor(settings.mapTileType))
                     setMultiTouchControls(true)
                     isTilesScaledToDpi = true
+                    minZoomLevel = 3.0
+                    isVerticalMapRepetitionEnabled = false
+                    setScrollableAreaLimitLatitude(
+                        MapView.getTileSystem().maxLatitude,
+                        -MapView.getTileSystem().maxLatitude,
+                        0
+                    )
                     zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
                     controller.setZoom(15.0)
 
@@ -345,6 +381,46 @@ fun MapViewComposable(
                         controller.setCenter(GeoPoint(0.0, 0.0))
                         controller.setZoom(3.0)
                     }
+
+                    // Detect manual pan/pinch gestures and immediately yield camera control to user
+                    val touchSlop = ViewConfiguration.get(ctx).scaledTouchSlop.toFloat()
+                    var downX = 0f
+                    var downY = 0f
+                    var hasTriggeredGesturePause = false
+                    @SuppressLint("ClickableViewAccessibility")
+                    setOnTouchListener { _, event ->
+                        when (event.actionMasked) {
+                            MotionEvent.ACTION_DOWN -> {
+                                downX = event.x
+                                downY = event.y
+                                hasTriggeredGesturePause = false
+                                isUserInteractingWithMap = true
+                            }
+                            MotionEvent.ACTION_POINTER_DOWN -> {
+                                isUserInteractingWithMap = true
+                                if (!hasTriggeredGesturePause) {
+                                    hasTriggeredGesturePause = true
+                                    controller.stopAnimation(false)
+                                    currentOnFollowPausedByUser?.invoke()
+                                }
+                            }
+                            MotionEvent.ACTION_MOVE -> {
+                                val dx = kotlin.math.abs(event.x - downX)
+                                val dy = kotlin.math.abs(event.y - downY)
+                                if (!hasTriggeredGesturePause && (dx > touchSlop || dy > touchSlop || event.pointerCount >= 2)) {
+                                    hasTriggeredGesturePause = true
+                                    controller.stopAnimation(false)
+                                    currentOnFollowPausedByUser?.invoke()
+                                }
+                            }
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                isUserInteractingWithMap = false
+                                hasTriggeredGesturePause = false
+                            }
+                        }
+                        false
+                    }
+
                     addMapListener(object : MapListener {
                         override fun onScroll(event: ScrollEvent?): Boolean {
                             onMapBoundsChanged?.invoke(boundingBox)
@@ -424,7 +500,13 @@ fun MapViewComposable(
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                         icon = trailStartDrawable
                         setOnMarkerClickListener { m, _ ->
-                            selectedMarkerInfo = MarkerInspectData(m.title ?: "Trail Start", m.snippet ?: "", "START")
+                            selectedMarkerInfo = MarkerInspectData(
+                                title = m.title ?: "Trail Start",
+                                detail = m.snippet ?: "",
+                                badge = "START",
+                                latitude = startPt.latitude,
+                                longitude = startPt.longitude
+                            )
                             true
                         }
                     }
@@ -438,7 +520,13 @@ fun MapViewComposable(
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                         icon = trailEndDrawable
                         setOnMarkerClickListener { m, _ ->
-                            selectedMarkerInfo = MarkerInspectData(m.title ?: "Trail End", m.snippet ?: "", "END")
+                            selectedMarkerInfo = MarkerInspectData(
+                                title = m.title ?: "Trail End",
+                                detail = m.snippet ?: "",
+                                badge = "END",
+                                latitude = endPt.latitude,
+                                longitude = endPt.longitude
+                            )
                             true
                         }
                     }
@@ -462,7 +550,13 @@ fun MapViewComposable(
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                             icon = iconBadge
                             setOnMarkerClickListener { m, _ ->
-                                selectedMarkerInfo = MarkerInspectData(m.title ?: wp.name, m.snippet ?: "", "WAYPOINT")
+                                selectedMarkerInfo = MarkerInspectData(
+                                    title = m.title ?: wp.name,
+                                    detail = m.snippet ?: "",
+                                    badge = "WAYPOINT",
+                                    latitude = wp.latitude,
+                                    longitude = wp.longitude
+                                )
                                 true
                             }
                         }
@@ -503,7 +597,9 @@ fun MapViewComposable(
                             selectedMarkerInfo = MarkerInspectData(
                                 title = m.title ?: "This Device",
                                 detail = m.snippet ?: "",
-                                badge = if (isCellularFix) "CELL" else "GNSS"
+                                badge = if (isCellularFix) "CELL" else "GNSS",
+                                latitude = currentLocation.latitude,
+                                longitude = currentLocation.longitude
                             )
                             true
                         }
@@ -585,7 +681,13 @@ fun MapViewComposable(
                                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                                 icon = neighborTowerDrawable
                                 setOnMarkerClickListener { m, _ ->
-                                    selectedMarkerInfo = MarkerInspectData(m.title ?: "Neighbor Mast", m.snippet ?: "", "RF")
+                                    selectedMarkerInfo = MarkerInspectData(
+                                        title = m.title ?: "Neighbor Mast",
+                                        detail = m.snippet ?: "",
+                                        badge = "RF",
+                                        latitude = tower.latitude,
+                                        longitude = tower.longitude
+                                    )
                                     true
                                 }
                             }
@@ -647,7 +749,13 @@ fun MapViewComposable(
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                             icon = servingTowerDrawable
                             setOnMarkerClickListener { m, _ ->
-                                selectedMarkerInfo = MarkerInspectData(m.title ?: "Serving Mast", m.snippet ?: "", "TOWER")
+                                selectedMarkerInfo = MarkerInspectData(
+                                    title = m.title ?: "Serving Mast",
+                                    detail = m.snippet ?: "",
+                                    badge = "TOWER",
+                                    latitude = servingTower.latitude,
+                                    longitude = servingTower.longitude
+                                )
                                 true
                             }
                         }
@@ -697,7 +805,13 @@ fun MapViewComposable(
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         icon = memberIcon
                         setOnMarkerClickListener { m, _ ->
-                            selectedMarkerInfo = MarkerInspectData(m.title ?: member.displayName, m.snippet ?: "", "GROUP")
+                            selectedMarkerInfo = MarkerInspectData(
+                                title = m.title ?: member.displayName,
+                                detail = m.snippet ?: "",
+                                badge = "GROUP",
+                                latitude = member.latitude,
+                                longitude = member.longitude
+                            )
                             true
                         }
                     }
@@ -724,7 +838,13 @@ fun MapViewComposable(
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         icon = devIcon
                         setOnMarkerClickListener { m, _ ->
-                            selectedMarkerInfo = MarkerInspectData(m.title ?: device.deviceName, m.snippet ?: "", "DEVICE")
+                            selectedMarkerInfo = MarkerInspectData(
+                                title = m.title ?: device.deviceName,
+                                detail = m.snippet ?: "",
+                                badge = "DEVICE",
+                                latitude = device.latitude,
+                                longitude = device.longitude
+                            )
                             true
                         }
                     }
@@ -749,17 +869,37 @@ fun MapViewComposable(
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         icon = peerIcon
                         setOnMarkerClickListener { m, _ ->
-                            selectedMarkerInfo = MarkerInspectData(m.title ?: peer.displayName, m.snippet ?: "", "P2P")
+                            selectedMarkerInfo = MarkerInspectData(
+                                title = m.title ?: peer.displayName,
+                                detail = m.snippet ?: "",
+                                badge = "P2P",
+                                latitude = peer.latitude,
+                                longitude = peer.longitude
+                            )
                             true
                         }
                     }
                     map.overlays.add(peerMarker)
                 }
 
-                // 7. Interactive map tap handler (coordinate picker or dismiss marker inspect card)
+                // 6b. Render user-dropped long-press inspection pin if present
+                droppedInspectPin?.let { pinPt ->
+                    val pinMarker = Marker(map).apply {
+                        position = pinPt
+                        title = "Dropped Pin"
+                        infoWindow = null
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                        icon = droppedPinDrawable
+                        setOnMarkerClickListener { _, _ -> true }
+                    }
+                    map.overlays.add(pinMarker)
+                }
+
+                // 7. Interactive map tap / long-press handler (coordinate picker, dismiss, or drop inspect pin)
                 val eventsOverlay = MapEventsOverlay(object : MapEventsReceiver {
                     override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
                         selectedMarkerInfo = null
+                        droppedInspectPin = null
                         if (currentIsMapPickMode && p != null) {
                             currentOnMapCoordinatePicked?.invoke(p.latitude, p.longitude)
                             return true
@@ -767,7 +907,23 @@ fun MapViewComposable(
                         return false
                     }
 
-                    override fun longPressHelper(p: GeoPoint?): Boolean = false
+                    override fun longPressHelper(p: GeoPoint?): Boolean {
+                        if (currentIsMapPickMode || p == null) return false
+                        droppedInspectPin = p
+                        val distStr = currentLocation?.let { cur ->
+                            val d = GeoPoint(cur.latitude, cur.longitude).distanceToAsDouble(p)
+                            if (d < 1000.0) " • ${d.toInt()}m away" else String.format(Locale.US, " • %.1fkm away", d / 1000.0)
+                        } ?: ""
+                        val coordStr = com.geotrace.ui.screens.formatCoordinates(p.latitude, p.longitude, settings.coordinateFormat)
+                        selectedMarkerInfo = MarkerInspectData(
+                            title = "Dropped Pin",
+                            detail = "$coordStr$distStr",
+                            badge = "PIN",
+                            latitude = p.latitude,
+                            longitude = p.longitude
+                        )
+                        return true
+                    }
                 })
                 map.overlays.add(eventsOverlay)
 
@@ -788,6 +944,10 @@ fun MapViewComposable(
         val inspectCardBadge = selectedMarkerInfo?.badge
             ?: if (activeFocus != null) "LOCATING" else if (isInspectingHistoryTrail) "SAVED TRAIL" else null
 
+        val inspectLat = selectedMarkerInfo?.latitude ?: activeFocus?.latitude
+        val inspectLon = selectedMarkerInfo?.longitude ?: activeFocus?.longitude
+        val hasInspectCoords = inspectLat != null && inspectLon != null && (inspectLat != 0.0 || inspectLon != 0.0)
+
         if (inspectCardTitle != null && inspectCardBadge != null) {
             Surface(
                 shape = RoundedCornerShape(16.dp),
@@ -801,7 +961,7 @@ fun MapViewComposable(
                         end = 80.dp,
                         bottom = if (isRecording) 70.dp else 16.dp
                     )
-                    .widthIn(max = 300.dp)
+                    .widthIn(max = 310.dp)
                     .testTag(if (selectedMarkerInfo != null) "marker_inspect_card" else "map_focus_banner")
             ) {
                 Row(
@@ -843,12 +1003,60 @@ fun MapViewComposable(
                             )
                         }
                     }
+                    if (hasInspectCoords) {
+                        IconButton(
+                            onClick = {
+                                com.geotrace.ui.screens.copyCoordinatesWithFeedback(
+                                    context = context,
+                                    haptic = haptic,
+                                    lat = inspectLat!!,
+                                    lon = inspectLon!!,
+                                    format = settings.coordinateFormat,
+                                    label = inspectCardTitle
+                                )
+                                inspectCoordsCopied = true
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("inspect_copy_coord_btn")
+                        ) {
+                            Icon(
+                                imageVector = if (inspectCoordsCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                contentDescription = "Copy Coordinates",
+                                tint = if (inspectCoordsCopied) colorScheme.tertiary else colorScheme.primary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = {
+                                com.geotrace.ui.screens.shareCoordinatesIntent(
+                                    context = context,
+                                    lat = inspectLat!!,
+                                    lon = inspectLon!!,
+                                    format = settings.coordinateFormat,
+                                    title = inspectCardTitle
+                                )
+                            },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("inspect_share_coord_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Share,
+                                contentDescription = "Share Coordinates",
+                                tint = colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
                     if (selectedMarkerInfo == null && activeFocus != null && onRecenterSelf != null) {
                         androidx.compose.material3.TextButton(
                             onClick = {
+                                droppedInspectPin = null
                                 onRecenterSelf()
                                 if (currentLocation != null) {
-                                    val targetZoom = (mapViewRef?.zoomLevelDouble ?: 16.5).coerceAtLeast(16.0)
+                                    val curZoom = mapViewRef?.zoomLevelDouble ?: 16.5
+                                    val targetZoom = if (curZoom < 10.0) 15.5 else curZoom
                                     mapViewRef?.controller?.animateTo(
                                         GeoPoint(currentLocation.latitude, currentLocation.longitude),
                                         targetZoom,
@@ -871,7 +1079,10 @@ fun MapViewComposable(
                     IconButton(
                         onClick = {
                             when {
-                                selectedMarkerInfo != null -> selectedMarkerInfo = null
+                                selectedMarkerInfo != null -> {
+                                    selectedMarkerInfo = null
+                                    droppedInspectPin = null
+                                }
                                 activeFocus != null -> onClearFocusTarget?.invoke()
                                 isInspectingHistoryTrail -> onClearInspectedTrail?.invoke()
                             }
@@ -913,13 +1124,19 @@ fun MapViewComposable(
                 }
             }
 
-            // Recenter FAB (48dp standard touch target)
+            // Recenter FAB (distinct filled primary when locked-following vs outlined surface when free-roaming/paused)
+            val isActivelyFollowing = settings.followUserLocation &&
+                !isFollowPaused &&
+                focusedTarget == null &&
+                inspectedTrailName == null
             FloatingActionButton(
                 onClick = {
                     selectedMarkerInfo = null
+                    droppedInspectPin = null
                     onRecenterSelf?.invoke()
                     if (currentLocation != null) {
-                        val targetZoom = (mapViewRef?.zoomLevelDouble ?: 16.5).coerceAtLeast(16.0)
+                        val curZoom = mapViewRef?.zoomLevelDouble ?: 16.5
+                        val targetZoom = if (curZoom < 10.0) 15.5 else curZoom
                         mapViewRef?.controller?.animateTo(
                             GeoPoint(currentLocation.latitude, currentLocation.longitude),
                             targetZoom,
@@ -929,13 +1146,22 @@ fun MapViewComposable(
                 },
                 modifier = Modifier
                     .size(48.dp)
+                    .then(
+                        if (!isActivelyFollowing) {
+                            Modifier.border(1.5.dp, colorScheme.primary, RoundedCornerShape(12.dp))
+                        } else Modifier
+                    )
                     .testTag("recenter_map_btn"),
                 shape = RoundedCornerShape(12.dp),
-                containerColor = colorScheme.primary,
-                contentColor = colorScheme.onPrimary,
+                containerColor = if (isActivelyFollowing) colorScheme.primary else colorScheme.surface,
+                contentColor = if (isActivelyFollowing) colorScheme.onPrimary else colorScheme.primary,
                 elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp)
             ) {
-                Icon(Icons.Default.MyLocation, contentDescription = "Center on Location", modifier = Modifier.size(22.dp))
+                Icon(
+                    imageVector = if (isActivelyFollowing) Icons.Default.MyLocation else Icons.Default.GpsNotFixed,
+                    contentDescription = if (isActivelyFollowing) "Following Your Location" else "Re-center on Your Location",
+                    modifier = Modifier.size(22.dp)
+                )
             }
 
             // Zoom In / Out Cluster (48dp standard touch targets)

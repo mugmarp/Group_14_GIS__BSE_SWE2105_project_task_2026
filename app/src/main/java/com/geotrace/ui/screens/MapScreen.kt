@@ -1,11 +1,19 @@
 package com.geotrace.ui.screens
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import android.os.Build
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,7 +42,9 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Balance
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -46,6 +56,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -76,7 +87,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -95,7 +109,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MapScreen(
     viewModel: TrackerViewModel,
@@ -106,6 +120,7 @@ fun MapScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
 
@@ -124,6 +139,7 @@ fun MapScreen(
     val currentMapBounds by viewModel.currentMapBoundingBox.collectAsState()
     val isPickingGeofenceCenter by viewModel.isPickingGeofenceCenter.collectAsState()
     val geofencePickDraft by viewModel.geofencePickDraft.collectAsState()
+    val isMapFollowPaused by viewModel.isMapFollowPaused.collectAsState()
 
     val currentUser by (groupViewModel?.currentUser ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
     val activeGroup by (groupViewModel?.activeGroup ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
@@ -164,8 +180,15 @@ fun MapScreen(
     var showDevicesSheet by remember { mutableStateOf(false) }
     var sessionNameInput by remember { mutableStateOf("") }
     var isHeaderExpanded by remember { mutableStateOf(false) }
+    var vectorCoordsCopied by remember { mutableStateOf(false) }
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var liveRecordingNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    androidx.compose.runtime.LaunchedEffect(vectorCoordsCopied) {
+        if (vectorCoordsCopied) {
+            kotlinx.coroutines.delay(1600L)
+            vectorCoordsCopied = false
+        }
+    }
     androidx.compose.runtime.LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(15_000L)
@@ -274,15 +297,22 @@ fun MapScreen(
             trailWaypoints = displayedWaypoints,
             inspectedTrailName = if (activeSession == null) inspectedTrail?.session?.name else null,
             inspectedTrailSummary = if (activeSession == null) inspectedSummary else null,
+            isFollowPaused = isMapFollowPaused,
+            onFollowPausedByUser = {
+                viewModel.setMapFollowPaused(true)
+            },
             onClearInspectedTrail = {
                 viewModel.clearInspectedTrail()
+                if (settings.followUserLocation) viewModel.setMapFollowPaused(true)
             },
             onClearFocusTarget = {
                 groupViewModel?.clearMapFocusTarget()
+                if (settings.followUserLocation) viewModel.setMapFollowPaused(true)
             },
             onRecenterSelf = {
                 groupViewModel?.clearMapFocusTarget()
                 viewModel.clearInspectedTrail()
+                viewModel.setMapFollowPaused(false)
             },
             offlineRegionsCount = offlineMapRegions.size,
             settings = settings,
@@ -475,30 +505,131 @@ fun MapScreen(
                             Column {
                                 Spacer(modifier = Modifier.height(10.dp))
 
-                                // Vector Coordinates Bar (Respects CoordinateFormat: DD vs DMS)
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                                // Interactive Vector Coordinates Bar (Tap to copy DD/DMS, Long-Press or Share icon to share)
+                                val hasFix = currentLocation != null
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (vectorCoordsCopied) colorScheme.primary.copy(alpha = 0.12f) else customColors.surfaceContainerLow,
+                                    border = BorderStroke(
+                                        1.dp,
+                                        if (vectorCoordsCopied) colorScheme.primary.copy(alpha = 0.55f) else colorScheme.outlineVariant.copy(alpha = 0.45f)
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .then(
+                                            if (hasFix) {
+                                                Modifier.combinedClickable(
+                                                    onClick = {
+                                                        currentLocation?.let { loc ->
+                                                            copyCoordinatesWithFeedback(
+                                                                context = context,
+                                                                haptic = haptic,
+                                                                lat = loc.latitude,
+                                                                lon = loc.longitude,
+                                                                format = settings.coordinateFormat,
+                                                                label = "GeoTrace Vector Coordinates"
+                                                            )
+                                                            vectorCoordsCopied = true
+                                                        }
+                                                    },
+                                                    onLongClick = {
+                                                        currentLocation?.let { loc ->
+                                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                            shareCoordinatesIntent(
+                                                                context = context,
+                                                                lat = loc.latitude,
+                                                                lon = loc.longitude,
+                                                                format = settings.coordinateFormat,
+                                                                title = "GeoTrace Live Position"
+                                                            )
+                                                        }
+                                                    }
+                                                )
+                                            } else Modifier
+                                        )
+                                        .testTag("copy_vector_coord_btn")
                                 ) {
-                                    Text(
-                                        text = "VECTOR COORD:",
-                                        fontSize = 9.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 0.04.sp,
-                                        color = colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = if (currentLocation != null) {
-                                            formatCoordinates(currentLocation!!.latitude, currentLocation!!.longitude, settings.coordinateFormat)
-                                        } else {
-                                            "--.-----°, --.-----°"
-                                        },
-                                        fontSize = 11.sp,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = colorScheme.onSurface
-                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(start = 10.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "VECTOR COORD",
+                                                fontSize = 8.5.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                letterSpacing = 0.04.sp,
+                                                color = colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = if (currentLocation != null) {
+                                                    formatCoordinates(currentLocation!!.latitude, currentLocation!!.longitude, settings.coordinateFormat)
+                                                } else {
+                                                    "--.-----°, --.-----°"
+                                                },
+                                                fontSize = 11.sp,
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = if (vectorCoordsCopied) colorScheme.primary else colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        if (hasFix) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Surface(
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    color = if (vectorCoordsCopied) colorScheme.primary else colorScheme.surface
+                                                ) {
+                                                    Row(
+                                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = if (vectorCoordsCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                                            contentDescription = "Copy Coordinates",
+                                                            tint = if (vectorCoordsCopied) colorScheme.onPrimary else colorScheme.primary,
+                                                            modifier = Modifier.size(13.dp)
+                                                        )
+                                                        Spacer(modifier = Modifier.width(3.dp))
+                                                        Text(
+                                                            text = if (vectorCoordsCopied) "Copied" else "Copy",
+                                                            fontSize = 10.sp,
+                                                            fontWeight = FontWeight.Bold,
+                                                            color = if (vectorCoordsCopied) colorScheme.onPrimary else colorScheme.primary
+                                                        )
+                                                    }
+                                                }
+                                                IconButton(
+                                                    onClick = {
+                                                        currentLocation?.let { loc ->
+                                                            shareCoordinatesIntent(
+                                                                context = context,
+                                                                lat = loc.latitude,
+                                                                lon = loc.longitude,
+                                                                format = settings.coordinateFormat,
+                                                                title = "GeoTrace Live Position"
+                                                            )
+                                                        }
+                                                    },
+                                                    modifier = Modifier
+                                                        .size(40.dp)
+                                                        .testTag("share_vector_coord_btn")
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Share,
+                                                        contentDescription = "Share Coordinates",
+                                                        tint = colorScheme.onSurfaceVariant,
+                                                        modifier = Modifier.size(16.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
 
                                 Spacer(modifier = Modifier.height(8.dp))
@@ -1766,6 +1897,54 @@ fun formatCoordinates(lat: Double, lon: Double, format: CoordinateFormat): Strin
     } else {
         "${toDms(lat, true)}, ${toDms(lon, false)}"
     }
+}
+
+fun formatCopyableCoordinates(lat: Double, lon: Double, format: CoordinateFormat): String {
+    return if (format == CoordinateFormat.DECIMAL) {
+        String.format(Locale.US, "%.6f, %.6f", lat, lon)
+    } else {
+        "${toDms(lat, true)}, ${toDms(lon, false)}"
+    }
+}
+
+fun copyCoordinatesWithFeedback(
+    context: Context,
+    haptic: HapticFeedback,
+    lat: Double,
+    lon: Double,
+    format: CoordinateFormat,
+    label: String = "GeoTrace Coordinates"
+) {
+    val copyText = formatCopyableCoordinates(lat, lon, format)
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    clipboard?.setPrimaryClip(ClipData.newPlainText(label, copyText))
+    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    // Android 13 (API 33)+ shows a system clipboard confirmation sheet automatically; show Toast only on <= Android 12
+    if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
+        Toast.makeText(context, "Copied: $copyText", Toast.LENGTH_SHORT).show()
+    }
+}
+
+fun shareCoordinatesIntent(
+    context: Context,
+    lat: Double,
+    lon: Double,
+    format: CoordinateFormat,
+    title: String = "GeoTrace Location"
+) {
+    val formatted = formatCopyableCoordinates(lat, lon, format)
+    val ddQuery = String.format(Locale.US, "%.6f,%.6f", lat, lon)
+    val shareBody = "$title\nCoordinates: $formatted\nMap: https://maps.google.com/?q=$ddQuery"
+    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_SUBJECT, title)
+        putExtra(Intent.EXTRA_TEXT, shareBody)
+    }
+    val chooser = Intent.createChooser(sendIntent, "Share Coordinates")
+    if (context !is Activity) {
+        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(chooser)
 }
 
 private fun toDms(decimal: Double, isLat: Boolean): String {

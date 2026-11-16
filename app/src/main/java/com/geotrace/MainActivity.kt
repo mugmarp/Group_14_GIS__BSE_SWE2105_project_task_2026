@@ -12,9 +12,11 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,12 +37,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -68,7 +73,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -482,12 +489,58 @@ fun MainAppScreen(
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Live Status Pill Card in Sheet (12.dp radius)
+                    // Live Status Pill Card in Sheet (Tap to copy coordinates, Long-Press to share)
+                    val menuHaptic = LocalHapticFeedback.current
+                    var menuCoordsCopied by remember { mutableStateOf(false) }
+                    LaunchedEffect(menuCoordsCopied) {
+                        if (menuCoordsCopied) {
+                            kotlinx.coroutines.delay(1600L)
+                            menuCoordsCopied = false
+                        }
+                    }
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = customColors.surfaceContainerLow,
-                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
-                        modifier = Modifier.fillMaxWidth()
+                        color = if (menuCoordsCopied) colorScheme.primary.copy(alpha = 0.10f) else customColors.surfaceContainerLow,
+                        border = BorderStroke(
+                            1.dp,
+                            if (menuCoordsCopied) colorScheme.primary.copy(alpha = 0.5f) else colorScheme.outlineVariant.copy(alpha = 0.6f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .then(
+                                @OptIn(ExperimentalFoundationApi::class)
+                                if (currentLocation != null) {
+                                    Modifier.combinedClickable(
+                                        onClick = {
+                                            currentLocation?.let { loc ->
+                                                com.geotrace.ui.screens.copyCoordinatesWithFeedback(
+                                                    context = context,
+                                                    haptic = menuHaptic,
+                                                    lat = loc.latitude,
+                                                    lon = loc.longitude,
+                                                    format = settings.coordinateFormat,
+                                                    label = "GeoTrace Current Position"
+                                                )
+                                                menuCoordsCopied = true
+                                            }
+                                        },
+                                        onLongClick = {
+                                            currentLocation?.let { loc ->
+                                                menuHaptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                com.geotrace.ui.screens.shareCoordinatesIntent(
+                                                    context = context,
+                                                    lat = loc.latitude,
+                                                    lon = loc.longitude,
+                                                    format = settings.coordinateFormat,
+                                                    title = "GeoTrace Live Position"
+                                                )
+                                            }
+                                        }
+                                    )
+                                } else Modifier
+                            )
+                            .testTag("menu_copy_coord_btn")
                     ) {
                         Row(
                             modifier = Modifier.padding(10.dp),
@@ -505,7 +558,7 @@ fun MainAppScreen(
                                     .background(statusColor)
                             )
                             Spacer(modifier = Modifier.width(8.dp))
-                            Column {
+                            Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     text = when {
                                         activeSession != null -> "RECORDING IN PROGRESS • ${activeSession?.name}"
@@ -523,11 +576,40 @@ fun MainAppScreen(
                                     val gait = loc.gaitLabel
                                     val coordText = com.geotrace.ui.screens.formatCoordinates(loc.latitude, loc.longitude, settings.coordinateFormat)
                                     Text(
-                                        text = "$coordText • Speed: ${String.format(java.util.Locale.US, "%.1f", convertedSpeed)} ${settings.speedUnit.label} ($gait)",
+                                        text = "$coordText • ${String.format(java.util.Locale.US, "%.1f", convertedSpeed)} ${settings.speedUnit.label} ($gait)",
                                         fontSize = 10.sp,
                                         fontFamily = FontFamily.Monospace,
-                                        color = colorScheme.onSurfaceVariant
+                                        color = colorScheme.onSurfaceVariant,
+                                        maxLines = 2
                                     )
+                                }
+                            }
+                            if (currentLocation != null) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (menuCoordsCopied) colorScheme.primary else colorScheme.surface
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = if (menuCoordsCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                            contentDescription = "Copy Coordinates",
+                                            tint = if (menuCoordsCopied) colorScheme.onPrimary else colorScheme.primary,
+                                            modifier = Modifier.size(13.dp)
+                                        )
+                                        if (menuCoordsCopied) {
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = "Copied",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = colorScheme.onPrimary
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
