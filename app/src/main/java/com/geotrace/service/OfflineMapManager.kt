@@ -1,7 +1,15 @@
 package com.geotrace.service
 
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.PowerManager
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineDownloadProgress
 import com.geotrace.model.OfflineMapRegion
@@ -32,6 +40,8 @@ class OfflineMapManager(private val context: Context) {
     companion object {
         private const val TAG = "OfflineMapManager"
         const val MAX_TILES_PER_DOWNLOAD = 2500
+        private const val NOTIFICATION_CHANNEL_ID = "offline_maps_channel"
+        private const val NOTIFICATION_ID = 4102
     }
 
     private val _downloadProgress = MutableStateFlow(OfflineDownloadProgress())
@@ -48,6 +58,15 @@ class OfflineMapManager(private val context: Context) {
 
     @Volatile
     private var isCancelled = false
+
+    @Volatile
+    private var downloadWakeLock: PowerManager.WakeLock? = null
+
+    @Volatile
+    private var lastNotificationTimeMs = 0L
+
+    @Volatile
+    private var lastNotifiedPercent = -1
 
     fun computeBoundingBoxAround(lat: Double, lng: Double, radiusKm: Double): BoundingBox {
         val latDelta = radiusKm / 111.32
@@ -154,6 +173,9 @@ class OfflineMapManager(private val context: Context) {
         }
 
         isCancelled = false
+        lastNotificationTimeMs = 0L
+        lastNotifiedPercent = -1
+        acquireDownloadWakeLock()
         val cleanName = name.trim().ifBlank { "${effectiveType.label} Area" }
 
         val tileWriter = SqlTileWriter()
@@ -168,6 +190,7 @@ class OfflineMapManager(private val context: Context) {
             currentZoom = safeMin,
             errorMessage = null
         )
+        postProgressNotification(cleanName, 0, estTiles, force = true)
 
         try {
             val baseCount = if (effectiveType == MapTileType.HYBRID) estTiles / 2 else estTiles
@@ -206,10 +229,12 @@ class OfflineMapManager(private val context: Context) {
                     }
 
                     override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {
+                        val clamped = progress.coerceIn(0, estTiles)
                         _downloadProgress.value = _downloadProgress.value.copy(
-                            completedTiles = progress.coerceIn(0, estTiles),
+                            completedTiles = clamped,
                             currentZoom = currentZoomLevel
                         )
+                        postProgressNotification(cleanName, clamped, estTiles)
                     }
 
                     override fun downloadStarted() {}
@@ -267,10 +292,12 @@ class OfflineMapManager(private val context: Context) {
                     }
 
                     override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {
+                        val clamped = (baseCount + progress).coerceIn(0, totalTiles)
                         _downloadProgress.value = _downloadProgress.value.copy(
-                            completedTiles = (baseCount + progress).coerceIn(0, totalTiles),
+                            completedTiles = clamped,
                             currentZoom = currentZoomLevel
                         )
+                        postProgressNotification(cleanName, clamped, totalTiles)
                     }
 
                     override fun downloadStarted() {}
@@ -302,6 +329,10 @@ class OfflineMapManager(private val context: Context) {
         cleanupActiveHandles()
         refreshCacheSize()
         _downloadProgress.value = OfflineDownloadProgress(isDownloading = false)
+        postResultNotification(
+            title = "Offline map ready",
+            message = "$cleanName ($tileCount tiles) cached for offline use"
+        )
         onCompleted(
             OfflineMapRegion(
                 id = UUID.randomUUID().toString(),
@@ -327,6 +358,11 @@ class OfflineMapManager(private val context: Context) {
             isDownloading = false,
             errorMessage = msg
         )
+        if (isCancelled) {
+            clearDownloadNotification()
+        } else {
+            postResultNotification("Offline map download paused", msg)
+        }
     }
 
     fun cancelActiveDownload() {
@@ -387,5 +423,89 @@ class OfflineMapManager(private val context: Context) {
             activeTileWriter?.onDetach()
         } catch (_: Exception) {}
         activeTileWriter = null
+        releaseDownloadWakeLock()
+    }
+
+    private fun acquireDownloadWakeLock() {
+        try {
+            if (downloadWakeLock?.isHeld == true) return
+            val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+            downloadWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "GeoTrace::OfflineTileDownload").apply {
+                setReferenceCounted(false)
+                acquire(10 * 60 * 1000L) // 10-minute safety cap
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun releaseDownloadWakeLock() {
+        try {
+            if (downloadWakeLock?.isHeld == true) {
+                downloadWakeLock?.release()
+            }
+        } catch (_: Exception) {}
+        downloadWakeLock = null
+    }
+
+    private fun ensureNotificationChannel(nm: NotificationManager) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+            nm.getNotificationChannel(NOTIFICATION_CHANNEL_ID) == null
+        ) {
+            val channel = NotificationChannel(
+                NOTIFICATION_CHANNEL_ID,
+                "Offline Map Downloads",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Progress and completion status for offline map caching"
+                setShowBadge(false)
+            }
+            nm.createNotificationChannel(channel)
+        }
+    }
+
+    private fun canPostNotifications(): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun postProgressNotification(regionName: String, completed: Int, total: Int, force: Boolean = false) {
+        if (!canPostNotifications()) return
+        val pct = if (total > 0) ((completed * 100) / total).coerceIn(0, 100) else 0
+        val now = System.currentTimeMillis()
+        if (!force && (now - lastNotificationTimeMs < 1500L) && (pct - lastNotifiedPercent < 5)) return
+        lastNotificationTimeMs = now
+        lastNotifiedPercent = pct
+
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        ensureNotificationChannel(nm)
+        val notification = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("Downloading offline map ($pct%)")
+            .setContentText("$regionName • $completed / $total tiles")
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .setProgress(total.coerceAtLeast(1), completed.coerceAtLeast(0), total <= 0)
+            .build()
+        nm.notify(NOTIFICATION_ID, notification)
+    }
+
+    private fun postResultNotification(title: String, message: String) {
+        if (!canPostNotifications()) return
+        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        ensureNotificationChannel(nm)
+        val notification = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setOngoing(false)
+            .setAutoCancel(true)
+            .build()
+        nm.notify(NOTIFICATION_ID, notification)
+    }
+
+    private fun clearDownloadNotification() {
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            nm.cancel(NOTIFICATION_ID)
+        } catch (_: Exception) {}
     }
 }

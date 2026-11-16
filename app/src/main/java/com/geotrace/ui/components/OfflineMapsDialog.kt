@@ -154,7 +154,7 @@ fun OfflineMapsDialog(
     }
 
     Dialog(
-        onDismissRequest = { if (!progress.isDownloading) onDismiss() },
+        onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
         Surface(
@@ -201,8 +201,7 @@ fun OfflineMapsDialog(
                         }
                     }
                     IconButton(
-                        onClick = { if (!progress.isDownloading) onDismiss() },
-                        enabled = !progress.isDownloading,
+                        onClick = onDismiss,
                         modifier = Modifier.size(48.dp).testTag("close_offline_maps_btn")
                     ) {
                         Icon(Icons.Default.Close, contentDescription = "Close Offline Maps")
@@ -250,8 +249,15 @@ fun OfflineMapsDialog(
                                         text = "${progress.completedTiles} / ${progress.totalTiles} tiles (Zoom ${progress.currentZoom})",
                                         fontSize = 11.sp,
                                         fontFamily = FontFamily.Monospace,
-                                        color = colorScheme.onSurfaceVariant
+                                        color = colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.weight(1f)
                                     )
+                                    TextButton(
+                                        onClick = onDismiss,
+                                        modifier = Modifier.testTag("hide_offline_download_btn")
+                                    ) {
+                                        Text("Hide", fontWeight = FontWeight.Bold)
+                                    }
                                     TextButton(
                                         onClick = { viewModel.cancelOfflineRegionDownload() },
                                         modifier = Modifier.testTag("cancel_offline_download_btn")
@@ -259,6 +265,11 @@ fun OfflineMapsDialog(
                                         Text("Cancel", color = colorScheme.error, fontWeight = FontWeight.Bold)
                                     }
                                 }
+                                Text(
+                                    text = "Downloads keep running in the background if you close this window.",
+                                    fontSize = 10.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
                             }
                         }
                     }

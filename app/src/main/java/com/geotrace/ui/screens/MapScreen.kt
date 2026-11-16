@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Balance
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CellTower
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Group
@@ -115,6 +116,7 @@ fun MapScreen(
     val cellTowerLocation by viewModel.cellTowerLocation.collectAsState()
     val allCellTowers by viewModel.allCellTowerLocations.collectAsState()
     val offlineMapRegions by viewModel.offlineMapRegions.collectAsState()
+    val offlineProgress by viewModel.offlineDownloadProgress.collectAsState()
     val currentMapBounds by viewModel.currentMapBoundingBox.collectAsState()
     val isPickingGeofenceCenter by viewModel.isPickingGeofenceCenter.collectAsState()
     val geofencePickDraft by viewModel.geofencePickDraft.collectAsState()
@@ -683,6 +685,41 @@ fun MapScreen(
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = "Record Trail",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.primary
+                            )
+                        }
+                    }
+                }
+
+                // Compact Offline Download Progress Chip (shown when dialog is minimized/closed)
+                if (offlineProgress.isDownloading && !showOfflineMapsDialog) {
+                    val pct = if (offlineProgress.totalTiles > 0) {
+                        ((offlineProgress.completedTiles * 100) / offlineProgress.totalTiles).coerceIn(0, 100)
+                    } else 0
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = colorScheme.primaryContainer.copy(alpha = 0.7f),
+                        shadowElevation = 3.dp,
+                        border = BorderStroke(1.dp, colorScheme.primary),
+                        modifier = Modifier
+                            .clickable { showOfflineMapsDialog = true }
+                            .testTag("offline_caching_chip")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.CloudDownload,
+                                contentDescription = "View Offline Map Download Progress",
+                                tint = colorScheme.primary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "Caching $pct%",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = colorScheme.primary

@@ -214,9 +214,9 @@ fun MainAppScreen(
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
-        // Streamlined 3-Pillar Bottom Bar with Top-Only Corner Radius
+        // Streamlined 2-Pillar Bottom Bar (Map & Devices)
         bottomBar = {
-            if (currentScreen == Screen.MAP || currentScreen == Screen.CELLULAR || currentScreen == Screen.GROUPS) {
+            if (currentScreen == Screen.MAP || currentScreen == Screen.GROUPS) {
                 Surface(
                     shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
                     color = colorScheme.surface,
@@ -240,21 +240,6 @@ fun MainAppScreen(
                             icon = { Icon(Icons.Default.Map, contentDescription = "Map", modifier = Modifier.size(20.dp)) },
                             label = { Text("Map", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.02.sp) },
                             modifier = Modifier.testTag("nav_bottom_map"),
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = colorScheme.onPrimary,
-                                selectedTextColor = colorScheme.primary,
-                                indicatorColor = colorScheme.primary,
-                                unselectedIconColor = colorScheme.onSurfaceVariant,
-                                unselectedTextColor = colorScheme.onSurfaceVariant
-                            )
-                        )
-
-                        NavigationBarItem(
-                            selected = currentScreen == Screen.CELLULAR,
-                            onClick = { currentScreen = Screen.CELLULAR },
-                            icon = { Icon(Icons.Default.CellTower, contentDescription = "Cellular Hub", modifier = Modifier.size(20.dp)) },
-                            label = { Text("Cellular Hub", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.02.sp) },
-                            modifier = Modifier.testTag("nav_bottom_cellular"),
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = colorScheme.onPrimary,
                                 selectedTextColor = colorScheme.primary,
@@ -307,7 +292,7 @@ fun MainAppScreen(
                 )
                 Screen.CELLULAR -> CellularDiagnosticScreen(
                     viewModel = viewModel,
-                    onNavigateBack = null,
+                    onNavigateBack = { currentScreen = Screen.MAP },
                     onOpenMenu = {
                         scope.launch {
                             showMenuSheet = true
@@ -533,21 +518,22 @@ fun MainAppScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Card 0: Devices & Tracking Groups
+                    // Card 0: Cellular Signal Hub (Secondary RF Telemetry)
+                    val servingNetwork = cellTowers.firstOrNull { it.isRegistered }?.type
                     MenuNavigationCard(
-                        title = "Devices & Tracking Groups",
-                        subtitle = "Multi-device fleet, remote ring, off-grid P2P & shared groups",
-                        badgeText = if (activeGroup != null) activeGroup!!.name else "Setup",
-                        badgeColor = if (activeGroup != null) colorScheme.tertiary else colorScheme.primary,
-                        icon = { Icon(Icons.Default.Group, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(22.dp)) },
+                        title = "Cellular Signal Hub",
+                        subtitle = "Serving mast telemetry, neighbor PCI/EARFCN & GPS vs Cell",
+                        badgeText = servingNetwork ?: "RF Hub",
+                        badgeColor = colorScheme.primary,
+                        icon = { Icon(Icons.Default.CellTower, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(22.dp)) },
                         onClick = {
                             scope.launch {
                                 sheetState.hide()
                                 showMenuSheet = false
-                                currentScreen = Screen.GROUPS
+                                currentScreen = Screen.CELLULAR
                             }
                         },
-                        modifier = Modifier.testTag("menu_nav_groups")
+                        modifier = Modifier.testTag("menu_nav_cellular")
                     )
 
                     Spacer(modifier = Modifier.height(8.dp))
@@ -637,13 +623,13 @@ fun MainAppScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "BSE SWE2105 • Project Option 2",
+                            text = "BSE Group 14 • GIS Task",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurfaceVariant
                         )
                         Text(
-                            text = "Local + Cloud Sync",
+                            text = "Offline + Cloud Sync",
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             color = colorScheme.onSurfaceVariant
