@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -26,6 +27,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -79,6 +81,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -113,7 +116,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT
+            ),
+            navigationBarStyle = SystemBarStyle.light(
+                android.graphics.Color.TRANSPARENT,
+                android.graphics.Color.TRANSPARENT
+            )
+        )
 
         setContent {
             GISTrackerTheme {
@@ -153,8 +165,11 @@ fun MainAppScreen(
     if (showMenuSheet) {
         BackHandler {
             scope.launch {
-                sheetState.hide()
-                showMenuSheet = false
+                try {
+                    sheetState.hide()
+                } finally {
+                    showMenuSheet = false
+                }
             }
         }
     } else if (currentScreen == Screen.MAP && isPickingGeofenceCenter) {
@@ -257,7 +272,8 @@ fun MainAppScreen(
                         windowInsets = WindowInsets(0, 0, 0, 0),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(66.dp)
+                            .navigationBarsPadding()
+                            .heightIn(min = 66.dp)
                     ) {
                         NavigationBarItem(
                             selected = currentScreen == Screen.MAP,
@@ -422,6 +438,7 @@ fun MainAppScreen(
                         viewModel.clearInspectedTrail()
                         viewModel.clearSelectedSearchPin()
                         groupViewModel.focusMapOnTarget(target)
+                        currentScreen = Screen.MAP
                     }
                 )
             }
@@ -535,8 +552,11 @@ fun MainAppScreen(
                         IconButton(
                             onClick = {
                                 scope.launch {
-                                    sheetState.hide()
-                                    showMenuSheet = false
+                                    try {
+                                        sheetState.hide()
+                                    } finally {
+                                        showMenuSheet = false
+                                    }
                                 }
                             },
                             modifier = Modifier.size(48.dp).testTag("close_sheet_btn")
@@ -626,7 +646,9 @@ fun MainAppScreen(
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold,
                                     letterSpacing = 0.04.sp,
-                                    color = statusColor
+                                    color = statusColor,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 if (currentLocation != null) {
                                     val loc = currentLocation!!
@@ -685,9 +707,12 @@ fun MainAppScreen(
                         icon = { Icon(Icons.Default.CellTower, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(22.dp)) },
                         onClick = {
                             scope.launch {
-                                sheetState.hide()
-                                showMenuSheet = false
-                                currentScreen = Screen.CELLULAR
+                                try {
+                                    sheetState.hide()
+                                } finally {
+                                    showMenuSheet = false
+                                    currentScreen = Screen.CELLULAR
+                                }
                             }
                         },
                         modifier = Modifier.testTag("menu_nav_cellular")
@@ -704,9 +729,12 @@ fun MainAppScreen(
                         icon = { Icon(Icons.Default.History, contentDescription = null, tint = colorScheme.secondary, modifier = Modifier.size(22.dp)) },
                         onClick = {
                             scope.launch {
-                                sheetState.hide()
-                                showMenuSheet = false
-                                currentScreen = Screen.HISTORY
+                                try {
+                                    sheetState.hide()
+                                } finally {
+                                    showMenuSheet = false
+                                    currentScreen = Screen.HISTORY
+                                }
                             }
                         },
                         modifier = Modifier.testTag("menu_nav_history")
@@ -723,9 +751,12 @@ fun MainAppScreen(
                         icon = { Icon(Icons.Default.NotificationsActive, contentDescription = null, tint = colorScheme.tertiary, modifier = Modifier.size(22.dp)) },
                         onClick = {
                             scope.launch {
-                                sheetState.hide()
-                                showMenuSheet = false
-                                currentScreen = Screen.GEOFENCE
+                                try {
+                                    sheetState.hide()
+                                } finally {
+                                    showMenuSheet = false
+                                    currentScreen = Screen.GEOFENCE
+                                }
                             }
                         },
                         modifier = Modifier.testTag("menu_nav_geofence")
@@ -742,9 +773,12 @@ fun MainAppScreen(
                         icon = { Icon(Icons.Default.School, contentDescription = null, tint = colorScheme.tertiary, modifier = Modifier.size(22.dp)) },
                         onClick = {
                             scope.launch {
-                                sheetState.hide()
-                                showMenuSheet = false
-                                currentScreen = Screen.RESEARCH
+                                try {
+                                    sheetState.hide()
+                                } finally {
+                                    showMenuSheet = false
+                                    currentScreen = Screen.RESEARCH
+                                }
                             }
                         },
                         modifier = Modifier.testTag("menu_nav_research")
@@ -761,9 +795,12 @@ fun MainAppScreen(
                         icon = { Icon(Icons.Default.Settings, contentDescription = null, tint = colorScheme.primary, modifier = Modifier.size(22.dp)) },
                         onClick = {
                             scope.launch {
-                                sheetState.hide()
-                                showMenuSheet = false
-                                currentScreen = Screen.SETTINGS
+                                try {
+                                    sheetState.hide()
+                                } finally {
+                                    showMenuSheet = false
+                                    currentScreen = Screen.SETTINGS
+                                }
                             }
                         },
                         modifier = Modifier.testTag("menu_nav_settings")
@@ -846,13 +883,17 @@ private fun MenuNavigationCard(
                         text = title,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Bold,
-                        color = colorScheme.onSurface
+                        color = colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = subtitle,
                         fontSize = 10.sp,
                         color = colorScheme.onSurfaceVariant,
-                        lineHeight = 14.sp
+                        lineHeight = 14.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -869,6 +910,9 @@ private fun MenuNavigationCard(
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
                     color = badgeColor,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                 )
             }

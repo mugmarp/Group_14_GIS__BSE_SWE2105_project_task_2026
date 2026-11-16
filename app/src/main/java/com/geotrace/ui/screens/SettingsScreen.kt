@@ -6,6 +6,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,9 +18,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Power
@@ -28,12 +33,13 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -43,13 +49,18 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -57,6 +68,7 @@ import com.geotrace.model.CoordinateFormat
 import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MapTileType
 import com.geotrace.model.SpeedUnit
+import com.geotrace.service.OfflineMapManager
 import com.geotrace.ui.components.OfflineMapsDialog
 import com.geotrace.ui.screens.devices.BackgroundLocationSettingsDialog
 import com.geotrace.ui.screens.devices.hasBackgroundLocationPermission
@@ -152,8 +164,8 @@ fun SettingsScreen(
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .background(colorScheme.background)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .background(colorScheme.background),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         // Top Bar / Header
@@ -164,7 +176,7 @@ fun SettingsScreen(
             ) {
                 IconButton(
                     onClick = onNavigateBack,
-                    modifier = Modifier.testTag("settings_back_btn")
+                    modifier = Modifier.size(48.dp).testTag("settings_back_btn")
                 ) {
                     Icon(
                         Icons.AutoMirrored.Filled.ArrowBack,
@@ -173,17 +185,21 @@ fun SettingsScreen(
                     )
                 }
                 Spacer(modifier = Modifier.width(6.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Telemetry & System Settings",
                         fontSize = 18.sp,
                         fontWeight = FontWeight.Bold,
-                        color = colorScheme.onBackground
+                        color = colorScheme.onBackground,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
                         text = "Hardware deadband, sensor units & cartographic overlays",
                         fontSize = 11.sp,
-                        color = colorScheme.onSurfaceVariant
+                        color = colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -213,7 +229,7 @@ fun SettingsScreen(
                         FilterChip(
                             selected = selected,
                             onClick = { viewModel.updateSpeedUnit(unit) },
-                            label = { Text(unit.label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                            label = { Text(unit.label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
                             shape = RoundedCornerShape(4.dp),
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = colorScheme.primary,
@@ -227,7 +243,7 @@ fun SettingsScreen(
                                 borderColor = colorScheme.outlineVariant,
                                 selectedBorderColor = colorScheme.primary
                             ),
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                         )
                     }
                 }
@@ -251,7 +267,16 @@ fun SettingsScreen(
                         FilterChip(
                             selected = selected,
                             onClick = { viewModel.updateCoordinateFormat(format) },
-                            label = { Text(if (format == CoordinateFormat.DECIMAL) "DD (0.334°)" else "DMS (0°20'N)", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                            label = {
+                                Text(
+                                    if (format == CoordinateFormat.DECIMAL) "DD (0.334°)" else "DMS (0°20'N)",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
                             shape = RoundedCornerShape(4.dp),
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = colorScheme.primary,
@@ -265,7 +290,7 @@ fun SettingsScreen(
                                 borderColor = colorScheme.outlineVariant,
                                 selectedBorderColor = colorScheme.primary
                             ),
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                         )
                     }
                 }
@@ -314,12 +339,13 @@ fun SettingsScreen(
                             FilterChip(
                                 selected = selected,
                                 onClick = { viewModel.updateMapTileType(tile) },
-                                label = { Text(if (selected) "Active" else "Select", fontSize = 10.sp) },
+                                label = { Text(if (selected) "Active" else "Select", fontSize = 10.sp, maxLines = 1, softWrap = false) },
                                 shape = RoundedCornerShape(8.dp),
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = colorScheme.primary,
                                     selectedLabelColor = colorScheme.onPrimary
-                                )
+                                ),
+                                modifier = Modifier.heightIn(min = 48.dp)
                             )
                         }
                     }
@@ -360,7 +386,7 @@ fun SettingsScreen(
                                     color = colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "${offlineMapRegions.size} saved regions • ${String.format(java.util.Locale.US, "%.1f", offlineCacheSizeMb)} / 512 MB",
+                                    text = "${offlineMapRegions.size} saved regions • ${String.format(java.util.Locale.US, "%.1f", offlineCacheSizeMb)} / ${OfflineMapManager.MAX_CACHE_BYTES_MB} MB",
                                     fontSize = 10.sp,
                                     color = colorScheme.onSurfaceVariant
                                 )
@@ -475,7 +501,7 @@ fun SettingsScreen(
                         FilterChip(
                             selected = selected,
                             onClick = { viewModel.updateJitterThreshold(thresh) },
-                            label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                            label = { Text(label, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
                             shape = RoundedCornerShape(4.dp),
                             colors = FilterChipDefaults.filterChipColors(
                                 selectedContainerColor = colorScheme.primary,
@@ -489,7 +515,7 @@ fun SettingsScreen(
                                 borderColor = colorScheme.outlineVariant,
                                 selectedBorderColor = colorScheme.primary
                             ),
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                         )
                     }
                 }
@@ -608,8 +634,26 @@ fun SettingsScreen(
 
         // Section 4: Cellular Positioning Engine (OpenCellID Uganda Live Tower Pinning)
         item {
-            var apiKeyInput by androidx.compose.runtime.remember(settings.openCellIdApiKey) {
-                androidx.compose.runtime.mutableStateOf(settings.openCellIdApiKey)
+            val focusManager = LocalFocusManager.current
+            var apiKeyInput by rememberSaveable { mutableStateOf(settings.openCellIdApiKey) }
+            var revealApiKey by remember { mutableStateOf(false) }
+
+            LaunchedEffect(settings.openCellIdApiKey) {
+                if (apiKeyInput.trim() != settings.openCellIdApiKey) {
+                    apiKeyInput = settings.openCellIdApiKey
+                }
+            }
+
+            val trimmedInput = apiKeyInput.trim()
+            val hasUnsavedChanges = trimmedInput != settings.openCellIdApiKey
+            val applyKeySave = {
+                viewModel.updateOpenCellIdApiKey(trimmedInput)
+                focusManager.clearFocus()
+                android.widget.Toast.makeText(
+                    context,
+                    if (trimmedInput.isNotEmpty()) "OpenCellID key saved & RF lookup refreshed." else "Custom OpenCellID key cleared.",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
             }
 
             SettingsCard(
@@ -628,10 +672,7 @@ fun SettingsScreen(
 
                 androidx.compose.material3.OutlinedTextField(
                     value = apiKeyInput,
-                    onValueChange = {
-                        apiKeyInput = it
-                        viewModel.updateOpenCellIdApiKey(it)
-                    },
+                    onValueChange = { apiKeyInput = it },
                     label = { Text("OpenCellID API Key (Required for Live Pin)", fontSize = 11.sp) },
                     placeholder = {
                         Text(
@@ -639,15 +680,69 @@ fun SettingsScreen(
                             fontSize = 11.sp
                         )
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    visualTransformation = if (revealApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        androidx.compose.material3.TextButton(
+                            onClick = { revealApiKey = !revealApiKey },
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        ) {
+                            Text(if (revealApiKey) "Hide" else "Show", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { applyKeySave() }),
+                    modifier = Modifier.fillMaxWidth().testTag("opencellid_api_key_input"),
                     shape = RoundedCornerShape(8.dp),
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp, fontFamily = FontFamily.Monospace),
                     singleLine = true
                 )
 
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = applyKeySave,
+                        enabled = hasUnsavedChanges,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f).heightIn(min = 48.dp).testTag("save_opencellid_key_btn")
+                    ) {
+                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = if (hasUnsavedChanges) "Save Key" else "Saved",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            apiKeyInput = ""
+                            if (settings.openCellIdApiKey.isNotEmpty()) {
+                                viewModel.updateOpenCellIdApiKey("")
+                            }
+                            focusManager.clearFocus()
+                        },
+                        enabled = apiKeyInput.isNotBlank() || settings.openCellIdApiKey.isNotBlank(),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("clear_opencellid_key_btn")
+                    ) {
+                        Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Clear", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(6.dp))
+                val keySourceSummary = when {
+                    settings.openCellIdApiKey.isNotBlank() -> "Active key: Custom key configured"
+                    com.geotrace.BuildConfig.OPENCELLID_API_KEY.isNotBlank() -> "Active key: Build-time secret key"
+                    else -> "Active key: None configured"
+                }
                 Text(
-                    text = "GeoTrace reads genuine radio IDs (CID, LAC/TAC, MCC, MNC, dBm) from device hardware TelephonyManager. Configure an OpenCellID API key to plot resolved physical tower coordinates on the map.",
+                    text = "$keySourceSummary • GeoTrace reads genuine radio IDs (CID, LAC/TAC, MCC, MNC, dBm) from device hardware TelephonyManager.",
                     fontSize = 10.sp,
                     color = colorScheme.onSurfaceVariant,
                     lineHeight = 14.sp
@@ -695,7 +790,8 @@ fun SettingsScreen(
                                 viewModel.appUpdateManager.checkForUpdates()
                             }
                         },
-                        enabled = updateStatus !is com.geotrace.service.UpdateStatus.Checking,
+                        enabled = updateStatus !is com.geotrace.service.UpdateStatus.Checking &&
+                            updateStatus !is com.geotrace.service.UpdateStatus.Downloading,
                         shape = RoundedCornerShape(10.dp),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 10.dp),
                         modifier = Modifier
@@ -740,17 +836,31 @@ fun SettingsScreen(
                                     color = colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(vertical = 6.dp)
                                 )
-                                Button(
-                                    onClick = {
-                                        viewModel.appUpdateManager.startDownload(status.info)
-                                    },
-                                    shape = RoundedCornerShape(8.dp),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(48.dp)
-                                        .testTag("download_update_btn")
-                                ) {
-                                    Text("Download & Install (${status.info.apkFileName})", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                if (status.info.apkDownloadUrl.isNotBlank()) {
+                                    Button(
+                                        onClick = {
+                                            viewModel.appUpdateManager.startDownload(status.info)
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(48.dp)
+                                            .testTag("download_update_btn")
+                                    ) {
+                                        Text(
+                                            text = "Download & Install (${status.info.apkFileName})",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                } else {
+                                    Text(
+                                        text = "No APK binary is attached to this GitHub release yet. Open GitHub Releases below to inspect artifacts.",
+                                        fontSize = 11.sp,
+                                        color = colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                         }
@@ -778,12 +888,35 @@ fun SettingsScreen(
                     }
                     is com.geotrace.service.UpdateStatus.Downloading -> {
                         Spacer(modifier = Modifier.height(10.dp))
-                        Text(
-                            text = "Downloading release APK via Android DownloadManager...",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = colorScheme.primary
-                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(
+                                text = if (status.progressPercent > 0) {
+                                    "Downloading release APK (${status.progressPercent}%)..."
+                                } else {
+                                    "Downloading release APK via Android DownloadManager..."
+                                },
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = colorScheme.primary
+                            )
+                            if (status.progressPercent > 0) {
+                                LinearProgressIndicator(
+                                    progress = { (status.progressPercent / 100f).coerceIn(0f, 1f) },
+                                    modifier = Modifier.fillMaxWidth().height(6.dp)
+                                )
+                            } else {
+                                LinearProgressIndicator(
+                                    modifier = Modifier.fillMaxWidth().height(6.dp)
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = { viewModel.appUpdateManager.cancelDownload() },
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("cancel_update_download_btn")
+                            ) {
+                                Text("Cancel Download", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
                     }
                     is com.geotrace.service.UpdateStatus.ReadyToInstall -> {
                         Spacer(modifier = Modifier.height(10.dp))

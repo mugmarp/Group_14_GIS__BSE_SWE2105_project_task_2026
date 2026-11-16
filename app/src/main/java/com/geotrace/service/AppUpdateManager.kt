@@ -11,10 +11,16 @@ import android.os.Environment
 import android.provider.Settings
 import androidx.core.content.FileProvider
 import com.geotrace.BuildConfig
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -57,6 +63,11 @@ class AppUpdateManager(private val context: Context) {
     private val _updateStatus = MutableStateFlow<UpdateStatus>(UpdateStatus.Idle)
     val updateStatus: StateFlow<UpdateStatus> = _updateStatus.asStateFlow()
 
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var progressJob: Job? = null
+    private var activeDownloadId: Long = -1L
+    private var activeReceiver: BroadcastReceiver? = null
+
     companion object {
         const val GITHUB_REPO = "mugmarp/Group_14_GIS__BSE_SWE2105_project_task_2026"
         const val RELEASES_WEB_URL = "https://github.com/$GITHUB_REPO/releases"
@@ -81,9 +92,10 @@ class AppUpdateManager(private val context: Context) {
                 val responseStr = BufferedReader(InputStreamReader(connection.inputStream)).use { it.readText() }
                 val json = JSONObject(responseStr)
                 val tagName = json.optString("tag_name", "v1.0.0")
-                val releaseName = json.optString("name", tagName)
-                val body = json.optString("body", "Routine bug fixes and telemetry engine optimizations.")
-                val publishedAt = json.optString("published_at", "")
+                val releaseName = if (json.isNull("name")) tagName else json.optString("name", tagName).ifBlank { tagName }
+                val rawBody = if (json.isNull("body")) "" else json.optString("body", "")
+                val body = rawBody.ifBlank { "Routine bug fixes and telemetry engine optimizations." }
+                val publishedAt = if (json.isNull("published_at")) "" else json.optString("published_at", "")
 
                 var apkDownloadUrl = ""
                 var apkFileName = "geotrace-release.apk"
@@ -103,10 +115,6 @@ class AppUpdateManager(private val context: Context) {
                             }
                         }
                     }
-                }
-
-                if (apkDownloadUrl.isEmpty()) {
-                    apkDownloadUrl = "https://github.com/$GITHUB_REPO/releases/download/$tagName/geotrace-release.apk"
                 }
 
                 val currentVersion = BuildConfig.VERSION_NAME
@@ -155,8 +163,17 @@ class AppUpdateManager(private val context: Context) {
      * Downloads the release APK via DownloadManager and prompts installation when complete.
      */
     fun startDownload(info: AppReleaseInfo, onDownloadStarted: () -> Unit = {}) {
+        if (info.apkDownloadUrl.isBlank()) {
+            _updateStatus.value = UpdateStatus.Error(
+                "No APK binary is attached to ${info.tagName}. Open GitHub Releases in browser instead."
+            )
+            return
+        }
         try {
             val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val appContext = context.applicationContext
+            clearActiveDownloadHandles(appContext, removeFromQueue = false)
+
             val sanitizedTag = info.tagName.replace(Regex("[^A-Za-z0-9._-]"), "_")
             val destinationFile = File(
                 context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
@@ -176,19 +193,23 @@ class AppUpdateManager(private val context: Context) {
             }
 
             val downloadId = downloadManager.enqueue(request)
+            activeDownloadId = downloadId
             _updateStatus.value = UpdateStatus.Downloading(0)
             onDownloadStarted()
 
             val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-            val appContext = context.applicationContext
             val receiver = object : BroadcastReceiver() {
                 override fun onReceive(recvContext: Context?, intent: Intent?) {
                     val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
                     if (id != downloadId) return
 
+                    progressJob?.cancel()
+                    progressJob = null
+                    activeDownloadId = -1L
                     try {
                         appContext.unregisterReceiver(this)
                     } catch (_: Exception) {}
+                    if (activeReceiver === this) activeReceiver = null
 
                     val query = DownloadManager.Query().setFilterById(downloadId)
                     var succeeded = false
@@ -216,15 +237,75 @@ class AppUpdateManager(private val context: Context) {
                     }
                 }
             }
+            activeReceiver = receiver
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 appContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
             } else {
                 appContext.registerReceiver(receiver, filter)
             }
+
+            progressJob = scope.launch {
+                val query = DownloadManager.Query().setFilterById(downloadId)
+                while (isActive && activeDownloadId == downloadId) {
+                    var pct = -1
+                    var statusVal = -1
+                    try {
+                        downloadManager.query(query)?.use { cursor ->
+                            if (cursor.moveToFirst()) {
+                                val stIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                                val dlIdx = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                                val totIdx = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                                if (stIdx >= 0) statusVal = cursor.getInt(stIdx)
+                                val downloaded = if (dlIdx >= 0) cursor.getLong(dlIdx) else 0L
+                                val total = if (totIdx >= 0) cursor.getLong(totIdx) else 0L
+                                if (total > 0L) {
+                                    pct = ((downloaded * 100L) / total).toInt().coerceIn(0, 100)
+                                }
+                            } else {
+                                statusVal = -2 // Removed externally
+                            }
+                        }
+                    } catch (_: Exception) {}
+
+                    if (statusVal == -2) {
+                        clearActiveDownloadHandles(appContext, removeFromQueue = false)
+                        _updateStatus.value = UpdateStatus.Idle
+                        break
+                    }
+                    if (pct >= 0 && _updateStatus.value is UpdateStatus.Downloading) {
+                        _updateStatus.value = UpdateStatus.Downloading(pct)
+                    }
+                    delay(450L)
+                }
+            }
         } catch (e: Exception) {
             _updateStatus.value = UpdateStatus.Error("Failed to initiate download: ${e.message}")
         }
+    }
+
+    fun cancelDownload() {
+        clearActiveDownloadHandles(context.applicationContext, removeFromQueue = true)
+        _updateStatus.value = UpdateStatus.Idle
+    }
+
+    private fun clearActiveDownloadHandles(appContext: Context, removeFromQueue: Boolean) {
+        progressJob?.cancel()
+        progressJob = null
+        val idToCancel = activeDownloadId
+        activeDownloadId = -1L
+        if (removeFromQueue && idToCancel != -1L) {
+            try {
+                val dm = appContext.getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+                dm?.remove(idToCancel)
+            } catch (_: Exception) {}
+        }
+        activeReceiver?.let { recv ->
+            try {
+                appContext.unregisterReceiver(recv)
+            } catch (_: Exception) {}
+        }
+        activeReceiver = null
     }
 
     /**

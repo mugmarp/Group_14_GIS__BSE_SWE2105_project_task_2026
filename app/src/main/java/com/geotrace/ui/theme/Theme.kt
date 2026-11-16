@@ -1,6 +1,5 @@
 package com.geotrace.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
@@ -121,7 +120,7 @@ val ColorScheme.warningColor: Color
 
 @Composable
 fun GISTrackerTheme(
-    darkTheme: Boolean = false, // Strictly light theme only for daylight field GIS operations
+    @Suppress("UNUSED_PARAMETER") darkTheme: Boolean = false, // Strictly light theme only for daylight field GIS operations
     content: @Composable () -> Unit
 ) {
     // Enforce GeoTrack Safe Telemetry Light Color Scheme exclusively

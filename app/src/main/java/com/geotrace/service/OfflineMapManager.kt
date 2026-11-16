@@ -14,15 +14,19 @@ import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineDownloadProgress
 import com.geotrace.model.OfflineMapRegion
 import com.geotrace.ui.components.MapTileSources
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.osmdroid.tileprovider.cachemanager.CacheManager
 import org.osmdroid.tileprovider.modules.SqlTileWriter
 import org.osmdroid.util.BoundingBox
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.floor
@@ -40,10 +44,12 @@ class OfflineMapManager(private val context: Context) {
     companion object {
         private const val TAG = "OfflineMapManager"
         const val MAX_TILES_PER_DOWNLOAD = 2500
+        const val MAX_CACHE_BYTES_MB = 512
         private const val NOTIFICATION_CHANNEL_ID = "offline_maps_channel"
         private const val NOTIFICATION_ID = 4102
     }
 
+    private val ioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val _downloadProgress = MutableStateFlow(OfflineDownloadProgress())
     val downloadProgress: StateFlow<OfflineDownloadProgress> = _downloadProgress.asStateFlow()
 
@@ -58,6 +64,8 @@ class OfflineMapManager(private val context: Context) {
 
     @Volatile
     private var isCancelled = false
+
+    private val completionDispatched = AtomicBoolean(false)
 
     @Volatile
     private var downloadWakeLock: PowerManager.WakeLock? = null
@@ -173,6 +181,7 @@ class OfflineMapManager(private val context: Context) {
         }
 
         isCancelled = false
+        completionDispatched.set(false)
         lastNotificationTimeMs = 0L
         lastNotifiedPercent = -1
         acquireDownloadWakeLock()
@@ -306,13 +315,18 @@ class OfflineMapManager(private val context: Context) {
                         if (isCancelled) {
                             finishWithError("Download cancelled.")
                         } else {
-                            completeSuccess(cleanName, box, effectiveType, minZoom, maxZoom, totalTiles, estMb, onCompleted)
+                            val overlayCount = max(1, totalTiles - baseCount)
+                            if (errors < max(1, overlayCount / 2)) {
+                                completeSuccess(cleanName, box, effectiveType, minZoom, maxZoom, totalTiles, estMb, onCompleted)
+                            } else {
+                                finishWithError("Reference labels failed ($errors tiles). Satellite imagery cached; check network to retry.")
+                            }
                         }
                     }
                 }
             )
         } catch (e: Exception) {
-            completeSuccess(cleanName, box, effectiveType, minZoom, maxZoom, totalTiles, estMb, onCompleted)
+            finishWithError(e.localizedMessage ?: "Overlay pass failed.")
         }
     }
 
@@ -326,8 +340,9 @@ class OfflineMapManager(private val context: Context) {
         estMb: Float,
         onCompleted: (OfflineMapRegion) -> Unit
     ) {
-        cleanupActiveHandles()
-        refreshCacheSize()
+        if (!completionDispatched.compareAndSet(false, true)) return
+        cleanupActiveHandles(detachWriter = true)
+        ioScope.launch { refreshCacheSizeAsync() }
         _downloadProgress.value = OfflineDownloadProgress(isDownloading = false)
         postResultNotification(
             title = "Offline map ready",
@@ -351,9 +366,10 @@ class OfflineMapManager(private val context: Context) {
         )
     }
 
-    private fun finishWithError(msg: String) {
-        cleanupActiveHandles()
-        refreshCacheSize()
+    private fun finishWithError(msg: String, detachWriter: Boolean = true) {
+        if (!completionDispatched.compareAndSet(false, true)) return
+        cleanupActiveHandles(detachWriter = detachWriter)
+        ioScope.launch { refreshCacheSizeAsync() }
         _downloadProgress.value = OfflineDownloadProgress(
             isDownloading = false,
             errorMessage = msg
@@ -370,7 +386,8 @@ class OfflineMapManager(private val context: Context) {
         try {
             activeCacheManager?.cancelAllJobs()
         } catch (_: Exception) {}
-        finishWithError("Download cancelled.")
+        // Avoid detaching SqlTileWriter immediately while osmdroid workers wind down; let GC/callback finalize safely
+        finishWithError("Download cancelled.", detachWriter = false)
     }
 
     fun clearDownloadError() {
@@ -417,11 +434,13 @@ class OfflineMapManager(private val context: Context) {
         }
     }
 
-    private fun cleanupActiveHandles() {
+    private fun cleanupActiveHandles(detachWriter: Boolean = true) {
         activeCacheManager = null
-        try {
-            activeTileWriter?.onDetach()
-        } catch (_: Exception) {}
+        if (detachWriter) {
+            try {
+                activeTileWriter?.onDetach()
+            } catch (_: Exception) {}
+        }
         activeTileWriter = null
         releaseDownloadWakeLock()
     }

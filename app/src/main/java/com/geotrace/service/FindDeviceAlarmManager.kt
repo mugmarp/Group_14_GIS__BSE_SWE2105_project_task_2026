@@ -1,11 +1,13 @@
 package com.geotrace.service
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.RingtoneManager
@@ -16,6 +18,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.geotrace.MainActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +42,7 @@ object FindDeviceAlarmManager {
     private const val AUTO_STOP_MS = 45_000L
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val stateLock = Any()
     private var mediaPlayer: MediaPlayer? = null
     private var vibrator: Vibrator? = null
     private var autoStopJob: Job? = null
@@ -53,85 +57,99 @@ object FindDeviceAlarmManager {
 
     fun startRinging(context: Context, callerName: String) {
         val appCtx = context.applicationContext
-        _ringCallerName.value = callerName.ifBlank { "GeoTrace Device Finder" }
+        val resolvedCaller = callerName.ifBlank { "GeoTrace Device Finder" }
+        synchronized(stateLock) {
+            _ringCallerName.value = resolvedCaller
 
-        if (_isRinging.value && mediaPlayer != null) {
-            postAlarmNotification(appCtx, _ringCallerName.value!!)
-            return
-        }
+            if (_isRinging.value && mediaPlayer != null) {
+                postAlarmNotification(appCtx, resolvedCaller)
+                return
+            }
 
-        stopInternal(appCtx, notifyCallback = false)
-        _isRinging.value = true
-        _ringCallerName.value = callerName.ifBlank { "GeoTrace Device Finder" }
+            stopInternal(appCtx, notifyCallback = false)
+            _isRinging.value = true
+            _ringCallerName.value = resolvedCaller
 
-        createAlarmChannel(appCtx)
-        postAlarmNotification(appCtx, _ringCallerName.value!!)
+            createAlarmChannel(appCtx)
+            postAlarmNotification(appCtx, resolvedCaller)
 
-        try {
-            val alarmUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val candidateUris = listOfNotNull(
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM),
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE),
+                RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            ).distinct()
 
-            if (alarmUri != null) {
-                val player = MediaPlayer().apply {
-                    setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build()
-                    )
-                    setDataSource(appCtx, alarmUri)
-                    isLooping = true
-                    setVolume(1.0f, 1.0f)
-                    prepare()
-                    start()
+            for (uri in candidateUris) {
+                var player: MediaPlayer? = null
+                try {
+                    player = MediaPlayer().apply {
+                        setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_ALARM)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                .build()
+                        )
+                        setDataSource(appCtx, uri)
+                        isLooping = true
+                        setVolume(1.0f, 1.0f)
+                        prepare()
+                        start()
+                    }
+                    mediaPlayer = player
+                    break
+                } catch (e: Exception) {
+                    Log.w(TAG, "Alarm URI fallback failed ($uri): ${e.message}")
+                    try {
+                        player?.release()
+                    } catch (_: Exception) {}
                 }
-                mediaPlayer = player
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to play find-device alarm audio: ${e.message}", e)
-        }
 
-        try {
-            val vib = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val vm = appCtx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
-                vm?.defaultVibrator
-            } else {
-                @Suppress("DEPRECATION")
-                appCtx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-            }
-            vibrator = vib
-            val pattern = longArrayOf(0, 500, 250, 500, 250)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val effect = VibrationEffect.createWaveform(pattern, 0)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    val attrs = VibrationAttributes.Builder()
-                        .setUsage(VibrationAttributes.USAGE_ALARM)
-                        .build()
-                    vib?.vibrate(effect, attrs)
+            try {
+                val vib = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    val vm = appCtx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+                    vm?.defaultVibrator
                 } else {
-                    vib?.vibrate(effect)
+                    @Suppress("DEPRECATION")
+                    appCtx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
                 }
-            } else {
-                @Suppress("DEPRECATION")
-                vib?.vibrate(pattern, 0)
+                vibrator = vib
+                val pattern = longArrayOf(0, 500, 250, 500, 250)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val effect = VibrationEffect.createWaveform(pattern, 0)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        val attrs = VibrationAttributes.Builder()
+                            .setUsage(VibrationAttributes.USAGE_ALARM)
+                            .build()
+                        vib?.vibrate(effect, attrs)
+                    } else {
+                        vib?.vibrate(effect)
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    vib?.vibrate(pattern, 0)
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Vibration unavailable: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Vibration unavailable: ${e.message}")
-        }
 
-        autoStopJob?.cancel()
-        autoStopJob = scope.launch {
-            delay(AUTO_STOP_MS)
-            stopRinging(appCtx)
+            autoStopJob?.cancel()
+            autoStopJob = scope.launch {
+                delay(AUTO_STOP_MS)
+                stopRinging(appCtx)
+            }
         }
     }
 
     fun stopRinging(context: Context) {
-        stopInternal(context.applicationContext, notifyCallback = true)
+        val callbackToInvoke: (() -> Unit)?
+        synchronized(stateLock) {
+            callbackToInvoke = stopInternal(context.applicationContext, notifyCallback = true)
+        }
+        callbackToInvoke?.invoke()
     }
 
-    private fun stopInternal(appCtx: Context, notifyCallback: Boolean) {
+    private fun stopInternal(appCtx: Context, notifyCallback: Boolean): (() -> Unit)? {
         autoStopJob?.cancel()
         autoStopJob = null
 
@@ -159,12 +177,16 @@ object FindDeviceAlarmManager {
 
         _isRinging.value = false
         _ringCallerName.value = null
-        if (notifyCallback) {
-            onAlarmStoppedByUser?.invoke()
-        }
+        return if (notifyCallback) onAlarmStoppedByUser else null
+    }
+
+    private fun canPostNotifications(context: Context): Boolean {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun postAlarmNotification(context: Context, caller: String) {
+        if (!canPostNotifications(context)) return
         val openIntent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -194,8 +216,12 @@ object FindDeviceAlarmManager {
             .addAction(android.R.drawable.ic_media_pause, "Stop Alarm", pendingStop)
             .build()
 
-        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.notify(NOTIFICATION_ID, notif)
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            nm.notify(NOTIFICATION_ID, notif)
+        } catch (se: SecurityException) {
+            Log.w(TAG, "Cannot post alarm notification: ${se.message}")
+        }
     }
 
     private fun createAlarmChannel(context: Context) {
@@ -208,7 +234,7 @@ object FindDeviceAlarmManager {
                 description = "High-priority ring alerts to locate misplaced devices"
                 enableVibration(true)
             }
-            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
             nm.createNotificationChannel(channel)
         }
     }

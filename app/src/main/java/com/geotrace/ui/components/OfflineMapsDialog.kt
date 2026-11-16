@@ -5,12 +5,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -157,21 +160,29 @@ fun OfflineMapsDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Surface(
-            shape = RoundedCornerShape(22.dp),
-            color = colorScheme.surface,
-            border = BorderStroke(1.dp, colorScheme.outlineVariant),
-            shadowElevation = 10.dp,
+        BoxWithConstraints(
             modifier = Modifier
-                .fillMaxWidth(0.94f)
-                .heightIn(max = 680.dp)
-                .testTag("offline_maps_dialog")
+                .fillMaxWidth()
+                .imePadding()
+                .navigationBarsPadding(),
+            contentAlignment = Alignment.Center
         ) {
-            Column(
+            val adaptiveMaxHeight = (maxHeight * 0.88f).coerceAtMost(680.dp)
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                color = colorScheme.surface,
+                border = BorderStroke(1.dp, colorScheme.outlineVariant),
+                shadowElevation = 10.dp,
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
+                    .fillMaxWidth(0.94f)
+                    .heightIn(max = adaptiveMaxHeight)
+                    .testTag("offline_maps_dialog")
             ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
                 // Header
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -254,13 +265,13 @@ fun OfflineMapsDialog(
                                     )
                                     TextButton(
                                         onClick = onDismiss,
-                                        modifier = Modifier.testTag("hide_offline_download_btn")
+                                        modifier = Modifier.heightIn(min = 48.dp).testTag("hide_offline_download_btn")
                                     ) {
                                         Text("Hide", fontWeight = FontWeight.Bold)
                                     }
                                     TextButton(
                                         onClick = { viewModel.cancelOfflineRegionDownload() },
-                                        modifier = Modifier.testTag("cancel_offline_download_btn")
+                                        modifier = Modifier.heightIn(min = 48.dp).testTag("cancel_offline_download_btn")
                                     ) {
                                         Text("Cancel", color = colorScheme.error, fontWeight = FontWeight.Bold)
                                     }
@@ -342,7 +353,7 @@ fun OfflineMapsDialog(
                                             selectedContainerColor = colorScheme.primary,
                                             selectedLabelColor = colorScheme.onPrimary
                                         ),
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                     )
                                 }
                             }
@@ -366,7 +377,7 @@ fun OfflineMapsDialog(
                                                     selectedContainerColor = colorScheme.secondary,
                                                     selectedLabelColor = colorScheme.onSecondary
                                                 ),
-                                                modifier = Modifier.weight(1f)
+                                                modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                             )
                                         }
                                     }
@@ -394,7 +405,7 @@ fun OfflineMapsDialog(
                                             selectedContainerColor = colorScheme.primary,
                                             selectedLabelColor = colorScheme.onPrimary
                                         ),
-                                        modifier = Modifier.weight(1f)
+                                        modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                     )
                                 }
                             }
@@ -519,7 +530,7 @@ fun OfflineMapsDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Tile Cache Used: ${String.format(Locale.US, "%.1f", cacheSizeMb)} MB / 512 MB",
+                            text = "Tile Cache Used: ${String.format(Locale.US, "%.1f", cacheSizeMb)} MB / ${OfflineMapManager.MAX_CACHE_BYTES_MB} MB",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurface
@@ -533,7 +544,7 @@ fun OfflineMapsDialog(
                     TextButton(
                         onClick = { showClearCacheConfirm = true },
                         enabled = !progress.isDownloading && cacheSizeMb > 0.05f,
-                        modifier = Modifier.testTag("clear_tile_cache_btn")
+                        modifier = Modifier.heightIn(min = 48.dp).testTag("clear_tile_cache_btn")
                     ) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(16.dp), tint = colorScheme.error)
                         Spacer(modifier = Modifier.width(4.dp))
@@ -541,6 +552,7 @@ fun OfflineMapsDialog(
                     }
                 }
             }
+        }
         }
     }
 
@@ -607,12 +619,16 @@ private fun OfflineRegionCard(
                     text = region.name,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
-                    color = colorScheme.onSurface
+                    color = colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
                 Text(
                     text = "${region.tileType.label} • Z${region.minZoom}–${region.maxZoom} • ~${String.format(Locale.US, "%.1f", region.estimatedSizeMb)} MB • $dateStr",
                     fontSize = 10.sp,
-                    color = colorScheme.onSurfaceVariant
+                    color = colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
             IconButton(
