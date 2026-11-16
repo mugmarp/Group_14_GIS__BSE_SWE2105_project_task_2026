@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
@@ -48,13 +50,17 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -124,10 +130,23 @@ fun MapScreen(
     val remotePersonalDevices = remember(personalDevices, currentDeviceId) {
         personalDevices.filter { it.deviceId != currentDeviceId && it.id != currentDeviceId }
     }
+    val remoteGroupMembers = remember(groupMembers, currentDeviceId) {
+        groupMembers.filter { currentDeviceId.isBlank() || it.deviceId != currentDeviceId }
+    }
+    val groupDeviceIds = remember(groupMembers) {
+        groupMembers.map { it.deviceId }.filter { it.isNotBlank() }.toSet()
+    }
+    val deduplicatedPersonalDevices = remember(remotePersonalDevices, groupDeviceIds) {
+        remotePersonalDevices.filter { it.deviceId !in groupDeviceIds }
+    }
+    val hasQuickLocateTargets = remoteGroupMembers.isNotEmpty() ||
+        deduplicatedPersonalDevices.isNotEmpty() ||
+        nearbyPeers.isNotEmpty()
 
     var showStartDialog by remember { mutableStateOf(false) }
     var showProfileDialog by remember { mutableStateOf(false) }
     var showOfflineMapsDialog by remember { mutableStateOf(false) }
+    var showDevicesSheet by remember { mutableStateOf(false) }
     var sessionNameInput by remember { mutableStateOf("") }
     var isHeaderExpanded by remember { mutableStateOf(false) }
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -151,7 +170,7 @@ fun MapScreen(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // Persistent Full-Bleed Spatial Viewport with Google Maps-style Integrated Bottom Layer Selection & Geofence Perimeters
+        // Persistent Full-Bleed Spatial Viewport with Google Maps-style Bottom Layer Sheet & Unified Inspect Card
         MapViewComposable(
             currentLocation = currentLocation,
             trailPoints = trailPoints,
@@ -159,10 +178,18 @@ fun MapScreen(
             cellTowerLocation = cellTowerLocation,
             allCellTowers = allCellTowers,
             groupMembers = groupMembers,
-            personalDevices = remotePersonalDevices,
+            personalDevices = deduplicatedPersonalDevices,
             currentDeviceId = currentDeviceId,
             nearbyPeers = nearbyPeers,
             focusedTarget = mapFocusTarget,
+            isRecording = activeSession != null,
+            onClearFocusTarget = {
+                groupViewModel?.clearMapFocusTarget()
+            },
+            onRecenterSelf = {
+                groupViewModel?.clearMapFocusTarget()
+                viewModel.toggleFollowUser(true)
+            },
             offlineRegionsCount = offlineMapRegions.size,
             settings = settings,
             onSelectTileLayer = { selectedTile ->
@@ -216,15 +243,23 @@ fun MapScreen(
                             .background(accentLineColor)
                     )
 
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        // Title Bar with Right-Aligned ☰ Hamburger Menu
+                    Column(
+                        modifier = Modifier.padding(
+                            horizontal = 12.dp,
+                            vertical = if (isHeaderExpanded) 12.dp else 7.dp
+                        )
+                    ) {
+                        val compactSpeed = (currentLocation?.speed ?: 0f) * settings.speedUnit.multiplier
+                        // Title Bar (single slim bar when collapsed; full header when expanded)
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(
-                                modifier = Modifier.weight(1f, fill = false),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { isHeaderExpanded = !isHeaderExpanded },
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Box(
@@ -236,42 +271,88 @@ fun MapScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
                                     Text(
-                                        text = "GeoTrace Live Telemetry",
+                                        text = if (isHeaderExpanded) "GeoTrace Live Telemetry" else "GeoTrace",
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = colorScheme.onSurface
                                     )
                                     Text(
-                                        text = when {
-                                             activeSession != null -> "RECORDING • ${activeSession?.name}"
-                                             trackingMode == TrackingMode.POWER_SAVER -> "CELLULAR ONLY • BASE STATION TELEMETRY"
-                                             currentLocation?.provider == "cellular" -> "CELLULAR FIX • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
-                                             currentLocation != null -> "POSITION LOCKED • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
-                                             else -> "STANDBY • AWAITING LOCATION FIX"
+                                        text = if (!isHeaderExpanded) {
+                                            when {
+                                                activeSession != null -> "REC ${activeSession?.formattedDuration} • ${activeSession?.formattedDistance}"
+                                                currentLocation != null -> "${String.format(Locale.US, "%.1f", compactSpeed)} ${settings.speedUnit.label} • ±${currentLocation?.accuracy?.toInt()}m"
+                                                else -> "Awaiting fix"
+                                            }
+                                        } else {
+                                            when {
+                                                activeSession != null -> "RECORDING • ${activeSession?.name}"
+                                                trackingMode == TrackingMode.POWER_SAVER -> "CELLULAR ONLY • BASE STATION TELEMETRY"
+                                                currentLocation?.provider == "cellular" -> "CELLULAR FIX • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
+                                                currentLocation != null -> "POSITION LOCKED • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
+                                                else -> "STANDBY • AWAITING LOCATION FIX"
+                                            }
                                         },
-                                        fontSize = 9.sp,
+                                        fontSize = if (isHeaderExpanded) 9.sp else 10.sp,
                                         fontWeight = FontWeight.SemiBold,
-                                        letterSpacing = 0.04.sp,
-                                        color = if (trackingMode == TrackingMode.POWER_SAVER) Color(0xFFD97706) else accentLineColor
+                                        fontFamily = if (isHeaderExpanded) FontFamily.Default else FontFamily.Monospace,
+                                        letterSpacing = 0.03.sp,
+                                        color = if (trackingMode == TrackingMode.POWER_SAVER && isHeaderExpanded) Color(0xFFD97706) else accentLineColor,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                     )
                                 }
                             }
 
-                            // ☰ Hamburger Menu on the RIGHT
-                            IconButton(
-                                onClick = onOpenMenu,
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .background(customColors.surfaceContainerLow, RoundedCornerShape(12.dp))
-                                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
-                                    .testTag("menu_btn")
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Icon(
-                                    Icons.Default.Menu,
-                                    contentDescription = "Open Application Menu",
-                                    tint = colorScheme.primary,
-                                    modifier = Modifier.size(22.dp)
-                                )
+                                if (!isHeaderExpanded) {
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = customColors.surfaceContainerLow,
+                                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                                        modifier = Modifier
+                                            .clickable { isHeaderExpanded = true }
+                                            .testTag("toggle_header_btn")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "HUD",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = colorScheme.primary
+                                            )
+                                            Spacer(modifier = Modifier.width(2.dp))
+                                            Icon(
+                                                imageVector = Icons.Default.KeyboardArrowDown,
+                                                contentDescription = "Expand Telemetry HUD",
+                                                tint = colorScheme.primary,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Hamburger Menu on the RIGHT
+                                IconButton(
+                                    onClick = onOpenMenu,
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
+                                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
+                                        .testTag("menu_btn")
+                                ) {
+                                    Icon(
+                                        Icons.Default.Menu,
+                                        contentDescription = "Open Application Menu",
+                                        tint = colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         }
 
@@ -373,7 +454,7 @@ fun MapScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Text(
-                                            text = "⏱️ ACTIVE SESSION: ${activeSession?.formattedDuration}",
+                                            text = "ACTIVE SESSION: ${activeSession?.formattedDuration}",
                                             fontSize = 11.sp,
                                             color = colorScheme.onSurfaceVariant,
                                             fontFamily = FontFamily.Monospace,
@@ -386,75 +467,61 @@ fun MapScreen(
                                             fontWeight = FontWeight.Bold
                                         )
                                     }
+                                } else if (!isPickingGeofenceCenter) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    FilledTonalButton(
+                                        onClick = {
+                                            val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                                            sessionNameInput = "Field Trail $timeStr"
+                                            showStartDialog = true
+                                        },
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(36.dp)
+                                            .testTag("start_track_hud_btn")
+                                    ) {
+                                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Record Field Trail", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    }
                                 }
-                            }
-                        }
 
-                        // Compact Telemetry Summary + Centered Pull-Tab Handle when HUD is collapsed
-                        if (!isHeaderExpanded) {
-                            Spacer(modifier = Modifier.height(6.dp))
-                            val compactSpeed = (currentLocation?.speed ?: 0f) * settings.speedUnit.multiplier
-                            val compactCoord = currentLocation?.let {
-                                formatCoordinates(it.latitude, it.longitude, settings.coordinateFormat)
-                            } ?: "--, --"
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
-                                    .padding(horizontal = 10.dp, vertical = 5.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "${String.format(Locale.US, "%.1f", compactSpeed)} ${settings.speedUnit.label} • ${if (currentLocation != null) "±${currentLocation?.accuracy?.toInt()}m" else "--"}",
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.primary
-                                )
-                                Text(
-                                    text = compactCoord,
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = colorScheme.onSurfaceVariant,
-                                    maxLines = 1
-                                )
-                            }
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = if (isHeaderExpanded) 8.dp else 6.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = customColors.surfaceContainerLow,
-                                border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
-                                modifier = Modifier
-                                    .clickable { isHeaderExpanded = !isHeaderExpanded }
-                                    .testTag("toggle_header_btn")
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.Center
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(top = 8.dp),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(
-                                        imageVector = if (isHeaderExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                                        contentDescription = if (isHeaderExpanded) "Collapse Telemetry HUD" else "Expand Telemetry HUD",
-                                        tint = colorScheme.primary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (isHeaderExpanded) "HIDE HUD" else "SHOW HUD",
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        letterSpacing = 0.06.sp,
-                                        color = colorScheme.primary
-                                    )
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = customColors.surfaceContainerLow,
+                                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                                        modifier = Modifier
+                                            .clickable { isHeaderExpanded = false }
+                                            .testTag("toggle_header_btn")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.Center
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.KeyboardArrowUp,
+                                                contentDescription = "Collapse Telemetry HUD",
+                                                tint = colorScheme.primary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = "HIDE HUD",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                letterSpacing = 0.06.sp,
+                                                color = colorScheme.primary
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -513,13 +580,12 @@ fun MapScreen(
                     }
                 }
 
-                // Floating Devices / Tracking Group & Off-Grid P2P Pill
-                val meshOrGroupActive = activeGroup != null || isP2PEnabled || remotePersonalDevices.isNotEmpty()
+                // Floating Devices / Tracking Group & Off-Grid P2P Pill (opens Quick Devices Sheet if targets exist)
                 Surface(
                     shape = RoundedCornerShape(20.dp),
                     color = when {
                         activeGroup != null -> colorScheme.primaryContainer.copy(alpha = 0.5f)
-                        remotePersonalDevices.isNotEmpty() -> colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                        deduplicatedPersonalDevices.isNotEmpty() -> colorScheme.secondaryContainer.copy(alpha = 0.5f)
                         isP2PEnabled -> colorScheme.tertiaryContainer.copy(alpha = 0.55f)
                         else -> colorScheme.surface
                     },
@@ -528,13 +594,19 @@ fun MapScreen(
                         1.dp,
                         when {
                             activeGroup != null -> colorScheme.primary
-                            remotePersonalDevices.isNotEmpty() -> colorScheme.secondary
+                            deduplicatedPersonalDevices.isNotEmpty() -> colorScheme.secondary
                             isP2PEnabled -> colorScheme.tertiary
                             else -> colorScheme.outlineVariant
                         }
                     ),
                     modifier = Modifier
-                        .clickable { onNavigateToGroups?.invoke() }
+                        .clickable {
+                            if (hasQuickLocateTargets) {
+                                showDevicesSheet = true
+                            } else {
+                                onNavigateToGroups?.invoke()
+                            }
+                        }
                         .testTag("floating_group_pill")
                 ) {
                     Row(
@@ -546,7 +618,7 @@ fun MapScreen(
                             contentDescription = "Devices and Offline P2P Mesh",
                             tint = when {
                                 activeGroup != null -> colorScheme.primary
-                                remotePersonalDevices.isNotEmpty() -> colorScheme.secondary
+                                deduplicatedPersonalDevices.isNotEmpty() -> colorScheme.secondary
                                 isP2PEnabled -> colorScheme.tertiary
                                 else -> colorScheme.onSurfaceVariant
                             },
@@ -560,8 +632,8 @@ fun MapScreen(
                         val pillLabel = when {
                             activeGroup != null && isP2PEnabled -> "${activeGroup!!.name} ($liveGroupCount/${groupMembers.size}) • P2P (${nearbyPeers.size})"
                             activeGroup != null -> "${activeGroup!!.name} ($liveGroupCount/${groupMembers.size})"
-                            remotePersonalDevices.isNotEmpty() && isP2PEnabled -> "My Devices (${remotePersonalDevices.size}) • P2P (${nearbyPeers.size})"
-                            remotePersonalDevices.isNotEmpty() -> "My Devices (${remotePersonalDevices.size})"
+                            deduplicatedPersonalDevices.isNotEmpty() && isP2PEnabled -> "My Devices (${deduplicatedPersonalDevices.size}) • P2P (${nearbyPeers.size})"
+                            deduplicatedPersonalDevices.isNotEmpty() -> "My Devices (${deduplicatedPersonalDevices.size})"
                             isP2PEnabled -> "P2P Mesh (${nearbyPeers.size})"
                             else -> "Devices / P2P"
                         }
@@ -578,6 +650,42 @@ fun MapScreen(
                                 fontSize = 8.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFFD97706)
+                            )
+                        }
+                    }
+                }
+
+                // Option 1 On-Demand Trail Recorder Chip (replaces permanent standby bottom bar)
+                if (activeSession == null && !isPickingGeofenceCenter) {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = colorScheme.surface,
+                        shadowElevation = 3.dp,
+                        border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.55f)),
+                        modifier = Modifier
+                            .clickable {
+                                val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                                sessionNameInput = "Field Trail $timeStr"
+                                showStartDialog = true
+                            }
+                            .testTag("start_track_btn")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.PlayArrow,
+                                contentDescription = "Start Trail Recording",
+                                tint = colorScheme.primary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "Record Trail",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.primary
                             )
                         }
                     }
@@ -696,366 +804,11 @@ fun MapScreen(
                         }
                     }
                 }
-            } else if (mapFocusTarget != null) {
-                val target = mapFocusTarget!!
-                Spacer(modifier = Modifier.height(6.dp))
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = colorScheme.surface,
-                    shadowElevation = 5.dp,
-                    border = BorderStroke(1.5.dp, colorScheme.primary),
-                    modifier = Modifier.testTag("map_focus_banner")
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "LOCATING: ${target.label}",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = colorScheme.onSurface
-                            )
-                            if (target.subtitle.isNotBlank()) {
-                                Text(
-                                    text = target.subtitle,
-                                    fontSize = 10.sp,
-                                    color = colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                        androidx.compose.material3.FilledTonalButton(
-                            onClick = {
-                                groupViewModel?.clearMapFocusTarget()
-                                viewModel.toggleFollowUser(true)
-                            },
-                            shape = RoundedCornerShape(10.dp),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                            modifier = Modifier
-                                .height(34.dp)
-                                .testTag("recenter_self_btn")
-                        ) {
-                            Text(
-                                text = "Re-center Me",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
             }
         }
 
-        // Bottom Multi-Device, Group Member & Offline P2P Peer Carousel (Situational Awareness)
-        val hasVisibleCarouselTargets = !isPickingGeofenceCenter && (
-            remotePersonalDevices.isNotEmpty() ||
-                nearbyPeers.isNotEmpty() ||
-                (activeGroup != null && groupMembers.any { currentDeviceId.isBlank() || it.deviceId != currentDeviceId })
-            )
-        if (hasVisibleCarouselTargets) {
-            val memberScrollState = rememberScrollState()
-            Row(
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(bottom = if (activeSession == null) 78.dp else 84.dp, start = 14.dp, end = 80.dp)
-                    .fillMaxWidth()
-                    .horizontalScroll(memberScrollState),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                for (device in remotePersonalDevices) {
-                    val dist = if (currentLocation != null) device.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude) else null
-                    val distStr = when {
-                        dist == null -> "--"
-                        dist < 1000 -> "${dist.toInt()}m"
-                        else -> String.format(Locale.US, "%.1fkm", dist / 1000f)
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = colorScheme.surface,
-                        shadowElevation = 4.dp,
-                        border = BorderStroke(1.dp, Color(0xFF7C3AED).copy(alpha = 0.7f)),
-                        modifier = Modifier
-                            .clickable {
-                                if (device.latitude != 0.0 || device.longitude != 0.0) {
-                                    viewModel.toggleFollowUser(false)
-                                    groupViewModel?.focusMapOnTarget(
-                                        MapFocusTarget(
-                                            id = device.deviceId,
-                                            label = device.deviceName.ifBlank { device.deviceModel },
-                                            latitude = device.latitude,
-                                            longitude = device.longitude,
-                                            subtitle = "$distStr • ${device.batteryPercent}%"
-                                        )
-                                    )
-                                } else {
-                                    onNavigateToGroups?.invoke()
-                                }
-                            }
-                            .testTag("carousel_device_${device.deviceId}")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(26.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF7C3AED)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = device.deviceName.trim().take(2).uppercase().ifBlank { "DV" },
-                                    color = Color.White,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text(
-                                    text = device.deviceName,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "$distStr • ${device.batteryPercent}%",
-                                    fontSize = 10.sp,
-                                    color = colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if (activeGroup != null) {
-                    for (member in groupMembers) {
-                        if (currentDeviceId.isNotBlank() && member.deviceId == currentDeviceId) continue
-                        val dist = if (currentLocation != null) member.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude) else null
-                        val distStr = when {
-                            dist == null -> "--"
-                            dist < 1000 -> "${dist.toInt()}m"
-                            else -> String.format(Locale.US, "%.1fkm", dist / 1000f)
-                        }
-                        val updatedMs = member.lastUpdated?.toDate()?.time
-                        val isOffline = updatedMs == null || (nowMs - updatedMs) > 120_000L
-                        val memColor = try { Color(android.graphics.Color.parseColor(member.avatarColor)) } catch(e: Exception) { colorScheme.primary }
-
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = colorScheme.surface,
-                            shadowElevation = 4.dp,
-                            border = BorderStroke(
-                                1.dp,
-                                if (isOffline) Color(0xFFD97706).copy(alpha = 0.65f) else colorScheme.outlineVariant.copy(alpha = 0.7f)
-                            ),
-                            modifier = Modifier
-                                .clickable {
-                                    if (member.latitude != 0.0 || member.longitude != 0.0) {
-                                        viewModel.toggleFollowUser(false)
-                                        val statusNote = if (isOffline) "Offline • $distStr • ${member.batteryPercent}%" else "$distStr • ${member.batteryPercent}%"
-                                        groupViewModel?.focusMapOnTarget(
-                                            MapFocusTarget(
-                                                id = member.id.ifBlank { member.userId },
-                                                label = member.displayName,
-                                                latitude = member.latitude,
-                                                longitude = member.longitude,
-                                                subtitle = statusNote
-                                            )
-                                        )
-                                    } else {
-                                        onNavigateToGroups?.invoke()
-                                    }
-                                }
-                                .testTag("carousel_member_${member.userId}")
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(26.dp)
-                                        .clip(CircleShape)
-                                        .background(if (isOffline) memColor.copy(alpha = 0.5f) else memColor),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    val initials = member.displayName.trim().take(2).uppercase().ifBlank { "M" }
-                                    Text(
-                                        text = initials,
-                                        color = Color.White,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column {
-                                    Text(
-                                        text = member.displayName,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = if (isOffline) "$distStr • Offline" else "$distStr • ${member.batteryPercent}%",
-                                        fontSize = 10.sp,
-                                        color = if (isOffline) Color(0xFFD97706) else colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                for (peer in nearbyPeers) {
-                    val distText = if (currentLocation != null) {
-                        val d = peer.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude)
-                        val bearing = peer.bearingFrom(currentLocation!!.latitude, currentLocation!!.longitude)
-                        val dirs = arrayOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
-                        val compass = dirs[(((((bearing % 360f) + 360f) % 360f) + 22.5f) / 45f).toInt() % 8]
-                        val distPart = if (d < 1000) "${d.toInt()}m" else String.format(Locale.US, "%.1fkm", d / 1000f)
-                        "$distPart $compass"
-                    } else {
-                        "Nearby"
-                    }
-
-                    Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = colorScheme.surface,
-                        shadowElevation = 4.dp,
-                        border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.7f)),
-                        modifier = Modifier
-                            .clickable {
-                                viewModel.toggleFollowUser(false)
-                                groupViewModel?.focusMapOnTarget(
-                                    MapFocusTarget(
-                                        id = peer.endpointId,
-                                        label = peer.displayName,
-                                        latitude = peer.latitude,
-                                        longitude = peer.longitude,
-                                        subtitle = "P2P • $distText • ${peer.batteryPercent}%"
-                                    )
-                                )
-                            }
-                            .testTag("carousel_p2p_${peer.endpointId}")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(26.dp)
-                                    .clip(CircleShape)
-                                    .background(colorScheme.tertiary),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = peer.displayName.trim().take(2).uppercase().ifBlank { "P2" },
-                                    color = Color.White,
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = peer.displayName,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = colorScheme.onSurface
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Surface(
-                                        shape = RoundedCornerShape(4.dp),
-                                        color = colorScheme.tertiary.copy(alpha = 0.14f)
-                                    ) {
-                                        Text(
-                                            text = "P2P",
-                                            fontSize = 8.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = colorScheme.tertiary,
-                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
-                                        )
-                                    }
-                                }
-                                Text(
-                                    text = "$distText • ${peer.batteryPercent}%",
-                                    fontSize = 10.sp,
-                                    color = colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Floating Recording Action Pill (Centered, Compact, Clean Spatial Viewport)
-        if (!isPickingGeofenceCenter && activeSession == null) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 12.dp)
-                    .testTag("floating_recording_pill"),
-                shape = RoundedCornerShape(24.dp),
-                color = colorScheme.surface,
-                shadowElevation = 5.dp,
-                border = BorderStroke(1.dp, colorScheme.outlineVariant)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 6.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(if (currentLocation != null) colorScheme.tertiary else customColors.warning)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (currentLocation != null) "Ready" else "Standby",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Button(
-                        onClick = {
-                            val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-                            sessionNameInput = "Field Trail $timeStr"
-                            showStartDialog = true
-                        },
-                        modifier = Modifier
-                            .height(38.dp)
-                            .testTag("start_track_btn"),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = colorScheme.primary,
-                            contentColor = colorScheme.onPrimary
-                        ),
-                        shape = RoundedCornerShape(19.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 0.dp)
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(17.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            "START RECORDING",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 0.03.sp
-                        )
-                    }
-                }
-            }
-        } else if (!isPickingGeofenceCenter) {
+        // Active Recording Pill (shown ONLY while actively recording; hidden in standby for zero bottom clutter)
+        if (!isPickingGeofenceCenter && activeSession != null) {
             // Floating Recording Action Pill (Active Recording State)
             Surface(
                 modifier = Modifier
@@ -1273,6 +1026,285 @@ fun MapScreen(
             },
             onDismiss = { showOfflineMapsDialog = false }
         )
+    }
+
+    // On-Demand Quick Locate Sheet for Group Devices, Personal Devices & Nearby P2P Peers
+    if (showDevicesSheet) {
+        val devicesSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(
+            onDismissRequest = { showDevicesSheet = false },
+            sheetState = devicesSheetState,
+            containerColor = colorScheme.surface,
+            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+            modifier = Modifier.testTag("quick_devices_sheet")
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .navigationBarsPadding()
+                    .padding(horizontal = 18.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = activeGroup?.name ?: "Tracked Devices & Peers",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Tap any device to locate it on the map",
+                            fontSize = 11.sp,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    TextButton(
+                        onClick = {
+                            showDevicesSheet = false
+                            onNavigateToGroups?.invoke()
+                        },
+                        modifier = Modifier.testTag("manage_groups_from_sheet_btn")
+                    ) {
+                        Text("Manage", fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                for (member in remoteGroupMembers) {
+                    val dist = if (currentLocation != null) member.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude) else null
+                    val distStr = when {
+                        dist == null -> "--"
+                        dist < 1000 -> "${dist.toInt()}m"
+                        else -> String.format(Locale.US, "%.1fkm", dist / 1000f)
+                    }
+                    val updatedMs = member.lastUpdated?.toDate()?.time
+                    val isOffline = updatedMs == null || (nowMs - updatedMs) > 120_000L
+                    val memColor = try { Color(android.graphics.Color.parseColor(member.avatarColor)) } catch (e: Exception) { colorScheme.primary }
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = customColors.surfaceContainerLow,
+                        border = BorderStroke(1.dp, if (isOffline) Color(0xFFD97706).copy(alpha = 0.5f) else colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showDevicesSheet = false
+                                if (member.latitude != 0.0 || member.longitude != 0.0) {
+                                    viewModel.toggleFollowUser(false)
+                                    val statusNote = if (isOffline) "Offline • $distStr • ${member.batteryPercent}%" else "$distStr • ${member.batteryPercent}%"
+                                    groupViewModel?.focusMapOnTarget(
+                                        MapFocusTarget(
+                                            id = member.id.ifBlank { member.userId },
+                                            label = member.displayName,
+                                            latitude = member.latitude,
+                                            longitude = member.longitude,
+                                            subtitle = statusNote
+                                        )
+                                    )
+                                } else {
+                                    onNavigateToGroups?.invoke()
+                                }
+                            }
+                            .testTag("sheet_member_${member.userId}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isOffline) memColor.copy(alpha = 0.5f) else memColor),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = member.displayName.trim().take(2).uppercase().ifBlank { "M" },
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = member.displayName,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = if (isOffline) "$distStr • Offline • ${member.batteryPercent}%" else "$distStr • Live • ${member.batteryPercent}%",
+                                    fontSize = 11.sp,
+                                    color = if (isOffline) Color(0xFFD97706) else colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.MyLocation,
+                                contentDescription = "Locate on Map",
+                                tint = colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+
+                for (device in deduplicatedPersonalDevices) {
+                    val dist = if (currentLocation != null) device.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude) else null
+                    val distStr = when {
+                        dist == null -> "--"
+                        dist < 1000 -> "${dist.toInt()}m"
+                        else -> String.format(Locale.US, "%.1fkm", dist / 1000f)
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = customColors.surfaceContainerLow,
+                        border = BorderStroke(1.dp, Color(0xFF7C3AED).copy(alpha = 0.45f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showDevicesSheet = false
+                                if (device.latitude != 0.0 || device.longitude != 0.0) {
+                                    viewModel.toggleFollowUser(false)
+                                    groupViewModel?.focusMapOnTarget(
+                                        MapFocusTarget(
+                                            id = device.deviceId,
+                                            label = device.deviceName.ifBlank { device.deviceModel },
+                                            latitude = device.latitude,
+                                            longitude = device.longitude,
+                                            subtitle = "$distStr • ${device.batteryPercent}%"
+                                        )
+                                    )
+                                } else {
+                                    onNavigateToGroups?.invoke()
+                                }
+                            }
+                            .testTag("sheet_device_${device.deviceId}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF7C3AED)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = device.deviceName.trim().take(2).uppercase().ifBlank { "DV" },
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = device.deviceName,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "$distStr • ${device.batteryPercent}%",
+                                    fontSize = 11.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.MyLocation,
+                                contentDescription = "Locate on Map",
+                                tint = colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+
+                for (peer in nearbyPeers) {
+                    val distText = if (currentLocation != null) {
+                        val d = peer.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude)
+                        val bearing = peer.bearingFrom(currentLocation!!.latitude, currentLocation!!.longitude)
+                        val dirs = arrayOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+                        val compass = dirs[(((((bearing % 360f) + 360f) % 360f) + 22.5f) / 45f).toInt() % 8]
+                        val distPart = if (d < 1000) "${d.toInt()}m" else String.format(Locale.US, "%.1fkm", d / 1000f)
+                        "$distPart $compass"
+                    } else {
+                        "Nearby"
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = customColors.surfaceContainerLow,
+                        border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.55f)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                showDevicesSheet = false
+                                viewModel.toggleFollowUser(false)
+                                groupViewModel?.focusMapOnTarget(
+                                    MapFocusTarget(
+                                        id = peer.endpointId,
+                                        label = peer.displayName,
+                                        latitude = peer.latitude,
+                                        longitude = peer.longitude,
+                                        subtitle = "P2P • $distText • ${peer.batteryPercent}%"
+                                    )
+                                )
+                            }
+                            .testTag("sheet_p2p_${peer.endpointId}")
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .clip(CircleShape)
+                                    .background(colorScheme.tertiary),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = peer.displayName.trim().take(2).uppercase().ifBlank { "P2" },
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "${peer.displayName} (P2P)",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "$distText • ${peer.batteryPercent}%",
+                                    fontSize = 11.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                imageVector = Icons.Default.MyLocation,
+                                contentDescription = "Locate on Map",
+                                tint = colorScheme.tertiary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+        }
     }
 }
 

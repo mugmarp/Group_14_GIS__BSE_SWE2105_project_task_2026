@@ -111,6 +111,9 @@ fun MapViewComposable(
     currentDeviceId: String = "",
     nearbyPeers: List<com.geotrace.model.P2PPeer> = emptyList(),
     focusedTarget: com.geotrace.model.MapFocusTarget? = null,
+    isRecording: Boolean = false,
+    onClearFocusTarget: (() -> Unit)? = null,
+    onRecenterSelf: (() -> Unit)? = null,
     offlineRegionsCount: Int = 0,
     settings: com.geotrace.model.TrackerSettings = com.geotrace.model.TrackerSettings(),
     onSelectTileLayer: ((com.geotrace.model.MapTileType) -> Unit)? = null,
@@ -329,6 +332,7 @@ fun MapViewComposable(
                         position = GeoPoint(startPt.latitude, startPt.longitude)
                         title = "Trail Start"
                         snippet = "First logged coordinate"
+                        infoWindow = null
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                         icon = trailStartDrawable
                         setOnMarkerClickListener { m, _ ->
@@ -342,6 +346,7 @@ fun MapViewComposable(
                         position = GeoPoint(endPt.latitude, endPt.longitude)
                         title = "Trail End"
                         snippet = "Latest logged waypoint"
+                        infoWindow = null
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                         icon = trailEndDrawable
                         setOnMarkerClickListener { m, _ ->
@@ -362,6 +367,7 @@ fun MapViewComposable(
                         )
                         val accuracyPolygon = Polygon(map).apply {
                             points = accuracyPoints
+                            infoWindow = null
                             fillPaint.color = userPinColor.copy(alpha = 0.14f).toArgb()
                             outlinePaint.color = userPinColor.copy(alpha = 0.70f).toArgb()
                             outlinePaint.strokeWidth = 2f
@@ -377,6 +383,7 @@ fun MapViewComposable(
                         title = if (isCellularFix) "This Device (Cellular Fix)" else "This Device (GNSS)"
                         val convertedSpeed = currentLocation.speed * settings.speedUnit.multiplier
                         snippet = "Speed: ${String.format(Locale.US, "%.1f", convertedSpeed)} ${settings.speedUnit.label} (${currentLocation.gaitLabel}) • Acc ±${currentLocation.accuracy.toInt()}m"
+                        infoWindow = null
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                         icon = if (isCellularFix) cellChevronDrawable else gpsChevronDrawable
                         setOnMarkerClickListener { m, _ ->
@@ -425,6 +432,7 @@ fun MapViewComposable(
                         )
                         val outerExitRing = Polygon(map).apply {
                             points = computeCircleGeoPoints(zoneCenter, exitR)
+                            infoWindow = null
                             fillPaint.color = android.graphics.Color.TRANSPARENT
                             outlinePaint.color = hystColor
                             outlinePaint.strokeWidth = 1.5f
@@ -435,6 +443,7 @@ fun MapViewComposable(
                         if (entryR < zone.radiusMeters - 2.0) {
                             val innerEntryRing = Polygon(map).apply {
                                 points = computeCircleGeoPoints(zoneCenter, entryR)
+                                infoWindow = null
                                 fillPaint.color = android.graphics.Color.TRANSPARENT
                                 outlinePaint.color = hystColor
                                 outlinePaint.strokeWidth = 1.5f
@@ -446,14 +455,15 @@ fun MapViewComposable(
 
                     val zonePolygon = Polygon(map).apply {
                         points = circlePoints
+                        infoWindow = null
                         fillPaint.color = fillColor
                         outlinePaint.color = outlineColor
                         outlinePaint.strokeWidth = 3f
-                        title = "${zone.category.iconEmoji} ${zone.name} (${zone.radiusMeters.toInt()}m)"
+                        title = "${zone.name} (${zone.radiusMeters.toInt()}m)"
                         snippet = if (deltaHyst > 0.0) {
-                            "Category: ${zone.category.label} | Status: ${if (zone.isInside) "INSIDE" else "OUTSIDE"} | Entry ≤${entryR.toInt()}m, Exit >${exitR.toInt()}m"
+                            "${zone.category.label} • ${if (zone.isInside) "Inside" else "Outside"} • Entry ≤${entryR.toInt()}m, Exit >${exitR.toInt()}m"
                         } else {
-                            "Category: ${zone.category.label} | Status: ${if (zone.isInside) "INSIDE SAFE ZONE" else "OUTSIDE"}"
+                            "${zone.category.label} • ${if (zone.isInside) "Inside Safe Zone" else "Outside"}"
                         }
                     }
                     map.overlays.add(zonePolygon)
@@ -473,12 +483,11 @@ fun MapViewComposable(
                             val neighborCirclePoints = computeCircleGeoPoints(neighborGeoPoint, tower.rangeMeters)
                             val neighborPolygon = Polygon(map).apply {
                                 points = neighborCirclePoints
+                                infoWindow = null
                                 fillPaint.color = android.graphics.Color.argb(12, 100, 116, 139) // Slate gray faint
                                 outlinePaint.color = android.graphics.Color.argb(120, 148, 163, 184)
                                 outlinePaint.strokeWidth = 1.5f
                                 outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(8f, 8f), 0f)
-                                title = "🗼 Neighbor/Idle Mast (${tower.operatorName})"
-                                snippet = "CID: ${tower.cellId} | Status: STANDBY (Available for Handover)"
                             }
                             map.overlays.add(neighborPolygon)
 
@@ -487,6 +496,7 @@ fun MapViewComposable(
                                 position = neighborGeoPoint
                                 title = "Neighbor Mast: ${tower.operatorName}"
                                 snippet = "CID: ${tower.cellId} • Standby Sector"
+                                infoWindow = null
                                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                                 icon = neighborTowerDrawable
                                 setOnMarkerClickListener { m, _ ->
@@ -519,23 +529,22 @@ fun MapViewComposable(
                         val towerCirclePoints = computeCircleGeoPoints(towerGeoPoint, servingTower.rangeMeters)
                         val towerCoveragePolygon = Polygon(map).apply {
                             points = towerCirclePoints
+                            infoWindow = null
                             fillPaint.color = android.graphics.Color.argb(38, android.graphics.Color.red(signalColor), android.graphics.Color.green(signalColor), android.graphics.Color.blue(signalColor))
                             outlinePaint.color = android.graphics.Color.argb(220, android.graphics.Color.red(signalColor), android.graphics.Color.green(signalColor), android.graphics.Color.blue(signalColor))
                             outlinePaint.strokeWidth = 2.8f
                             outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(12f, 10f), 0f)
-                            title = "ACTIVE SERVING BASE STATION: ${servingTower.operatorName}"
-                            snippet = "CID: ${servingTower.cellId} | LAC: ${servingTower.lac} | $signalLabel | ±${servingTower.rangeMeters.toInt()}m"
                         }
                         map.overlays.add(towerCoveragePolygon)
 
                         // Connecting Vector Ray (color-coded by live dBm RF signal strength)
                         if (currentLocation != null) {
                             val vectorRay = Polyline(map).apply {
+                                infoWindow = null
                                 outlinePaint.color = android.graphics.Color.argb(235, android.graphics.Color.red(signalColor), android.graphics.Color.green(signalColor), android.graphics.Color.blue(signalColor))
                                 outlinePaint.strokeWidth = 4.0f
                                 outlinePaint.strokeCap = Paint.Cap.ROUND
                                 outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 10f), 0f)
-                                title = "Radio Link • $signalLabel"
                                 setPoints(listOf(
                                     GeoPoint(currentLocation.latitude, currentLocation.longitude),
                                     towerGeoPoint
@@ -549,6 +558,7 @@ fun MapViewComposable(
                             position = towerGeoPoint
                             title = "Serving Mast: ${servingTower.operatorName}"
                             snippet = "CID: ${servingTower.cellId} • $signalLabel • ±${servingTower.rangeMeters.toInt()}m"
+                            infoWindow = null
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                             icon = servingTowerDrawable
                             setOnMarkerClickListener { m, _ ->
@@ -561,6 +571,7 @@ fun MapViewComposable(
                 }
 
                 // 5. Draw Tracking Group Devices (excluding self device to avoid overlapping User pin)
+                val groupDeviceIds = groupMembers.map { it.deviceId }.filter { it.isNotBlank() }.toSet()
                 for (member in groupMembers) {
                     if (currentDeviceId.isNotBlank() && member.deviceId == currentDeviceId) continue
                     if (!isValidCoordinate(member.latitude, member.longitude)) continue
@@ -576,6 +587,7 @@ fun MapViewComposable(
                         val memberAccCircle = computeCircleGeoPoints(memberGeoPoint, member.accuracy.toDouble())
                         val memberPolygon = Polygon(map).apply {
                             points = memberAccCircle
+                            infoWindow = null
                             fillPaint.color = android.graphics.Color.argb(25, android.graphics.Color.red(memberColor), android.graphics.Color.green(memberColor), android.graphics.Color.blue(memberColor))
                             outlinePaint.color = android.graphics.Color.argb(160, android.graphics.Color.red(memberColor), android.graphics.Color.green(memberColor), android.graphics.Color.blue(memberColor))
                             outlinePaint.strokeWidth = 1.5f
@@ -594,6 +606,7 @@ fun MapViewComposable(
                         val memberSpeed = member.speed * settings.speedUnit.multiplier
                         val modeLabel = formatMarkerMode(member.trackingMode)
                         snippet = "${String.format(Locale.US, "%.1f", memberSpeed)} ${settings.speedUnit.label} • Battery ${member.batteryPercent}% • $modeLabel"
+                        infoWindow = null
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         icon = memberIcon
                         setOnMarkerClickListener { m, _ ->
@@ -604,10 +617,11 @@ fun MapViewComposable(
                     map.overlays.add(memberMarker)
                 }
 
-                // 5b. Draw Personal Multi-Device Fleet (other phones/tablets on same account)
+                // 5b. Draw Personal Multi-Device Fleet (deduplicated against active group devices)
                 val violetColor = android.graphics.Color.parseColor("#7C3AED")
                 for (device in personalDevices) {
                     if (device.deviceId == currentDeviceId || device.id == currentDeviceId) continue
+                    if (device.deviceId in groupDeviceIds) continue
                     if (!isValidCoordinate(device.latitude, device.longitude)) continue
                     if (device.latitude == 0.0 && device.longitude == 0.0) continue
                     val devPoint = GeoPoint(device.latitude, device.longitude)
@@ -619,6 +633,7 @@ fun MapViewComposable(
                         position = devPoint
                         title = device.deviceName
                         snippet = "${device.deviceModel} • Battery ${device.batteryPercent}% • ${formatMarkerMode(device.trackingMode)}"
+                        infoWindow = null
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         icon = devIcon
                         setOnMarkerClickListener { m, _ ->
@@ -643,6 +658,7 @@ fun MapViewComposable(
                         title = "P2P: ${peer.displayName}"
                         val peerSpeed = peer.speed * settings.speedUnit.multiplier
                         snippet = "${String.format(Locale.US, "%.1f", peerSpeed)} ${settings.speedUnit.label} • Battery ${peer.batteryPercent}% • Direct BLE/Wi-Fi"
+                        infoWindow = null
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         icon = peerIcon
                         setOnMarkerClickListener { m, _ ->
@@ -673,11 +689,13 @@ fun MapViewComposable(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Clean Bottom-Start Marker Inspect Card (never clipped behind top HUD)
-        selectedMarkerInfo?.let { info ->
-            val hasCarousel = groupMembers.any { it.deviceId != currentDeviceId } ||
-                personalDevices.isNotEmpty() ||
-                nearbyPeers.isNotEmpty()
+        // Unified Bottom-Start Marker Inspect / Target Focus Card (single contextual card, zero overlap)
+        val activeFocus = if (!isMapPickMode && selectedMarkerInfo == null) focusedTarget else null
+        val inspectCardTitle = selectedMarkerInfo?.title ?: activeFocus?.label
+        val inspectCardDetail = selectedMarkerInfo?.detail ?: activeFocus?.subtitle
+        val inspectCardBadge = selectedMarkerInfo?.badge ?: if (activeFocus != null) "LOCATING" else null
+
+        if (inspectCardTitle != null && inspectCardBadge != null) {
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = colorScheme.surface,
@@ -687,14 +705,14 @@ fun MapViewComposable(
                     .align(Alignment.BottomStart)
                     .padding(
                         start = 14.dp,
-                        end = 78.dp,
-                        bottom = if (hasCarousel) 136.dp else 76.dp
+                        end = 80.dp,
+                        bottom = if (isRecording) 74.dp else 16.dp
                     )
-                    .widthIn(max = 280.dp)
-                    .testTag("marker_inspect_card")
+                    .widthIn(max = 300.dp)
+                    .testTag(if (selectedMarkerInfo != null) "marker_inspect_card" else "map_focus_banner")
             ) {
                 Row(
-                    modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                    modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
@@ -704,7 +722,7 @@ fun MapViewComposable(
                                 color = colorScheme.primary.copy(alpha = 0.14f)
                             ) {
                                 Text(
-                                    text = info.badge,
+                                    text = inspectCardBadge,
                                     fontSize = 8.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = colorScheme.primary,
@@ -713,28 +731,53 @@ fun MapViewComposable(
                             }
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = info.title,
+                                text = inspectCardTitle,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = colorScheme.onSurface
+                                color = colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                             )
                         }
-                        if (info.detail.isNotBlank()) {
+                        if (!inspectCardDetail.isNullOrBlank()) {
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = info.detail,
+                                text = inspectCardDetail,
                                 fontSize = 10.sp,
-                                color = colorScheme.onSurfaceVariant
+                                color = colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                    if (selectedMarkerInfo == null && activeFocus != null && onRecenterSelf != null) {
+                        androidx.compose.material3.TextButton(
+                            onClick = { onRecenterSelf() },
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier
+                                .height(32.dp)
+                                .testTag("recenter_self_btn")
+                        ) {
+                            Text(
+                                text = "Re-center",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
                             )
                         }
                     }
                     IconButton(
-                        onClick = { selectedMarkerInfo = null },
+                        onClick = {
+                            if (selectedMarkerInfo != null) {
+                                selectedMarkerInfo = null
+                            } else {
+                                onClearFocusTarget?.invoke()
+                            }
+                        },
                         modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
-                            contentDescription = "Dismiss Marker Details",
+                            contentDescription = "Dismiss Details",
                             tint = colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp)
                         )
