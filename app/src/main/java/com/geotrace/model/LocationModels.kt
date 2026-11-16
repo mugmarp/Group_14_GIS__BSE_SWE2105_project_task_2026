@@ -134,7 +134,9 @@ data class CellTowerInfo(
     val estimatedDistanceKm: Double? = null,
     val latitude: Double? = null,
     val longitude: Double? = null,
-    val isDemonstrationData: Boolean = false
+    val isDemonstrationData: Boolean = false,
+    val pci: Int? = null, // Physical Cell ID (LTE/NR) or PSC (WCDMA)
+    val earfcn: Int? = null // Channel number (EARFCN / ARFCN / UARFCN)
 ) {
     val operatorDisplayName: String
         get() = when {
@@ -144,7 +146,8 @@ data class CellTowerInfo(
             mcc == 641 && mnc == 11 -> "Uganda Telecom (UTL)"
             mcc in 310..316 -> "Android Virtual Radio / US Test (PLMN $mcc-$mnc)"
             mcc != null && mnc != null -> "PLMN $mcc-$mnc"
-            else -> "Unknown Cellular Network"
+            !isRegistered && pci != null -> "Neighbor RF Sector"
+            else -> "Unresolved RF Sector"
         }
 
     val countryDisplayName: String

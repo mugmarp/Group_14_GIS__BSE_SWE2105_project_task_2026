@@ -23,6 +23,7 @@ class CellularDiagnosticManager(private val context: Context) {
     fun readCurrentCellTowers(): List<CellTowerInfo> {
         val tm = telephonyManager ?: return emptyList()
         val results = mutableListOf<CellTowerInfo>()
+        val seenKeys = mutableSetOf<String>()
 
         try {
             val cellInfoList: List<CellInfo>? = tm.allCellInfo
@@ -30,7 +31,10 @@ class CellularDiagnosticManager(private val context: Context) {
                 for (info in cellInfoList) {
                     val parsed = parseCellInfo(info)
                     if (parsed != null) {
-                        results.add(parsed)
+                        val key = "${parsed.type}_${parsed.isRegistered}_${parsed.cid}_${parsed.pci}_${parsed.earfcn}_${parsed.signalDbm}"
+                        if (seenKeys.add(key)) {
+                            results.add(parsed)
+                        }
                     }
                 }
             }
@@ -43,6 +47,22 @@ class CellularDiagnosticManager(private val context: Context) {
         return results
     }
 
+    private fun sanitizeCid(raw: Long): Long? {
+        return raw.takeIf {
+            it > 0L &&
+                it != Int.MAX_VALUE.toLong() &&
+                it != Long.MAX_VALUE &&
+                it != 268435455L && // 0x0FFFFFFF: 3GPP LTE ECI unavailable sentinel
+                it != 65535L        // 0xFFFF: 2G/3G unavailable CID sentinel
+        }
+    }
+
+    private fun sanitizeLac(raw: Int): Int? {
+        return raw.takeIf {
+            it in 1 until 65535 && it != Int.MAX_VALUE
+        }
+    }
+
     private fun parseCellInfo(info: CellInfo): CellTowerInfo? {
         when {
             info is CellInfoLte -> {
@@ -52,20 +72,26 @@ class CellularDiagnosticManager(private val context: Context) {
                     identity.mccString?.toIntOrNull()
                 } else {
                     @Suppress("DEPRECATION")
-                    identity.mcc.takeIf { it != Int.MAX_VALUE }
+                    identity.mcc.takeIf { it != Int.MAX_VALUE && it in 100..999 }
                 }
                 val mnc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     identity.mncString?.toIntOrNull()
                 } else {
                     @Suppress("DEPRECATION")
-                    identity.mnc.takeIf { it != Int.MAX_VALUE }
+                    identity.mnc.takeIf { it != Int.MAX_VALUE && it in 0..999 }
                 }
-                val cid = identity.ci.toLong().takeIf { it != Int.MAX_VALUE.toLong() && it != -1L }
-                val tac = identity.tac.takeIf { it != Int.MAX_VALUE && it != -1 }
-                val dbm = signal.dbm
-                val timingAdvance = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    signal.timingAdvance.takeIf { it != Int.MAX_VALUE }
+                val cid = sanitizeCid(identity.ci.toLong())
+                val tac = sanitizeLac(identity.tac)
+                val pci = identity.pci.takeIf { it in 0..503 }
+                val earfcn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    identity.earfcn.takeIf { it in 0..262143 }
                 } else null
+                val dbm = signal.dbm.takeIf { it in -145..-30 } ?: return null
+                val timingAdvance = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    signal.timingAdvance.takeIf { it in 0..1282 }
+                } else null
+
+                if (cid == null && pci == null) return null
 
                 return CellTowerInfo(
                     type = "4G LTE",
@@ -78,7 +104,9 @@ class CellularDiagnosticManager(private val context: Context) {
                     isRegistered = info.isRegistered,
                     operatorName = identity.operatorAlphaLong?.toString(),
                     timingAdvance = timingAdvance,
-                    estimatedDistanceKm = calculateEstimatedDistance(dbm, timingAdvance)
+                    estimatedDistanceKm = calculateEstimatedDistance(dbm, timingAdvance),
+                    pci = pci,
+                    earfcn = earfcn
                 )
             }
             info is CellInfoGsm -> {
@@ -88,16 +116,25 @@ class CellularDiagnosticManager(private val context: Context) {
                     identity.mccString?.toIntOrNull()
                 } else {
                     @Suppress("DEPRECATION")
-                    identity.mcc.takeIf { it != Int.MAX_VALUE }
+                    identity.mcc.takeIf { it != Int.MAX_VALUE && it in 100..999 }
                 }
                 val mnc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     identity.mncString?.toIntOrNull()
                 } else {
                     @Suppress("DEPRECATION")
-                    identity.mnc.takeIf { it != Int.MAX_VALUE }
+                    identity.mnc.takeIf { it != Int.MAX_VALUE && it in 0..999 }
                 }
-                val cid = identity.cid.toLong().takeIf { it != Int.MAX_VALUE.toLong() && it != -1L }
-                val lac = identity.lac.takeIf { it != Int.MAX_VALUE && it != -1 }
+                val cid = sanitizeCid(identity.cid.toLong())
+                val lac = sanitizeLac(identity.lac)
+                val bsic = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    identity.bsic.takeIf { it in 0..63 }
+                } else null
+                val arfcn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    identity.arfcn.takeIf { it in 0..1023 }
+                } else null
+                val dbm = signal.dbm.takeIf { it in -140..-30 } ?: return null
+
+                if (cid == null && bsic == null) return null
 
                 return CellTowerInfo(
                     type = "2G GSM",
@@ -105,11 +142,13 @@ class CellularDiagnosticManager(private val context: Context) {
                     mnc = mnc,
                     cid = cid,
                     lac = lac,
-                    signalDbm = signal.dbm,
+                    signalDbm = dbm,
                     signalLevel = signal.level,
                     isRegistered = info.isRegistered,
                     operatorName = identity.operatorAlphaLong?.toString(),
-                    estimatedDistanceKm = calculateEstimatedDistance(signal.dbm, null)
+                    estimatedDistanceKm = calculateEstimatedDistance(dbm, null),
+                    pci = bsic,
+                    earfcn = arfcn
                 )
             }
             info is CellInfoWcdma -> {
@@ -119,16 +158,23 @@ class CellularDiagnosticManager(private val context: Context) {
                     identity.mccString?.toIntOrNull()
                 } else {
                     @Suppress("DEPRECATION")
-                    identity.mcc.takeIf { it != Int.MAX_VALUE }
+                    identity.mcc.takeIf { it != Int.MAX_VALUE && it in 100..999 }
                 }
                 val mnc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     identity.mncString?.toIntOrNull()
                 } else {
                     @Suppress("DEPRECATION")
-                    identity.mnc.takeIf { it != Int.MAX_VALUE }
+                    identity.mnc.takeIf { it != Int.MAX_VALUE && it in 0..999 }
                 }
-                val cid = identity.cid.toLong().takeIf { it != Int.MAX_VALUE.toLong() && it != -1L }
-                val lac = identity.lac.takeIf { it != Int.MAX_VALUE && it != -1 }
+                val cid = sanitizeCid(identity.cid.toLong())
+                val lac = sanitizeLac(identity.lac)
+                val psc = identity.psc.takeIf { it in 0..511 }
+                val uarfcn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    identity.uarfcn.takeIf { it in 0..16383 }
+                } else null
+                val dbm = signal.dbm.takeIf { it in -140..-30 } ?: return null
+
+                if (cid == null && psc == null) return null
 
                 return CellTowerInfo(
                     type = "3G WCDMA",
@@ -136,11 +182,13 @@ class CellularDiagnosticManager(private val context: Context) {
                     mnc = mnc,
                     cid = cid,
                     lac = lac,
-                    signalDbm = signal.dbm,
+                    signalDbm = dbm,
                     signalLevel = signal.level,
                     isRegistered = info.isRegistered,
                     operatorName = identity.operatorAlphaLong?.toString(),
-                    estimatedDistanceKm = calculateEstimatedDistance(signal.dbm, null)
+                    estimatedDistanceKm = calculateEstimatedDistance(dbm, null),
+                    pci = psc,
+                    earfcn = uarfcn
                 )
             }
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && info is CellInfoNr -> {
@@ -148,19 +196,27 @@ class CellularDiagnosticManager(private val context: Context) {
                 val signal = info.cellSignalStrength as? CellSignalStrengthNr
                 val mcc = identity?.mccString?.toIntOrNull()
                 val mnc = identity?.mncString?.toIntOrNull()
-                val nci = identity?.nci?.takeIf { it != Long.MAX_VALUE }
+                val nci = identity?.nci?.takeIf { it > 0L && it != Long.MAX_VALUE && it != 68719476735L }
+                val tac = identity?.tac?.let { sanitizeLac(it) }
+                val pci = identity?.pci?.takeIf { it in 0..1007 }
+                val nrarfcn = identity?.nrarfcn?.takeIf { it in 0..3279165 }
+                val dbm = signal?.dbm?.takeIf { it in -145..-30 } ?: -85
+
+                if (nci == null && pci == null) return null
 
                 return CellTowerInfo(
                     type = "5G NR",
                     mcc = mcc,
                     mnc = mnc,
                     cid = nci,
-                    lac = identity?.tac?.takeIf { it != Int.MAX_VALUE },
-                    signalDbm = signal?.dbm ?: -85,
+                    lac = tac,
+                    signalDbm = dbm,
                     signalLevel = signal?.level ?: 3,
                     isRegistered = info.isRegistered,
                     operatorName = identity?.operatorAlphaLong?.toString(),
-                    estimatedDistanceKm = 0.35
+                    estimatedDistanceKm = calculateEstimatedDistance(dbm, null),
+                    pci = pci,
+                    earfcn = nrarfcn
                 )
             }
             else -> return null

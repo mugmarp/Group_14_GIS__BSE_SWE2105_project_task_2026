@@ -430,8 +430,21 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
                         fontWeight = FontWeight.SemiBold,
                         color = colorScheme.onSurface
                     )
+                    val radioDetails = buildString {
+                        append(cell.type)
+                        if (cell.cid != null) {
+                            append(" | CID: ${cell.cid}")
+                            if (cell.lac != null) append(" | LAC: ${cell.lac}")
+                        } else if (cell.pci != null) {
+                            val pciLabel = if (cell.type.contains("WCDMA")) "PSC" else if (cell.type.contains("GSM")) "BSIC" else "PCI"
+                            append(" | $pciLabel: ${cell.pci}")
+                            if (cell.earfcn != null) append(" | Ch: ${cell.earfcn}")
+                        } else {
+                            append(" | Handover candidate")
+                        }
+                    }
                     Text(
-                        text = "${cell.type} | CID: ${cell.cid ?: "?"} | LAC: ${cell.lac ?: "?"}",
+                        text = radioDetails,
                         fontSize = 11.sp,
                         color = colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace
@@ -516,9 +529,9 @@ private fun ComparisonRow(criterion: String, gpsText: String, cellText: String) 
     Column(modifier = Modifier.padding(vertical = 4.dp)) {
         Text(criterion, fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colorScheme.secondary)
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("🛰️ GPS: $gpsText", fontSize = 11.sp, color = colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+            Text("GPS: $gpsText", fontSize = 11.sp, color = colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
             Spacer(modifier = Modifier.width(8.dp))
-            Text("📡 Cell: $cellText", fontSize = 11.sp, color = colorScheme.primary, modifier = Modifier.weight(1f))
+            Text("Cell: $cellText", fontSize = 11.sp, color = colorScheme.primary, modifier = Modifier.weight(1f))
         }
         Spacer(modifier = Modifier.height(3.dp))
     }

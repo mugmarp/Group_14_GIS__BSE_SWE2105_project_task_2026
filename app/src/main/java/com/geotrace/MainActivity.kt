@@ -454,7 +454,7 @@ fun MainAppScreen(
                     ) {
                         Column {
                             Text(
-                                text = "GeoTrace Safe Menu",
+                                text = "GeoTrace Menu",
                                 fontSize = 17.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = colorScheme.onSurface

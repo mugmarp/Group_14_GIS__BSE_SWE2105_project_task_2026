@@ -290,6 +290,25 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun removeGroupMemberDevice(member: MemberLocation) {
+        val group = _activeGroup.value ?: return
+        viewModelScope.launch {
+            _isActionLoading.value = true
+            val result = repository.removeGroupMemberDevice(group.id, member)
+            _isActionLoading.value = false
+
+            result.onSuccess {
+                val focusId = _mapFocusTarget.value?.id
+                if (focusId != null && (focusId == member.id || focusId == member.userId || focusId == member.deviceId)) {
+                    _mapFocusTarget.value = null
+                }
+                _statusMessage.value = "Removed '${member.displayName}' from '${group.name}'."
+            }.onFailure { e ->
+                _errorMessage.value = e.localizedMessage ?: "Failed to remove device from group."
+            }
+        }
+    }
+
     fun toggleGhostMode() {
         val newMode = !isGhostMode.value
         repository.setGhostMode(newMode)
@@ -395,14 +414,6 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                 _errorMessage.value = e.localizedMessage ?: "Failed to remove device."
             }
         }
-    }
-
-    fun testSelfRing() {
-        FindDeviceAlarmManager.startRinging(
-            getApplication(),
-            "Self Test (${offlineCallsign.value})"
-        )
-        _statusMessage.value = "Testing local device alarm. Tap Stop Alarm to silence."
     }
 
     fun syncNow() {

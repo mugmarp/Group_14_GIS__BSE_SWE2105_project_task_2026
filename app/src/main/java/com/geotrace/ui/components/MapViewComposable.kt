@@ -25,18 +25,27 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.SatelliteAlt
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -76,6 +85,20 @@ import org.osmdroid.views.overlay.TilesOverlay
 import kotlin.math.cos
 import kotlin.math.sin
 
+private data class MarkerInspectData(
+    val title: String,
+    val detail: String,
+    val badge: String
+)
+
+private fun formatMarkerMode(rawMode: String): String = when (rawMode.uppercase()) {
+    "HIGH_ACCURACY" -> "GPS High"
+    "BALANCED" -> "Balanced"
+    "POWER_SAVER" -> "Cell Only"
+    else -> rawMode
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MapViewComposable(
     currentLocation: LocationPoint?,
@@ -106,13 +129,14 @@ fun MapViewComposable(
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
 
-    // GeoTrack Safe Telemetry Vector Colors
-    val trailColor = colorScheme.secondary // Deep Mission-Critical Cobalt #0051D5
-    val userPinColor = colorScheme.primary // Technical Cyan #006194
+    // GeoTrace Telemetry Vector Colors
+    val trailColor = colorScheme.secondary
+    val userPinColor = colorScheme.primary
 
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
     var hasCenteredOnFirstFix by remember { mutableStateOf(false) }
     var showLayerMenu by remember { mutableStateOf(false) }
+    var selectedMarkerInfo by remember { mutableStateOf<MarkerInspectData?>(null) }
 
     // Reusable GIS icon drawables (cached once per composition to avoid per-fix Bitmap churn)
     val gpsChevronDrawable = remember(context) {
@@ -307,6 +331,10 @@ fun MapViewComposable(
                         snippet = "First logged coordinate"
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                         icon = trailStartDrawable
+                        setOnMarkerClickListener { m, _ ->
+                            selectedMarkerInfo = MarkerInspectData(m.title ?: "Trail Start", m.snippet ?: "", "START")
+                            true
+                        }
                     }
                     map.overlays.add(startMarker)
 
@@ -316,6 +344,10 @@ fun MapViewComposable(
                         snippet = "Latest logged waypoint"
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                         icon = trailEndDrawable
+                        setOnMarkerClickListener { m, _ ->
+                            selectedMarkerInfo = MarkerInspectData(m.title ?: "Trail End", m.snippet ?: "", "END")
+                            true
+                        }
                     }
                     map.overlays.add(endMarker)
                 }
@@ -342,11 +374,19 @@ fun MapViewComposable(
                     val userMarker = Marker(map).apply {
                         position = GeoPoint(currentLocation.latitude, currentLocation.longitude)
                         rotation = currentLocation.bearing
-                        title = if (isCellularFix) "Current Position (Cellular Fix)" else "Current Position (GNSS)"
+                        title = if (isCellularFix) "This Device (Cellular Fix)" else "This Device (GNSS)"
                         val convertedSpeed = currentLocation.speed * settings.speedUnit.multiplier
-                        snippet = "Speed: ${String.format("%.1f", convertedSpeed)} ${settings.speedUnit.label} (${currentLocation.gaitLabel}) | Acc: ±${currentLocation.accuracy.toInt()}m"
+                        snippet = "Speed: ${String.format(Locale.US, "%.1f", convertedSpeed)} ${settings.speedUnit.label} (${currentLocation.gaitLabel}) • Acc ±${currentLocation.accuracy.toInt()}m"
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                         icon = if (isCellularFix) cellChevronDrawable else gpsChevronDrawable
+                        setOnMarkerClickListener { m, _ ->
+                            selectedMarkerInfo = MarkerInspectData(
+                                title = m.title ?: "This Device",
+                                detail = m.snippet ?: "",
+                                badge = if (isCellularFix) "CELL" else "GNSS"
+                            )
+                            true
+                        }
                     }
                     map.overlays.add(userMarker)
                 }
@@ -445,10 +485,14 @@ fun MapViewComposable(
                             // Muted neighbor marker
                             val neighborMarker = Marker(map).apply {
                                 position = neighborGeoPoint
-                                title = "Idle/Neighbor Tower: ${tower.operatorName}"
-                                snippet = "CID: ${tower.cellId} | Standby Sector (Not In Use)"
+                                title = "Neighbor Mast: ${tower.operatorName}"
+                                snippet = "CID: ${tower.cellId} • Standby Sector"
                                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                                 icon = neighborTowerDrawable
+                                setOnMarkerClickListener { m, _ ->
+                                    selectedMarkerInfo = MarkerInspectData(m.title ?: "Neighbor Mast", m.snippet ?: "", "RF")
+                                    true
+                                }
                             }
                             map.overlays.add(neighborMarker)
                         }
@@ -503,10 +547,14 @@ fun MapViewComposable(
                         // Serving Cell Tower Marker
                         val towerMarker = Marker(map).apply {
                             position = towerGeoPoint
-                            title = "ACTIVE SERVING MAST: ${servingTower.operatorName}"
-                            snippet = "${servingTower.addressEstimate ?: "Active Sector"} | CID: ${servingTower.cellId} | $signalLabel | ±${servingTower.rangeMeters.toInt()}m"
+                            title = "Serving Mast: ${servingTower.operatorName}"
+                            snippet = "CID: ${servingTower.cellId} • $signalLabel • ±${servingTower.rangeMeters.toInt()}m"
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                             icon = servingTowerDrawable
+                            setOnMarkerClickListener { m, _ ->
+                                selectedMarkerInfo = MarkerInspectData(m.title ?: "Serving Mast", m.snippet ?: "", "TOWER")
+                                true
+                            }
                         }
                         map.overlays.add(towerMarker)
                     }
@@ -542,11 +590,16 @@ fun MapViewComposable(
                     }
                     val memberMarker = Marker(map).apply {
                         position = memberGeoPoint
-                        title = "👤 ${member.displayName} (${member.gait})"
+                        title = "${member.displayName} (${member.gait})"
                         val memberSpeed = member.speed * settings.speedUnit.multiplier
-                        snippet = "Speed: ${String.format(Locale.US, "%.1f", memberSpeed)} ${settings.speedUnit.label} | Battery: ${member.batteryPercent}% (${member.trackingMode})"
+                        val modeLabel = formatMarkerMode(member.trackingMode)
+                        snippet = "${String.format(Locale.US, "%.1f", memberSpeed)} ${settings.speedUnit.label} • Battery ${member.batteryPercent}% • $modeLabel"
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         icon = memberIcon
+                        setOnMarkerClickListener { m, _ ->
+                            selectedMarkerInfo = MarkerInspectData(m.title ?: member.displayName, m.snippet ?: "", "GROUP")
+                            true
+                        }
                     }
                     map.overlays.add(memberMarker)
                 }
@@ -564,10 +617,14 @@ fun MapViewComposable(
                     }
                     val devMarker = Marker(map).apply {
                         position = devPoint
-                        title = "📱 My Device: ${device.deviceName}"
-                        snippet = "${device.deviceModel} | Battery: ${device.batteryPercent}% (${device.trackingMode})"
+                        title = device.deviceName
+                        snippet = "${device.deviceModel} • Battery ${device.batteryPercent}% • ${formatMarkerMode(device.trackingMode)}"
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         icon = devIcon
+                        setOnMarkerClickListener { m, _ ->
+                            selectedMarkerInfo = MarkerInspectData(m.title ?: device.deviceName, m.snippet ?: "", "DEVICE")
+                            true
+                        }
                     }
                     map.overlays.add(devMarker)
                 }
@@ -583,35 +640,108 @@ fun MapViewComposable(
                     }
                     val peerMarker = Marker(map).apply {
                         position = peerGeoPoint
-                        title = "📶 P2P Peer: ${peer.displayName}"
+                        title = "P2P: ${peer.displayName}"
                         val peerSpeed = peer.speed * settings.speedUnit.multiplier
-                        snippet = "Speed: ${String.format(Locale.US, "%.1f", peerSpeed)} ${settings.speedUnit.label} | Battery: ${peer.batteryPercent}% (Direct BLE/Wi-Fi)"
+                        snippet = "${String.format(Locale.US, "%.1f", peerSpeed)} ${settings.speedUnit.label} • Battery ${peer.batteryPercent}% • Direct BLE/Wi-Fi"
                         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
                         icon = peerIcon
+                        setOnMarkerClickListener { m, _ ->
+                            selectedMarkerInfo = MarkerInspectData(m.title ?: peer.displayName, m.snippet ?: "", "P2P")
+                            true
+                        }
                     }
                     map.overlays.add(peerMarker)
                 }
 
-                // 7. Interactive single-tap coordinate picker on TOP of overlays so geofence circles do not swallow taps
-                if (isMapPickMode) {
-                    val eventsOverlay = MapEventsOverlay(object : MapEventsReceiver {
-                        override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
-                            if (currentIsMapPickMode && p != null) {
-                                currentOnMapCoordinatePicked?.invoke(p.latitude, p.longitude)
-                                return true
-                            }
-                            return false
+                // 7. Interactive map tap handler (coordinate picker or dismiss marker inspect card)
+                val eventsOverlay = MapEventsOverlay(object : MapEventsReceiver {
+                    override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
+                        selectedMarkerInfo = null
+                        if (currentIsMapPickMode && p != null) {
+                            currentOnMapCoordinatePicked?.invoke(p.latitude, p.longitude)
+                            return true
                         }
+                        return false
+                    }
 
-                        override fun longPressHelper(p: GeoPoint?): Boolean = false
-                    })
-                    map.overlays.add(eventsOverlay)
-                }
+                    override fun longPressHelper(p: GeoPoint?): Boolean = false
+                })
+                map.overlays.add(eventsOverlay)
 
                 map.invalidate()
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        // Clean Bottom-Start Marker Inspect Card (never clipped behind top HUD)
+        selectedMarkerInfo?.let { info ->
+            val hasCarousel = groupMembers.any { it.deviceId != currentDeviceId } ||
+                personalDevices.isNotEmpty() ||
+                nearbyPeers.isNotEmpty()
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = colorScheme.surface,
+                shadowElevation = 6.dp,
+                border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.55f)),
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(
+                        start = 14.dp,
+                        end = 78.dp,
+                        bottom = if (hasCarousel) 136.dp else 76.dp
+                    )
+                    .widthIn(max = 280.dp)
+                    .testTag("marker_inspect_card")
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = colorScheme.primary.copy(alpha = 0.14f)
+                            ) {
+                                Text(
+                                    text = info.badge,
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = info.title,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onSurface
+                            )
+                        }
+                        if (info.detail.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = info.detail,
+                                fontSize = 10.sp,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    IconButton(
+                        onClick = { selectedMarkerInfo = null },
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Dismiss Marker Details",
+                            tint = colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+        }
 
         // Overlay Map Controls (Level 2 Elevation - Viewport Controls anchored to Bottom-Right, Strictly 12dp corners)
         Column(
@@ -621,166 +751,12 @@ fun MapViewComposable(
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Layer Options Popup (Integrated into bottom Layer FAB)
-            if (showLayerMenu && onSelectTileLayer != null) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = colorScheme.surface,
-                    shadowElevation = 6.dp,
-                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant),
-                    modifier = Modifier
-                        .padding(bottom = 4.dp)
-                        .heightIn(max = 380.dp)
-                        .testTag("layer_selection_popup")
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .verticalScroll(rememberScrollState())
-                            .padding(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            text = "MAP LAYER",
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.onSurfaceVariant,
-                            letterSpacing = 0.04.sp,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                        com.geotrace.model.MapTileType.values().forEach { tileType ->
-                            val isSelected = settings.mapTileType == tileType
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isSelected) colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
-                                modifier = Modifier
-                                    .clickable {
-                                        onSelectTileLayer(tileType)
-                                        showLayerMenu = false
-                                    }
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = if (isSelected) Icons.Default.Layers else Icons.Default.Layers,
-                                        contentDescription = null,
-                                        tint = if (isSelected) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text(
-                                            text = tileType.label,
-                                            fontSize = 11.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            color = if (isSelected) colorScheme.primary else colorScheme.onSurface
-                                        )
-                                        Text(
-                                            text = tileType.description,
-                                            fontSize = 9.sp,
-                                            color = colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        if (onToggleCellTowerPin != null) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(1.dp)
-                                    .background(colorScheme.outlineVariant.copy(alpha = 0.5f))
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (settings.showCellTowerPin) colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
-                                modifier = Modifier
-                                    .clickable {
-                                        onToggleCellTowerPin(!settings.showCellTowerPin)
-                                    }
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.SatelliteAlt,
-                                        contentDescription = null,
-                                        tint = if (settings.showCellTowerPin) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text(
-                                            text = if (settings.showCellTowerPin) "Serving Cell Tower: ON" else "Serving Cell Tower: OFF",
-                                            fontSize = 11.sp,
-                                            fontWeight = if (settings.showCellTowerPin) FontWeight.Bold else FontWeight.Medium,
-                                            color = if (settings.showCellTowerPin) colorScheme.primary else colorScheme.onSurface
-                                        )
-                                        Text(
-                                            text = "OpenCellID Mast Pin & Signal Ray",
-                                            fontSize = 9.sp,
-                                            color = colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        if (onOpenOfflineMaps != null) {
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = colorScheme.tertiary.copy(alpha = 0.12f),
-                                modifier = Modifier
-                                    .clickable {
-                                        showLayerMenu = false
-                                        onOpenOfflineMaps()
-                                    }
-                                    .testTag("open_offline_maps_btn")
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.CloudDownload,
-                                        contentDescription = "Offline Maps Manager",
-                                        tint = colorScheme.tertiary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Column {
-                                        Text(
-                                            text = if (offlineRegionsCount > 0) "Offline Maps ($offlineRegionsCount saved)" else "Download Offline Maps",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = colorScheme.tertiary
-                                        )
-                                        Text(
-                                            text = "Cache Satellite, Hybrid or Topo areas",
-                                            fontSize = 9.sp,
-                                            color = colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Layer Switcher FAB (Google Maps style, 12dp preserved, integrated menu)
+            // Layer Switcher FAB (opens clean M3 ModalBottomSheet with zero HUD collisions)
             if (onSelectTileLayer != null) {
                 FloatingActionButton(
-                    onClick = { showLayerMenu = !showLayerMenu },
+                    onClick = { showLayerMenu = true },
                     modifier = Modifier
-                        .size(42.dp)
+                        .size(44.dp)
                         .testTag("layer_switcher_btn"),
                     shape = RoundedCornerShape(12.dp),
                     containerColor = if (showLayerMenu) colorScheme.primaryContainer else colorScheme.surface,
@@ -838,6 +814,188 @@ fun MapViewComposable(
                     ) {
                         Icon(Icons.Default.Remove, contentDescription = "Zoom Out", tint = colorScheme.onSurface, modifier = Modifier.size(22.dp))
                     }
+                }
+            }
+        }
+
+        // Modal Bottom Sheet for Map Layers, RF Tower Overlay & Offline Region Caching
+        if (showLayerMenu && onSelectTileLayer != null) {
+            val layerSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+            ModalBottomSheet(
+                onDismissRequest = { showLayerMenu = false },
+                sheetState = layerSheetState,
+                containerColor = colorScheme.surface,
+                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                modifier = Modifier.testTag("layer_selection_popup")
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .navigationBarsPadding()
+                        .padding(horizontal = 18.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "Map Layers & GIS Overlays",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.onSurface
+                    )
+                    Text(
+                        text = "Select basemap source and RF overlays",
+                        fontSize = 11.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    com.geotrace.model.MapTileType.values().forEach { tileType ->
+                        val isSelected = settings.mapTileType == tileType
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isSelected) colorScheme.primary.copy(alpha = 0.12f) else customColors.surfaceContainerLow,
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (isSelected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onSelectTileLayer(tileType)
+                                    showLayerMenu = false
+                                }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Layers,
+                                        contentDescription = null,
+                                        tint = if (isSelected) colorScheme.primary else colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = tileType.label,
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                                            color = if (isSelected) colorScheme.primary else colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = tileType.description,
+                                            fontSize = 11.sp,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                if (isSelected) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = "Selected",
+                                        tint = colorScheme.primary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (onToggleCellTowerPin != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (settings.showCellTowerPin) colorScheme.primary.copy(alpha = 0.08f) else customColors.surfaceContainerLow,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onToggleCellTowerPin(!settings.showCellTowerPin) }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.SatelliteAlt,
+                                        contentDescription = null,
+                                        tint = if (settings.showCellTowerPin) colorScheme.primary else colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = "Serving Cell Tower Overlay",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "Show OpenCellID mast pin & RF signal ray",
+                                            fontSize = 11.sp,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Switch(
+                                    checked = settings.showCellTowerPin,
+                                    onCheckedChange = { onToggleCellTowerPin(it) }
+                                )
+                            }
+                        }
+                    }
+
+                    if (onOpenOfflineMaps != null) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = colorScheme.tertiary.copy(alpha = 0.12f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.45f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    showLayerMenu = false
+                                    onOpenOfflineMaps()
+                                }
+                                .testTag("open_offline_maps_btn")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudDownload,
+                                    contentDescription = "Offline Maps Manager",
+                                    tint = colorScheme.tertiary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = if (offlineRegionsCount > 0) "Offline Maps ($offlineRegionsCount saved)" else "Download Offline Maps",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = colorScheme.tertiary
+                                    )
+                                    Text(
+                                        text = "Cache Satellite, Hybrid or Topo tiles for offline field work",
+                                        fontSize = 11.sp,
+                                        color = colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
                 }
             }
         }

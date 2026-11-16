@@ -357,22 +357,66 @@ class GroupRepository(
     }
 
     /**
-     * Permanently delete a tracking group created by the signed-in user.
+     * Permanently delete a tracking group created by the signed-in user, cleaning up all device docs.
      */
     suspend fun deleteGroup(groupId: String): Result<Unit> {
-        val uid = auth.currentUser?.uid
+        auth.currentUser?.uid
             ?: return Result.failure(IllegalStateException("Must be signed in to delete a group."))
 
         return try {
             try {
                 val locCol = db.collection("groups").document(groupId).collection("live_locations")
-                locCol.document("${uid}_${currentDeviceId}").delete().await()
-                locCol.document(uid).delete().await()
+                val docs = locCol.get().await().documents
+                for (doc in docs) {
+                    try {
+                        doc.reference.delete().await()
+                    } catch (_: Exception) {}
+                }
             } catch (_: Exception) {}
             db.collection("groups").document(groupId).delete().await()
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to delete group: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Remove a stale or unwanted device location doc from a group (callable by group creator or doc owner).
+     * If the target belongs to another user and has no remaining active devices in this group, also removes their UID from memberIds.
+     */
+    suspend fun removeGroupMemberDevice(groupId: String, target: MemberLocation): Result<Unit> {
+        val callerUid = auth.currentUser?.uid
+            ?: return Result.failure(IllegalStateException("Must be signed in to remove a device."))
+
+        return try {
+            val groupRef = db.collection("groups").document(groupId)
+            val locCol = groupRef.collection("live_locations")
+
+            val docIdsToDelete = buildSet {
+                if (target.id.isNotBlank()) add(target.id)
+                if (target.userId.isNotBlank() && target.deviceId.isNotBlank()) {
+                    add("${target.userId}_${target.deviceId}")
+                }
+                if (target.userId.isNotBlank() && target.deviceId.isBlank()) {
+                    add(target.userId)
+                }
+            }
+            for (docId in docIdsToDelete) {
+                try {
+                    locCol.document(docId).delete().await()
+                } catch (_: Exception) {}
+            }
+
+            if (target.userId.isNotBlank() && target.userId != callerUid) {
+                val remaining = locCol.whereEqualTo("userId", target.userId).get().await()
+                if (remaining.isEmpty) {
+                    groupRef.update("memberIds", FieldValue.arrayRemove(target.userId)).await()
+                }
+            }
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to remove group device ${target.id}: ${e.message}", e)
             Result.failure(e)
         }
     }

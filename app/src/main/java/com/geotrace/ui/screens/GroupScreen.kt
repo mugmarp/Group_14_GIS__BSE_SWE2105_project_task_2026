@@ -182,6 +182,7 @@ fun GroupScreen(
     var showCallsignDialog by remember { mutableStateOf(false) }
     var showDeleteGroupDialog by remember { mutableStateOf(false) }
     var devicePendingRemoval by remember { mutableStateOf<PersonalDevice?>(null) }
+    var memberPendingRemoval by remember { mutableStateOf<MemberLocation?>(null) }
     var newGroupName by remember { mutableStateOf("") }
     var inviteCodeInput by remember { mutableStateOf("") }
     var callsignInput by remember(offlineCallsign) { mutableStateOf(offlineCallsign) }
@@ -395,53 +396,30 @@ fun GroupScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { groupViewModel.testSelfRing() },
+                    if (currentUser != null || isP2PEnabled) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        FilledTonalButton(
+                            onClick = { groupViewModel.syncNow() },
+                            enabled = !isSyncing,
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier
-                                .weight(1f)
+                                .fillMaxWidth()
                                 .height(48.dp)
-                                .testTag("test_self_ring_btn")
+                                .testTag("sync_now_btn")
                         ) {
-                            Icon(
-                                Icons.Default.VolumeUp,
-                                contentDescription = "Test Device Alarm",
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Test Ring", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-
-                        if (currentUser != null || isP2PEnabled) {
-                            FilledTonalButton(
-                                onClick = { groupViewModel.syncNow() },
-                                enabled = !isSyncing,
-                                shape = RoundedCornerShape(10.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                                    .testTag("sync_now_btn")
-                            ) {
-                                if (isSyncing) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Icon(
-                                        Icons.Default.Sync,
-                                        contentDescription = "Sync Live Telemetry Now",
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Sync Now", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                }
+                            if (isSyncing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            } else {
+                                Icon(
+                                    Icons.Default.Sync,
+                                    contentDescription = "Sync Live Telemetry Now",
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Sync Live Telemetry Now", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -1135,8 +1113,20 @@ fun GroupScreen(
                             }
 
                             Spacer(modifier = Modifier.height(6.dp))
+                            val accountCount = activeGroup!!.memberIds.size
+                            val liveCount = groupMembers.count { m ->
+                                val ts = m.lastUpdated?.toDate()?.time
+                                ts != null && (nowMs - ts) <= 120_000L
+                            }
+                            val offlineCount = (groupMembers.size - liveCount).coerceAtLeast(0)
+                            val accountLabel = if (accountCount == 1) "1 account" else "$accountCount accounts"
+                            val deviceSummary = if (offlineCount > 0) {
+                                "$liveCount live • $offlineCount offline"
+                            } else {
+                                "$liveCount live device(s)"
+                            }
                             Text(
-                                text = "${activeGroup!!.memberIds.size} account(s) • ${groupMembers.size} live device(s) broadcasting",
+                                text = "$accountLabel • $deviceSummary",
                                 fontSize = 11.sp,
                                 color = colorScheme.onSurfaceVariant
                             )
@@ -1220,10 +1210,13 @@ fun GroupScreen(
                     items(groupMembers, key = { it.id.ifBlank { "${it.userId}_${it.deviceId}" } }) { member ->
                         val isSelfDevice = member.userId == currentUser?.uid &&
                             (member.deviceId.isBlank() || member.deviceId == groupViewModel.currentDeviceId)
+                        val isGroupCreator = activeGroup?.createdBy == currentUser?.uid
+                        val canRemoveMember = !isSelfDevice && (isGroupCreator || member.userId == currentUser?.uid)
                         MemberCard(
                             member = member,
                             userLocation = currentLocation,
                             isSelf = isSelfDevice,
+                            canRemove = canRemoveMember,
                             nowMs = nowMs,
                             onLocateClick = {
                                 onLocateOnMap(
@@ -1235,7 +1228,8 @@ fun GroupScreen(
                                         subtitle = "${member.gait} • ${member.batteryPercent}%"
                                     )
                                 )
-                            }
+                            },
+                            onRemoveClick = { memberPendingRemoval = member }
                         )
                     }
                 }
@@ -1253,7 +1247,7 @@ fun GroupScreen(
                 )
             }
 
-            items(userGroups) { grp ->
+            items(userGroups, key = { it.id }) { grp ->
                 Card(
                     shape = RoundedCornerShape(14.dp),
                     colors = CardDefaults.cardColors(
@@ -1280,8 +1274,9 @@ fun GroupScreen(
                                 fontWeight = FontWeight.Bold,
                                 color = colorScheme.onSurface
                             )
+                            val count = grp.memberIds.size
                             Text(
-                                text = "Code: ${grp.inviteCode} • ${grp.memberIds.size} Members",
+                                text = "Code: ${grp.inviteCode} • $count ${if (count == 1) "Member" else "Members"}",
                                 fontSize = 11.sp,
                                 color = colorScheme.onSurfaceVariant
                             )
@@ -1512,6 +1507,48 @@ fun GroupScreen(
             }
         )
     }
+    // Confirm Remove Group Member / Stale Device Dialog
+    if (memberPendingRemoval != null && activeGroup != null) {
+        val target = memberPendingRemoval!!
+        val isOwnStale = target.userId == currentUser?.uid
+        AlertDialog(
+            onDismissRequest = { memberPendingRemoval = null },
+            title = {
+                Text(
+                    if (isOwnStale) "Remove Stale Device?" else "Remove From Group?",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    if (isOwnStale) {
+                        "Remove old device entry '${target.displayName}' from '${activeGroup!!.name}'?"
+                    } else {
+                        "Remove '${target.displayName}' (${target.deviceModel.ifBlank { "Device" }}) from '${activeGroup!!.name}'?"
+                    },
+                    fontSize = 13.sp,
+                    color = colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        groupViewModel.removeGroupMemberDevice(target)
+                        memberPendingRemoval = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = colorScheme.error),
+                    modifier = Modifier.testTag("confirm_remove_group_member_btn")
+                ) {
+                    Text("Remove")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { memberPendingRemoval = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -1519,8 +1556,10 @@ fun MemberCard(
     member: MemberLocation,
     userLocation: LocationPoint?,
     isSelf: Boolean,
+    canRemove: Boolean,
     nowMs: Long,
-    onLocateClick: () -> Unit
+    onLocateClick: () -> Unit,
+    onRemoveClick: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
@@ -1618,7 +1657,7 @@ fun MemberCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "${member.batteryPercent}% • ${member.trackingMode} • ",
+                        text = "${member.batteryPercent}% • ${formatTrackingModeLabel(member.trackingMode)} • ",
                         fontSize = 10.sp,
                         color = colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace
@@ -1634,7 +1673,6 @@ fun MemberCard(
             }
 
             if (!isSelf && hasValidCoords) {
-                Spacer(modifier = Modifier.width(6.dp))
                 IconButton(
                     onClick = onLocateClick,
                     modifier = Modifier
@@ -1646,6 +1684,22 @@ fun MemberCard(
                         contentDescription = "Locate ${member.displayName} on Map",
                         tint = colorScheme.primary,
                         modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            if (canRemove) {
+                IconButton(
+                    onClick = onRemoveClick,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("remove_member_${member.id.ifBlank { member.userId }}")
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Remove ${member.displayName} from group",
+                        tint = colorScheme.error,
+                        modifier = Modifier.size(19.dp)
                     )
                 }
             }
@@ -1728,7 +1782,7 @@ fun PersonalDeviceCard(
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "${device.batteryPercent}% • ${device.trackingMode} • ",
+                            text = "${device.batteryPercent}% • ${formatTrackingModeLabel(device.trackingMode)} • ",
                             fontSize = 10.sp,
                             color = colorScheme.onSurfaceVariant,
                             fontFamily = FontFamily.Monospace
@@ -1938,6 +1992,16 @@ fun P2PPeerCard(
                 }
             }
         }
+    }
+}
+
+private fun formatTrackingModeLabel(rawMode: String): String {
+    return when (rawMode.uppercase()) {
+        "HIGH_ACCURACY" -> "GPS High"
+        "BALANCED" -> "Balanced"
+        "POWER_SAVER" -> "Cell Only"
+        else -> rawMode.replace('_', ' ').lowercase()
+            .replaceFirstChar { it.uppercase() }
     }
 }
 

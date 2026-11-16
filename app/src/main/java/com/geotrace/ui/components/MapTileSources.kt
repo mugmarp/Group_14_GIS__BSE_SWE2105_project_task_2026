@@ -33,24 +33,22 @@ object MapTileSources {
     }
 
     val hybridLabelsOverlay: OnlineTileSourceBase = object : OnlineTileSourceBase(
-        "CartoLightLabels",
+        "EsriReferenceLabels",
         0,
         19,
         256,
         ".png",
         arrayOf(
-            "https://a.basemaps.cartocdn.com/light_only_labels/",
-            "https://b.basemaps.cartocdn.com/light_only_labels/",
-            "https://c.basemaps.cartocdn.com/light_only_labels/"
+            "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/"
         ),
-        "© OpenStreetMap contributors © CARTO",
+        "Labels © Esri — Source: Esri, HERE, Garmin, OpenStreetMap contributors",
         TileSourcePolicy(2, TileSourcePolicy.FLAG_USER_AGENT_MEANINGFUL)
     ) {
         override fun getTileURLString(pMapTileIndex: Long): String {
             val z = MapTileIndex.getZoom(pMapTileIndex)
-            val x = MapTileIndex.getX(pMapTileIndex)
             val y = MapTileIndex.getY(pMapTileIndex)
-            return "$baseUrl$z/$x/$y.png"
+            val x = MapTileIndex.getX(pMapTileIndex)
+            return "$baseUrl$z/$y/$x"
         }
     }
 

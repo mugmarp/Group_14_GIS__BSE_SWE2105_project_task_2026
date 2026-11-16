@@ -129,7 +129,14 @@ fun MapScreen(
     var showProfileDialog by remember { mutableStateOf(false) }
     var showOfflineMapsDialog by remember { mutableStateOf(false) }
     var sessionNameInput by remember { mutableStateOf("") }
-    var isHeaderExpanded by remember { mutableStateOf(true) }
+    var isHeaderExpanded by remember { mutableStateOf(false) }
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(15_000L)
+            nowMs = System.currentTimeMillis()
+        }
+    }
 
 
     // Keep screen awake while recording if enabled in settings
@@ -229,7 +236,7 @@ fun MapScreen(
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Column {
                                     Text(
-                                        text = "GeoTrace Safe Telemetry",
+                                        text = "GeoTrace Live Telemetry",
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = colorScheme.onSurface
@@ -383,11 +390,42 @@ fun MapScreen(
                             }
                         }
 
-                        // Centered Sleek Collapsible Pull-Tab Handle
+                        // Compact Telemetry Summary + Centered Pull-Tab Handle when HUD is collapsed
+                        if (!isHeaderExpanded) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            val compactSpeed = (currentLocation?.speed ?: 0f) * settings.speedUnit.multiplier
+                            val compactCoord = currentLocation?.let {
+                                formatCoordinates(it.latitude, it.longitude, settings.coordinateFormat)
+                            } ?: "--, --"
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
+                                    .padding(horizontal = 10.dp, vertical = 5.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${String.format(Locale.US, "%.1f", compactSpeed)} ${settings.speedUnit.label} • ${if (currentLocation != null) "±${currentLocation?.accuracy?.toInt()}m" else "--"}",
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.primary
+                                )
+                                Text(
+                                    text = compactCoord,
+                                    fontSize = 10.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = colorScheme.onSurfaceVariant,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = if (isHeaderExpanded) 8.dp else 4.dp),
+                                .padding(top = if (isHeaderExpanded) 8.dp else 6.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Surface(
@@ -399,7 +437,7 @@ fun MapScreen(
                                     .testTag("toggle_header_btn")
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 5.dp),
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.Center
                                 ) {
@@ -515,9 +553,13 @@ fun MapScreen(
                             modifier = Modifier.size(15.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
+                        val liveGroupCount = groupMembers.count { m ->
+                            val ts = m.lastUpdated?.toDate()?.time
+                            ts != null && (nowMs - ts) <= 120_000L
+                        }
                         val pillLabel = when {
-                            activeGroup != null && isP2PEnabled -> "${activeGroup!!.name} (${groupMembers.size}) • P2P (${nearbyPeers.size})"
-                            activeGroup != null -> "${activeGroup!!.name} (${groupMembers.size})"
+                            activeGroup != null && isP2PEnabled -> "${activeGroup!!.name} ($liveGroupCount/${groupMembers.size}) • P2P (${nearbyPeers.size})"
+                            activeGroup != null -> "${activeGroup!!.name} ($liveGroupCount/${groupMembers.size})"
                             remotePersonalDevices.isNotEmpty() && isP2PEnabled -> "My Devices (${remotePersonalDevices.size}) • P2P (${nearbyPeers.size})"
                             remotePersonalDevices.isNotEmpty() -> "My Devices (${remotePersonalDevices.size})"
                             isP2PEnabled -> "P2P Mesh (${nearbyPeers.size})"
@@ -530,12 +572,13 @@ fun MapScreen(
                             color = colorScheme.onSurface
                         )
                         if (isGhostMode) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("👻", fontSize = 10.sp)
-                        }
-                        if (isP2PEnabled) {
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("📶", fontSize = 10.sp)
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "GHOST",
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFD97706)
+                            )
                         }
                     }
                 }
@@ -563,7 +606,7 @@ fun MapScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (isHotspot) "⚠️ ${activeZone.name}" else "🛡️ ${activeZone.name}",
+                                text = activeZone.name,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (isHotspot) customColors.warning else colorScheme.tertiary
@@ -576,9 +619,9 @@ fun MapScreen(
                 if (settings.showCellTowerPin && cellTowerLocation != null) {
                     Surface(
                         shape = RoundedCornerShape(20.dp),
-                        color = Color(0xFFD97706).copy(alpha = 0.12f),
+                        color = colorScheme.surface,
                         shadowElevation = 3.dp,
-                        border = BorderStroke(1.dp, Color(0xFFD97706).copy(alpha = 0.5f)),
+                        border = BorderStroke(1.dp, Color(0xFFD97706).copy(alpha = 0.55f)),
                         modifier = Modifier
                             .clickable {
                                 viewModel.toggleCellTowerPin(!settings.showCellTowerPin)
@@ -597,7 +640,7 @@ fun MapScreen(
                             )
                             Spacer(modifier = Modifier.width(5.dp))
                             Text(
-                                text = "📡 Tower: ±${cellTowerLocation?.rangeMeters?.toInt()}m",
+                                text = "Tower ±${cellTowerLocation?.rangeMeters?.toInt()}m",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color(0xFFD97706)
@@ -657,16 +700,16 @@ fun MapScreen(
                 val target = mapFocusTarget!!
                 Spacer(modifier = Modifier.height(6.dp))
                 Surface(
-                    shape = RoundedCornerShape(18.dp),
-                    color = colorScheme.primaryContainer,
-                    shadowElevation = 4.dp,
-                    border = BorderStroke(1.dp, colorScheme.primary),
+                    shape = RoundedCornerShape(16.dp),
+                    color = colorScheme.surface,
+                    shadowElevation = 5.dp,
+                    border = BorderStroke(1.5.dp, colorScheme.primary),
                     modifier = Modifier.testTag("map_focus_banner")
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                            .padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
@@ -675,28 +718,31 @@ fun MapScreen(
                                 text = "LOCATING: ${target.label}",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = colorScheme.onPrimaryContainer
+                                color = colorScheme.onSurface
                             )
                             if (target.subtitle.isNotBlank()) {
                                 Text(
                                     text = target.subtitle,
                                     fontSize = 10.sp,
-                                    color = colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                                    color = colorScheme.onSurfaceVariant
                                 )
                             }
                         }
-                        TextButton(
+                        androidx.compose.material3.FilledTonalButton(
                             onClick = {
                                 groupViewModel?.clearMapFocusTarget()
                                 viewModel.toggleFollowUser(true)
                             },
-                            modifier = Modifier.testTag("recenter_self_btn")
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .height(34.dp)
+                                .testTag("recenter_self_btn")
                         ) {
                             Text(
                                 text = "Re-center Me",
                                 fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = colorScheme.primary
+                                fontWeight = FontWeight.Bold
                             )
                         }
                     }
@@ -705,12 +751,17 @@ fun MapScreen(
         }
 
         // Bottom Multi-Device, Group Member & Offline P2P Peer Carousel (Situational Awareness)
-        if (!isPickingGeofenceCenter && ((activeGroup != null && groupMembers.isNotEmpty()) || remotePersonalDevices.isNotEmpty() || nearbyPeers.isNotEmpty())) {
+        val hasVisibleCarouselTargets = !isPickingGeofenceCenter && (
+            remotePersonalDevices.isNotEmpty() ||
+                nearbyPeers.isNotEmpty() ||
+                (activeGroup != null && groupMembers.any { currentDeviceId.isBlank() || it.deviceId != currentDeviceId })
+            )
+        if (hasVisibleCarouselTargets) {
             val memberScrollState = rememberScrollState()
             Row(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(bottom = if (activeSession == null) 68.dp else 72.dp, start = 14.dp, end = 14.dp)
+                    .padding(bottom = if (activeSession == null) 78.dp else 84.dp, start = 14.dp, end = 80.dp)
                     .fillMaxWidth()
                     .horizontalScroll(memberScrollState),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -753,7 +804,7 @@ fun MapScreen(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(28.dp)
+                                    .size(26.dp)
                                     .clip(CircleShape)
                                     .background(Color(0xFF7C3AED)),
                                 contentAlignment = Alignment.Center
@@ -761,7 +812,7 @@ fun MapScreen(
                                 Text(
                                     text = device.deviceName.trim().take(2).uppercase().ifBlank { "DV" },
                                     color = Color.White,
-                                    fontSize = 11.sp,
+                                    fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
@@ -769,12 +820,12 @@ fun MapScreen(
                             Column {
                                 Text(
                                     text = device.deviceName,
-                                    fontSize = 12.sp,
+                                    fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "$distStr • ${device.batteryPercent}% 📱",
+                                    text = "$distStr • ${device.batteryPercent}%",
                                     fontSize = 10.sp,
                                     color = colorScheme.onSurfaceVariant
                                 )
@@ -792,24 +843,30 @@ fun MapScreen(
                             dist < 1000 -> "${dist.toInt()}m"
                             else -> String.format(Locale.US, "%.1fkm", dist / 1000f)
                         }
+                        val updatedMs = member.lastUpdated?.toDate()?.time
+                        val isOffline = updatedMs == null || (nowMs - updatedMs) > 120_000L
                         val memColor = try { Color(android.graphics.Color.parseColor(member.avatarColor)) } catch(e: Exception) { colorScheme.primary }
 
                         Surface(
                             shape = RoundedCornerShape(14.dp),
                             color = colorScheme.surface,
                             shadowElevation = 4.dp,
-                            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f)),
+                            border = BorderStroke(
+                                1.dp,
+                                if (isOffline) Color(0xFFD97706).copy(alpha = 0.65f) else colorScheme.outlineVariant.copy(alpha = 0.7f)
+                            ),
                             modifier = Modifier
                                 .clickable {
                                     if (member.latitude != 0.0 || member.longitude != 0.0) {
                                         viewModel.toggleFollowUser(false)
+                                        val statusNote = if (isOffline) "Offline • $distStr • ${member.batteryPercent}%" else "$distStr • ${member.batteryPercent}%"
                                         groupViewModel?.focusMapOnTarget(
                                             MapFocusTarget(
                                                 id = member.id.ifBlank { member.userId },
                                                 label = member.displayName,
                                                 latitude = member.latitude,
                                                 longitude = member.longitude,
-                                                subtitle = "$distStr • ${member.batteryPercent}%"
+                                                subtitle = statusNote
                                             )
                                         )
                                     } else {
@@ -824,16 +881,16 @@ fun MapScreen(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(28.dp)
+                                        .size(26.dp)
                                         .clip(CircleShape)
-                                        .background(memColor),
+                                        .background(if (isOffline) memColor.copy(alpha = 0.5f) else memColor),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     val initials = member.displayName.trim().take(2).uppercase().ifBlank { "M" }
                                     Text(
                                         text = initials,
                                         color = Color.White,
-                                        fontSize = 11.sp,
+                                        fontSize = 10.sp,
                                         fontWeight = FontWeight.Bold
                                     )
                                 }
@@ -841,14 +898,14 @@ fun MapScreen(
                                 Column {
                                     Text(
                                         text = member.displayName,
-                                        fontSize = 12.sp,
+                                        fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = colorScheme.onSurface
                                     )
                                     Text(
-                                        text = "$distStr • ${member.batteryPercent}% 🔋",
+                                        text = if (isOffline) "$distStr • Offline" else "$distStr • ${member.batteryPercent}%",
                                         fontSize = 10.sp,
-                                        color = colorScheme.onSurfaceVariant
+                                        color = if (isOffline) Color(0xFFD97706) else colorScheme.onSurfaceVariant
                                     )
                                 }
                             }
@@ -894,7 +951,7 @@ fun MapScreen(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(28.dp)
+                                    .size(26.dp)
                                     .clip(CircleShape)
                                     .background(colorScheme.tertiary),
                                 contentAlignment = Alignment.Center
@@ -902,7 +959,7 @@ fun MapScreen(
                                 Text(
                                     text = peer.displayName.trim().take(2).uppercase().ifBlank { "P2" },
                                     color = Color.White,
-                                    fontSize = 11.sp,
+                                    fontSize = 10.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
@@ -911,7 +968,7 @@ fun MapScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
                                         text = peer.displayName,
-                                        fontSize = 12.sp,
+                                        fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = colorScheme.onSurface
                                     )
@@ -930,7 +987,7 @@ fun MapScreen(
                                     }
                                 }
                                 Text(
-                                    text = "$distText • ${peer.batteryPercent}% 📶",
+                                    text = "$distText • ${peer.batteryPercent}%",
                                     fontSize = 10.sp,
                                     color = colorScheme.onSurfaceVariant
                                 )
