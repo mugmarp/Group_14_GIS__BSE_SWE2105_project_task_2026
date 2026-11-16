@@ -240,3 +240,48 @@ test("Group creator can remove another member's live_locations doc, non-creator 
     aliceDb.collection("groups").doc("grp_kick").collection("live_locations").doc(`${BOB_UID}_dev1`).delete()
   );
 });
+
+test("Creator can transfer ownership on leave, sole member can delete, non-creator cannot hijack", async () => {
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    await context.firestore().collection("groups").doc("grp_xfer").set({
+      name: "Ops Team",
+      inviteCode: "OPS-01",
+      createdBy: ALICE_UID,
+      memberIds: [ALICE_UID, BOB_UID]
+    });
+    await context.firestore().collection("groups").doc("grp_solo").set({
+      name: "Solo Group",
+      inviteCode: "SOL-01",
+      createdBy: ALICE_UID,
+      memberIds: [BOB_UID]
+    });
+  });
+
+  const aliceDb = testEnv.authenticatedContext(ALICE_UID).firestore();
+  const bobDb = testEnv.authenticatedContext(BOB_UID).firestore();
+
+  // Non-creator Bob CANNOT hijack createdBy
+  await assertFails(
+    bobDb.collection("groups").doc("grp_xfer").update({
+      createdBy: BOB_UID
+    })
+  );
+
+  // Creator Alice CAN leave while transferring createdBy to Bob
+  await assertSucceeds(
+    aliceDb.collection("groups").doc("grp_xfer").update({
+      memberIds: [BOB_UID],
+      createdBy: BOB_UID
+    })
+  );
+
+  // Sole remaining member Bob CAN delete grp_solo cleanly even if Alice originally created it
+  await assertSucceeds(
+    bobDb.collection("groups").doc("grp_solo").delete()
+  );
+
+  // Any member can safely delete their own `{uid}_{deviceId}` presence doc (even if absent) on Ghost Mode
+  await assertSucceeds(
+    bobDb.collection("groups").doc("grp_xfer").collection("live_locations").doc(`${BOB_UID}_dev99`).delete()
+  );
+});

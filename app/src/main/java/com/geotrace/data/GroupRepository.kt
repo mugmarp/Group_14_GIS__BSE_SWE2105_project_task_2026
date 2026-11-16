@@ -33,6 +33,7 @@ import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
@@ -107,8 +108,16 @@ class GroupRepository(
     private val _lastSyncTimestampMs = MutableStateFlow<Long?>(null)
     val lastSyncTimestampMs = _lastSyncTimestampMs.asStateFlow()
 
+    private val _p2pRingCooldownsMs = MutableStateFlow<Map<String, Long>>(emptyMap())
+    val p2pRingCooldownsMs = _p2pRingCooldownsMs.asStateFlow()
+
     fun clearFirestoreError() {
         _firestoreError.value = null
+    }
+
+    fun clearSyncStateOnSignOut() {
+        _lastSyncTimestampMs.value = null
+        saveSelectedGroupId(null)
     }
 
     fun setBackgroundProtectionEnabled(enabled: Boolean) {
@@ -139,6 +148,7 @@ class GroupRepository(
     private val pendingConnections = ConcurrentHashMap.newKeySet<String>()
     private val connectedEndpoints = ConcurrentHashMap<String, String>()
     private val activePeers = ConcurrentHashMap<String, P2PPeer>()
+    private var p2pRestartJob: Job? = null
 
     @Volatile
     private var isP2PMeshRequested = false
@@ -150,6 +160,12 @@ class GroupRepository(
     private var lastP2PError: String? = null
     @Volatile
     private var lastHandledRingTimestampMs: Long = prefs.getLong("last_handled_ring_ms", 0L)
+    @Volatile
+    private var lastHandledRingToken: String = prefs.getString("last_handled_ring_token", "") ?: ""
+    @Volatile
+    private var lastIncomingP2PRingMs: Long = 0L
+    @Volatile
+    private var estimatedClockSkewMs: Long = 0L
 
     private var personalDevicesListener: ListenerRegistration? = null
     private var personalDevicesListenerUid: String? = null
@@ -211,9 +227,34 @@ class GroupRepository(
             prefs.edit().putString("offline_p2p_callsign", cleaned).apply()
             _offlineCallsign.value = cleaned
             if (isP2PMeshRequested) {
+                p2pRestartJob?.cancel()
                 stopP2PMesh()
-                startP2PMesh(cleaned)
+                p2pRestartJob = p2pScope.launch {
+                    delay(350L)
+                    startP2PMesh(cleaned)
+                }
             }
+        }
+    }
+
+    suspend fun syncDeviceNameInCloud(activeGroupId: String?) {
+        val uid = auth.currentUser?.uid ?: return
+        val name = getCurrentUserDisplayName()
+        try {
+            db.collection("users").document(uid)
+                .collection("devices").document(currentDeviceId)
+                .update("deviceName", name)
+                .await()
+        } catch (_: Exception) {
+            // Doc may not exist yet before first fix; ignored
+        }
+        if (!activeGroupId.isNullOrBlank() && !_isGhostMode.value) {
+            try {
+                db.collection("groups").document(activeGroupId)
+                    .collection("live_locations").document("${uid}_${currentDeviceId}")
+                    .update("displayName", name)
+                    .await()
+            } catch (_: Exception) {}
         }
     }
 
@@ -232,14 +273,23 @@ class GroupRepository(
     }
 
     /**
-     * Create a new tracking group with a unique short invite code.
+     * Create a new tracking group with a collision-checked short invite code.
      */
     suspend fun createGroup(name: String): Result<Group> {
         val uid = auth.currentUser?.uid
             ?: return Result.failure(IllegalStateException("Must be signed in to create a group."))
 
         return try {
-            val inviteCode = generateInviteCode()
+            var inviteCode = generateInviteCode()
+            for (attempt in 0 until 5) {
+                val existing = db.collection("groups")
+                    .whereEqualTo("inviteCode", inviteCode)
+                    .limit(1)
+                    .get()
+                    .await()
+                if (existing.isEmpty) break
+                inviteCode = generateInviteCode()
+            }
             val docRef = db.collection("groups").document()
             val groupData = mapOf(
                 "name" to name.trim(),
@@ -315,8 +365,7 @@ class GroupRepository(
                 if (error != null) {
                     Log.e(TAG, "Error observing user groups: ${error.code} ${error.message}", error)
                     _firestoreError.value = "Cloud groups sync error (${error.code.name}): ${error.localizedMessage ?: "Check connection & Firestore rules"}"
-                    trySend(emptyList())
-                    close()
+                    close(error)
                     return@addSnapshotListener
                 }
                 val groups = snapshot?.documents?.mapNotNull { doc ->
@@ -335,20 +384,40 @@ class GroupRepository(
 
     /**
      * Leave a tracking group and delete this device's live location document.
+     * - If the user is the last member, cleanly deletes the group & subcollection docs.
+     * - If the creator leaves a multi-member group, transfers `createdBy` to the next member.
      */
     suspend fun leaveGroup(groupId: String): Result<Unit> {
         val uid = auth.currentUser?.uid
             ?: return Result.failure(IllegalStateException("Must be signed in to leave a group."))
 
         return try {
-            db.collection("groups").document(groupId)
-                .update("memberIds", FieldValue.arrayRemove(uid))
-                .await()
+            val groupRef = db.collection("groups").document(groupId)
+            val locCol = groupRef.collection("live_locations")
             try {
-                val locCol = db.collection("groups").document(groupId).collection("live_locations")
                 locCol.document("${uid}_${currentDeviceId}").delete().await()
                 locCol.document(uid).delete().await()
             } catch (_: Exception) {}
+
+            val snapshot = groupRef.get().await()
+            val group = snapshot.toObject(Group::class.java)
+            if (group == null) {
+                return Result.success(Unit)
+            }
+
+            val remaining = group.memberIds.filter { it != uid }
+            if (remaining.isEmpty()) {
+                return deleteGroup(groupId)
+            } else if (group.createdBy == uid) {
+                groupRef.update(
+                    mapOf(
+                        "memberIds" to remaining,
+                        "createdBy" to remaining.first()
+                    )
+                ).await()
+            } else {
+                groupRef.update("memberIds", FieldValue.arrayRemove(uid)).await()
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to leave group: ${e.message}", e)
@@ -357,23 +426,27 @@ class GroupRepository(
     }
 
     /**
-     * Permanently delete a tracking group created by the signed-in user, cleaning up all device docs.
+     * Permanently delete a tracking group and batch-clean all live_locations docs.
      */
     suspend fun deleteGroup(groupId: String): Result<Unit> {
         auth.currentUser?.uid
             ?: return Result.failure(IllegalStateException("Must be signed in to delete a group."))
 
         return try {
-            try {
-                val locCol = db.collection("groups").document(groupId).collection("live_locations")
-                val docs = locCol.get().await().documents
-                for (doc in docs) {
-                    try {
-                        doc.reference.delete().await()
-                    } catch (_: Exception) {}
+            val groupRef = db.collection("groups").document(groupId)
+            val docs = try {
+                groupRef.collection("live_locations").get().await().documents
+            } catch (_: Exception) {
+                emptyList()
+            }
+            for (chunk in docs.chunked(450)) {
+                val batch = db.batch()
+                for (doc in chunk) {
+                    batch.delete(doc.reference)
                 }
-            } catch (_: Exception) {}
-            db.collection("groups").document(groupId).delete().await()
+                batch.commit().await()
+            }
+            groupRef.delete().await()
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to delete group: ${e.message}", e)
@@ -422,8 +495,22 @@ class GroupRepository(
     }
 
     /**
+     * Remove this device's live coordinates from a group (used when Ghost Mode activates).
+     */
+    suspend fun clearGroupPresence(groupId: String?) {
+        val uid = auth.currentUser?.uid ?: return
+        if (groupId.isNullOrBlank()) return
+        try {
+            val locCol = db.collection("groups").document(groupId).collection("live_locations")
+            locCol.document("${uid}_${currentDeviceId}").delete().await()
+            locCol.document(uid).delete().await()
+        } catch (_: Exception) {}
+    }
+
+    /**
      * Publish current device's live location & telemetry to a group's live_locations collection
      * using `{uid}_{deviceId}` so multiple devices under one account never overwrite each other.
+     * In Ghost Mode (`isSharingEnabled = false`), scrubs coordinates from `live_locations` rather than uploading GPS.
      */
     suspend fun publishLocation(
         groupId: String,
@@ -437,6 +524,11 @@ class GroupRepository(
     ): Result<Unit> {
         val uid = auth.currentUser?.uid
             ?: return Result.failure(IllegalStateException("User not signed in."))
+
+        if (!isSharingEnabled) {
+            clearGroupPresence(groupId)
+            return Result.success(Unit)
+        }
 
         return try {
             val docId = "${uid}_${currentDeviceId}"
@@ -460,14 +552,14 @@ class GroupRepository(
                 "batteryPercent" to batteryPercent,
                 "isCharging" to isCharging,
                 "trackingMode" to trackingMode,
-                "isSharingEnabled" to isSharingEnabled,
+                "isSharingEnabled" to true,
                 "lastUpdated" to FieldValue.serverTimestamp()
             )
 
             docRef.set(payload).await()
             _lastSyncTimestampMs.value = System.currentTimeMillis()
 
-            if (isSharingEnabled && (isP2PAdvertising || isP2PDiscovering || connectedEndpoints.isNotEmpty())) {
+            if (isP2PAdvertising || isP2PDiscovering || connectedEndpoints.isNotEmpty()) {
                 broadcastP2PLocation(location, displayName, batteryPercent)
             }
 
@@ -488,8 +580,7 @@ class GroupRepository(
                 if (error != null) {
                     Log.e(TAG, "Error observing group locations: ${error.code} ${error.message}", error)
                     _firestoreError.value = "Group location sync error (${error.code.name}): ${error.localizedMessage ?: "Unavailable"}"
-                    trySend(emptyList())
-                    close()
+                    close(error)
                     return@addSnapshotListener
                 }
                 val locations = snapshot?.documents?.mapNotNull { doc ->
@@ -632,16 +723,40 @@ class GroupRepository(
 
                     _personalDevices.value = devices
 
-                    // Check if another one of our devices requested THIS device to ring
+                    // Check if another one of our devices requested THIS device to ring (clock-skew & duplicate safe)
                     val selfDoc = devices.firstOrNull { it.deviceId == currentDeviceId || it.id == currentDeviceId }
                     if (selfDoc != null) {
+                        if (snapshot != null && !snapshot.metadata.hasPendingWrites()) {
+                            selfDoc.lastUpdated?.toDate()?.time?.let { serverLastUpdated ->
+                                estimatedClockSkewMs = System.currentTimeMillis() - serverLastUpdated
+                            }
+                        }
+
                         val reqAt = selfDoc.ringRequestedAt
-                        val ageMs = System.currentTimeMillis() - reqAt
-                        if (reqAt > 0L && reqAt > lastHandledRingTimestampMs && ageMs in -120_000L..120_000L) {
-                            lastHandledRingTimestampMs = reqAt
-                            prefs.edit().putLong("last_handled_ring_ms", reqAt).apply()
-                            val caller = selfDoc.ringRequestedBy.ifBlank { "Your GeoTrace Device" }
-                            FindDeviceAlarmManager.startRinging(context, caller)
+                        val reqToken = selfDoc.ringToken
+                        val serverTriggerMs = selfDoc.ringServerTimestamp?.toDate()?.time
+                        val isNewToken = reqToken.isNotBlank() && reqToken != lastHandledRingToken
+                        val isNewTimestamp = reqAt > lastHandledRingTimestampMs
+
+                        if (reqAt > 0L && (isNewToken || (reqToken.isBlank() && isNewTimestamp))) {
+                            val nowServerApprox = System.currentTimeMillis() - estimatedClockSkewMs
+                            val ageMs = if (serverTriggerMs != null) {
+                                nowServerApprox - serverTriggerMs
+                            } else {
+                                System.currentTimeMillis() - reqAt
+                            }
+                            if (ageMs in -180_000L..180_000L) {
+                                lastHandledRingTimestampMs = reqAt
+                                if (reqToken.isNotBlank()) {
+                                    lastHandledRingToken = reqToken
+                                }
+                                prefs.edit()
+                                    .putLong("last_handled_ring_ms", reqAt)
+                                    .putString("last_handled_ring_token", lastHandledRingToken)
+                                    .apply()
+                                val caller = selfDoc.ringRequestedBy.ifBlank { "Your GeoTrace Device" }
+                                FindDeviceAlarmManager.startRinging(context, caller)
+                            }
                         }
                     }
                 }
@@ -662,12 +777,15 @@ class GroupRepository(
 
         return try {
             val nowMs = System.currentTimeMillis()
+            val token = UUID.randomUUID().toString()
             db.collection("users").document(uid)
                 .collection("devices").document(targetDeviceId)
                 .update(
                     mapOf(
                         "ringRequestedAt" to nowMs,
-                        "ringRequestedBy" to _offlineCallsign.value
+                        "ringRequestedBy" to _offlineCallsign.value,
+                        "ringToken" to token,
+                        "ringServerTimestamp" to FieldValue.serverTimestamp()
                     )
                 )
                 .await()
@@ -686,7 +804,8 @@ class GroupRepository(
                 .update(
                     mapOf(
                         "ringRequestedAt" to 0L,
-                        "ringRequestedBy" to ""
+                        "ringRequestedBy" to "",
+                        "ringToken" to ""
                     )
                 )
                 .await()
@@ -703,7 +822,8 @@ class GroupRepository(
                 .update(
                     mapOf(
                         "ringRequestedAt" to 0L,
-                        "ringRequestedBy" to ""
+                        "ringRequestedBy" to "",
+                        "ringToken" to ""
                     )
                 )
                 .await()
@@ -750,6 +870,8 @@ class GroupRepository(
     }
 
     fun stopP2PMesh() {
+        p2pRestartJob?.cancel()
+        p2pRestartJob = null
         isP2PMeshRequested = false
         try {
             connectionsClient.stopAdvertising()
@@ -868,7 +990,7 @@ class GroupRepository(
                     pendingConnections.remove(endpointId)
                     if (!connectedEndpoints.containsKey(endpointId)) {
                         activePeers.remove(endpointId)
-                        _nearbyPeers.value = activePeers.values.toList()
+                        emitSortedPeers()
                     }
                     updateMeshState()
                 }
@@ -889,6 +1011,11 @@ class GroupRepository(
             }
             updateMeshState()
         }
+    }
+
+    private fun emitSortedPeers() {
+        _nearbyPeers.value = activePeers.values
+            .sortedWith(compareBy<P2PPeer> { it.displayName.lowercase() }.thenBy { it.endpointId })
     }
 
     private fun createLifecycleCallback(knownName: String? = null): ConnectionLifecycleCallback {
@@ -919,7 +1046,7 @@ class GroupRepository(
                 pendingConnections.remove(endpointId)
                 connectedEndpoints.remove(endpointId)
                 activePeers.remove(endpointId)
-                _nearbyPeers.value = activePeers.values.toList()
+                emitSortedPeers()
                 updateMeshState()
             }
         }
@@ -930,8 +1057,11 @@ class GroupRepository(
             val bytes = payload.asBytes() ?: return
             if (bytes.isEmpty()) return
             try {
-                // Handle Remote Ring Alarm Control Command over offline P2P
+                // Handle Remote Ring Alarm Control Command over offline P2P (rate-limited against spam)
                 if (bytes[0] == P2P_CMD_RING) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastIncomingP2PRingMs < 4_000L) return
+                    lastIncomingP2PRingMs = now
                     val caller = if (bytes.size > 1) {
                         String(bytes, 1, bytes.size - 1, StandardCharsets.UTF_8)
                     } else {
@@ -1017,7 +1147,7 @@ class GroupRepository(
                 if (peer != null && isValidCoordinate(peer.latitude, peer.longitude)) {
                     connectedEndpoints.putIfAbsent(endpointId, peer.displayName)
                     activePeers[endpointId] = peer
-                    _nearbyPeers.value = activePeers.values.toList()
+                    emitSortedPeers()
                     updateMeshState()
                 }
             } catch (e: Exception) {
@@ -1028,15 +1158,21 @@ class GroupRepository(
         override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {}
     }
 
-    fun sendP2PRingCommand(endpointId: String) {
-        try {
+    fun sendP2PRingCommand(endpointId: String): Boolean {
+        val now = System.currentTimeMillis()
+        val lastSent = _p2pRingCooldownsMs.value[endpointId] ?: 0L
+        if (now - lastSent < 8_000L) return false
+        return try {
             val callerBytes = _offlineCallsign.value.toByteArray(StandardCharsets.UTF_8)
             val buffer = ByteBuffer.allocate(1 + callerBytes.size)
             buffer.put(P2P_CMD_RING)
             buffer.put(callerBytes)
             connectionsClient.sendPayload(endpointId, Payload.fromBytes(buffer.array()))
+            _p2pRingCooldownsMs.value = _p2pRingCooldownsMs.value + (endpointId to now)
+            true
         } catch (e: Exception) {
             Log.w(TAG, "Failed to send P2P ring command to $endpointId: ${e.message}")
+            false
         }
     }
 

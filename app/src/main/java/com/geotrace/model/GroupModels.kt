@@ -88,6 +88,8 @@ data class PersonalDevice(
     val trackingMode: String = "BALANCED",
     val ringRequestedAt: Long = 0L,
     val ringRequestedBy: String = "",
+    val ringToken: String = "",
+    @ServerTimestamp val ringServerTimestamp: Timestamp? = null,
     @ServerTimestamp val lastUpdated: Timestamp? = null
 ) {
     fun distanceToMeters(userLat: Double, userLng: Double): Float {

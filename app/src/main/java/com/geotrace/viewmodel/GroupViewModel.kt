@@ -20,6 +20,7 @@ import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.auth
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -45,17 +47,23 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     val currentUser: StateFlow<FirebaseUser?> = _currentUser.asStateFlow()
 
     private val authListener = FirebaseAuth.AuthStateListener { fbAuth ->
-        val wasSignedOut = _currentUser.value == null
-        _currentUser.value = fbAuth.currentUser
-        if (fbAuth.currentUser != null) {
+        val prevUser = _currentUser.value
+        val nextUser = fbAuth.currentUser
+        _currentUser.value = nextUser
+        if (nextUser != null) {
             repository.ensurePersonalDevicesListenerActive()
             if (repository.isBackgroundProtectionEnabled.value && locationRepository.activeSession.value == null) {
                 com.geotrace.service.LocationForegroundService.startProtectionMode(getApplication())
             }
-            if (wasSignedOut) {
+            if (prevUser == null || prevUser.uid != nextUser.uid) {
                 triggerImmediateBroadcast()
             }
         } else {
+            if (prevUser != null) {
+                _activeGroup.value = null
+                _mapFocusTarget.value = null
+                repository.clearSyncStateOnSignOut()
+            }
             if (locationRepository.activeSession.value == null) {
                 com.geotrace.service.LocationForegroundService.stopProtectionMode(
                     getApplication(),
@@ -69,10 +77,21 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     val userGroups: StateFlow<List<Group>> = _currentUser
         .flatMapLatest { user ->
             if (user != null) {
-                repository.observeUserGroups().catch { e ->
-                    _errorMessage.value = e.localizedMessage ?: "Failed to sync tracking groups."
-                    emit(emptyList())
-                }
+                repository.observeUserGroups()
+                    .retryWhen { cause, attempt ->
+                        if (cause is CancellationException) {
+                            false
+                        } else if (attempt < 4 && auth.currentUser != null) {
+                            delay(2_000L * (attempt + 1))
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    .catch { e ->
+                        _errorMessage.value = e.localizedMessage ?: "Failed to sync tracking groups."
+                        emit(emptyList())
+                    }
             } else {
                 flowOf(emptyList())
             }
@@ -88,10 +107,21 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     val groupMembers: StateFlow<List<MemberLocation>> = _activeGroup
         .flatMapLatest { group ->
             if (group != null) {
-                repository.observeGroupLocations(group.id).catch { e ->
-                    _errorMessage.value = e.localizedMessage ?: "Failed to load group member locations."
-                    emit(emptyList())
-                }
+                repository.observeGroupLocations(group.id)
+                    .retryWhen { cause, attempt ->
+                        if (cause is CancellationException) {
+                            false
+                        } else if (attempt < 4 && auth.currentUser != null) {
+                            delay(2_000L * (attempt + 1))
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    .catch { e ->
+                        _errorMessage.value = e.localizedMessage ?: "Failed to load group member locations."
+                        emit(emptyList())
+                    }
             } else {
                 flowOf(emptyList())
             }
@@ -100,6 +130,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
     val nearbyPeers: StateFlow<List<P2PPeer>> = repository.nearbyPeers
     val p2pMeshState: StateFlow<P2PMeshState> = repository.p2pMeshState
+    val p2pRingCooldownsMs: StateFlow<Map<String, Long>> = repository.p2pRingCooldownsMs
     val offlineCallsign: StateFlow<String> = repository.offlineCallsign
 
     val isRingingAlarm: StateFlow<Boolean> = FindDeviceAlarmManager.isRinging
@@ -258,15 +289,26 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
     fun leaveActiveGroup() {
         val group = _activeGroup.value ?: return
+        leaveGroup(group)
+    }
+
+    fun leaveGroup(group: Group) {
         viewModelScope.launch {
             _isActionLoading.value = true
             val result = repository.leaveGroup(group.id)
             _isActionLoading.value = false
 
             result.onSuccess {
-                _activeGroup.value = null
-                repository.saveSelectedGroupId(null)
-                _statusMessage.value = "Left '${group.name}'."
+                if (_activeGroup.value?.id == group.id) {
+                    _activeGroup.value = null
+                    repository.saveSelectedGroupId(null)
+                }
+                val wasSole = group.memberIds.size <= 1
+                _statusMessage.value = if (wasSole) {
+                    "Deleted '${group.name}' (you were the last member)."
+                } else {
+                    "Left '${group.name}'."
+                }
             }.onFailure { e ->
                 _errorMessage.value = e.localizedMessage ?: "Failed to leave group."
             }
@@ -275,14 +317,20 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteActiveGroup() {
         val group = _activeGroup.value ?: return
+        deleteGroup(group)
+    }
+
+    fun deleteGroup(group: Group) {
         viewModelScope.launch {
             _isActionLoading.value = true
             val result = repository.deleteGroup(group.id)
             _isActionLoading.value = false
 
             result.onSuccess {
-                _activeGroup.value = null
-                repository.saveSelectedGroupId(null)
+                if (_activeGroup.value?.id == group.id) {
+                    _activeGroup.value = null
+                    repository.saveSelectedGroupId(null)
+                }
                 _statusMessage.value = "Deleted group '${group.name}'."
             }.onFailure { e ->
                 _errorMessage.value = e.localizedMessage ?: "Failed to delete group."
@@ -312,7 +360,19 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleGhostMode() {
         val newMode = !isGhostMode.value
         repository.setGhostMode(newMode)
-        _statusMessage.value = if (newMode) "Ghost Mode ON: Group sharing paused" else "Ghost Mode OFF: Live group sharing resumed"
+        _statusMessage.value = if (newMode) {
+            "Ghost Mode ON: Hidden from groups & P2P peers"
+        } else {
+            "Ghost Mode OFF: Live group sharing resumed"
+        }
+        if (newMode) {
+            val activeId = _activeGroup.value?.id
+            if (!activeId.isNullOrBlank()) {
+                viewModelScope.launch {
+                    repository.clearGroupPresence(activeId)
+                }
+            }
+        }
         if (repository.isBackgroundProtectionActiveAndSignedIn() && locationRepository.activeSession.value == null) {
             com.geotrace.service.LocationForegroundService.startProtectionMode(getApplication())
         }
@@ -352,6 +412,9 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         }
         repository.setOfflineCallsign(cleaned)
         _statusMessage.value = "Device name updated to '$cleaned'"
+        viewModelScope.launch {
+            repository.syncDeviceNameInCloud(_activeGroup.value?.id)
+        }
         triggerImmediateBroadcast()
     }
 
@@ -450,8 +513,12 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun ringP2PPeer(endpointId: String, peerName: String) {
-        repository.sendP2PRingCommand(endpointId)
-        _statusMessage.value = "Offline P2P Ring sent to $peerName!"
+        val sent = repository.sendP2PRingCommand(endpointId)
+        _statusMessage.value = if (sent) {
+            "Offline P2P Ring sent to $peerName!"
+        } else {
+            "Ring already sent to $peerName — please wait a few seconds."
+        }
     }
 
     fun stopRingingAlarm() {

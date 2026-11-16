@@ -63,6 +63,7 @@
         "trackingMode": { "type": "string" },
         "ringRequestedAt": { "type": "integer", "description": "Epoch millis when remote Ring alarm was triggered." },
         "ringRequestedBy": { "type": "string", "description": "Name of caller device triggering ring." },
+        "ringToken": { "type": "string", "description": "Unique ring trigger token for clock-skew-safe deduplication." },
         "lastUpdated": { "type": "string", "format": "date-time" }
       },
       "required": ["userId", "deviceId", "deviceName", "latitude", "longitude", "lastUpdated"]
