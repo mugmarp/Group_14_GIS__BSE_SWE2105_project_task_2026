@@ -299,7 +299,12 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
             _isActionLoading.value = false
 
             result.onSuccess {
-                if (_activeGroup.value?.id == group.id) {
+                val focusId = _mapFocusTarget.value?.id
+                val wasActive = _activeGroup.value?.id == group.id
+                if (focusId != null && (focusId in group.memberIds || (wasActive && groupMembers.value.any { it.id == focusId || it.userId == focusId || it.deviceId == focusId }))) {
+                    _mapFocusTarget.value = null
+                }
+                if (wasActive) {
                     _activeGroup.value = null
                     repository.saveSelectedGroupId(null)
                 }
@@ -327,7 +332,12 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
             _isActionLoading.value = false
 
             result.onSuccess {
-                if (_activeGroup.value?.id == group.id) {
+                val focusId = _mapFocusTarget.value?.id
+                val wasActive = _activeGroup.value?.id == group.id
+                if (focusId != null && (focusId in group.memberIds || (wasActive && groupMembers.value.any { it.id == focusId || it.userId == focusId || it.deviceId == focusId }))) {
+                    _mapFocusTarget.value = null
+                }
+                if (wasActive) {
                     _activeGroup.value = null
                     repository.saveSelectedGroupId(null)
                 }
@@ -431,6 +441,10 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
             }
             triggerImmediateBroadcast()
         } else {
+            val focusId = _mapFocusTarget.value?.id
+            if (focusId != null && nearbyPeers.value.any { it.endpointId == focusId }) {
+                _mapFocusTarget.value = null
+            }
             repository.stopP2PMesh()
             _statusMessage.value = "Off-Grid P2P Device Finder OFF"
         }
@@ -472,6 +486,11 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
             val result = repository.removePersonalDevice(device.deviceId.ifBlank { device.id })
             _isActionLoading.value = false
             result.onSuccess {
+                val focusId = _mapFocusTarget.value?.id
+                val devId = device.deviceId.ifBlank { device.id }
+                if (focusId != null && (focusId == devId || focusId == device.deviceId || focusId == device.id)) {
+                    _mapFocusTarget.value = null
+                }
                 _statusMessage.value = "Removed '${device.deviceName.ifBlank { device.deviceModel }}' from My Devices."
             }.onFailure { e ->
                 _errorMessage.value = e.localizedMessage ?: "Failed to remove device."

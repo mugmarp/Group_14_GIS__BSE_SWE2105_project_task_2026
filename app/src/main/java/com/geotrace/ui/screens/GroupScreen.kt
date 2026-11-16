@@ -59,6 +59,7 @@ import com.geotrace.model.LocationPoint
 import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MemberLocation
 import com.geotrace.model.PersonalDevice
+import com.geotrace.model.SpeedUnit
 import com.geotrace.ui.screens.devices.AccountProfileStrip
 import com.geotrace.ui.screens.devices.ActiveGroupHeroCard
 import com.geotrace.ui.screens.devices.AuthGateCard
@@ -94,6 +95,7 @@ import kotlinx.coroutines.delay
 fun GroupScreen(
     groupViewModel: GroupViewModel,
     currentLocation: LocationPoint?,
+    speedUnit: SpeedUnit = SpeedUnit.KMH,
     onLocateOnMap: (MapFocusTarget) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -150,7 +152,11 @@ fun GroupScreen(
         if (fineOrCoarse) {
             groupViewModel.toggleBackgroundProtection(true)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !hasBackgroundLocationPermission(context)) {
-                bgLocationPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    showBgSettingsDialog = true
+                } else {
+                    bgLocationPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                }
             }
         } else {
             Toast.makeText(
@@ -467,6 +473,7 @@ fun GroupScreen(
                                     canRemove = canRemoveMember,
                                     matchingOwnDevice = matchingOwn,
                                     nowMs = nowMs,
+                                    speedUnit = speedUnit,
                                     onLocateClick = {
                                         onLocateOnMap(
                                             MapFocusTarget(
@@ -662,6 +669,7 @@ fun GroupScreen(
                                 userLocation = currentLocation,
                                 lastRingSentAtMs = p2pRingCooldownsMs[peer.endpointId] ?: 0L,
                                 nowMs = nowMs,
+                                speedUnit = speedUnit,
                                 onLocatePeer = {
                                     onLocateOnMap(
                                         MapFocusTarget(

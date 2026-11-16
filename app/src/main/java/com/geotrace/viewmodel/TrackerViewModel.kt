@@ -123,6 +123,11 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private val _currentMapBoundingBox = MutableStateFlow<org.osmdroid.util.BoundingBox?>(null)
     val currentMapBoundingBox: StateFlow<org.osmdroid.util.BoundingBox?> = _currentMapBoundingBox.asStateFlow()
 
+    @Volatile
+    var savedMapCenter: org.osmdroid.util.GeoPoint? = null
+    @Volatile
+    var savedMapZoom: Double? = null
+
     private val fusedLocationClient = com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(application)
     private val systemLocationManager = application.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
     private var standbyCallback: com.google.android.gms.location.LocationCallback? = null
@@ -617,7 +622,6 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 onResult?.invoke(false)
                 return@launch
             }
-            toggleFollowUser(false)
             _inspectedTrail.value = InspectedTrail(session, points, waypoints)
             onResult?.invoke(true)
         }

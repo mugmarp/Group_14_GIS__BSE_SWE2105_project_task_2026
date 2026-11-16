@@ -177,7 +177,7 @@ fun MainAppScreen(
             viewModel.startStandbyLocationUpdates()
             viewModel.refreshCellTowers()
             groupViewModel.ensureProtectionStartedIfEligible()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
                 }
@@ -204,7 +204,7 @@ fun MainAppScreen(
             }
             viewModel.refreshCellTowers()
             groupViewModel.ensureProtectionStartedIfEligible()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
                 }
@@ -303,8 +303,9 @@ fun MainAppScreen(
                 Screen.GROUPS -> GroupScreen(
                     groupViewModel = groupViewModel,
                     currentLocation = currentLocation,
+                    speedUnit = settings.speedUnit,
                     onLocateOnMap = { target ->
-                        viewModel.toggleFollowUser(false)
+                        viewModel.clearInspectedTrail()
                         groupViewModel.focusMapOnTarget(target)
                         currentScreen = Screen.MAP
                     }
@@ -313,7 +314,7 @@ fun MainAppScreen(
                     viewModel = viewModel,
                     onNavigateBack = { currentScreen = Screen.MAP },
                     onPickOnMap = { draft ->
-                        viewModel.toggleFollowUser(false)
+                        viewModel.clearInspectedTrail()
                         viewModel.beginMapPickForGeofence(draft)
                         groupViewModel.focusMapOnTarget(
                             com.geotrace.model.MapFocusTarget(
@@ -333,6 +334,7 @@ fun MainAppScreen(
                     onViewTrailOnMap = { session ->
                         viewModel.inspectSessionOnMap(session) { hasData ->
                             if (hasData) {
+                                groupViewModel.clearMapFocusTarget()
                                 currentScreen = Screen.MAP
                             } else {
                                 android.widget.Toast.makeText(
@@ -353,6 +355,7 @@ fun MainAppScreen(
                     onNavigateBack = { currentScreen = Screen.MAP },
                     groupViewModel = groupViewModel,
                     onJumpToOfflineRegion = { target ->
+                        viewModel.clearInspectedTrail()
                         groupViewModel.focusMapOnTarget(target)
                     }
                 )
@@ -518,8 +521,9 @@ fun MainAppScreen(
                                     val loc = currentLocation!!
                                     val convertedSpeed = loc.speed * settings.speedUnit.multiplier
                                     val gait = loc.gaitLabel
+                                    val coordText = com.geotrace.ui.screens.formatCoordinates(loc.latitude, loc.longitude, settings.coordinateFormat)
                                     Text(
-                                        text = "${String.format("%.4f", loc.latitude)}°, ${String.format("%.4f", loc.longitude)}° • Speed: ${String.format("%.1f", convertedSpeed)} ${settings.speedUnit.label} ($gait)",
+                                        text = "$coordText • Speed: ${String.format(java.util.Locale.US, "%.1f", convertedSpeed)} ${settings.speedUnit.label} ($gait)",
                                         fontSize = 10.sp,
                                         fontFamily = FontFamily.Monospace,
                                         color = colorScheme.onSurfaceVariant

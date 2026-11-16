@@ -51,6 +51,7 @@ import com.geotrace.model.LocationPoint
 import com.geotrace.model.MemberLocation
 import com.geotrace.model.P2PPeer
 import com.geotrace.model.PersonalDevice
+import com.geotrace.model.SpeedUnit
 import com.geotrace.ui.theme.LocalCustomColors
 import java.util.Locale
 
@@ -63,6 +64,7 @@ fun MemberCard(
     canRemove: Boolean,
     matchingOwnDevice: PersonalDevice?,
     nowMs: Long,
+    speedUnit: SpeedUnit = SpeedUnit.KMH,
     onLocateClick: () -> Unit,
     onRingOwnDeviceClick: ((PersonalDevice) -> Unit)?,
     onRemoveClick: () -> Unit
@@ -97,11 +99,11 @@ fun MemberCard(
         colorScheme.primary
     }
 
-    val speedKmh = String.format(Locale.US, "%.1f", member.speed * 3.6f)
+    val speedStr = String.format(Locale.US, "%.1f", member.speed * speedUnit.multiplier)
     val motionSummary = if (isStale) {
-        "$distanceText • Last known $speedKmh km/h"
+        "$distanceText • Last known $speedStr ${speedUnit.label}"
     } else {
-        "$distanceText • ${member.gait} ($speedKmh km/h)"
+        "$distanceText • ${member.gait} ($speedStr ${speedUnit.label})"
     }
 
     Card(
@@ -451,6 +453,7 @@ fun P2PPeerCard(
     userLocation: LocationPoint?,
     lastRingSentAtMs: Long,
     nowMs: Long,
+    speedUnit: SpeedUnit = SpeedUnit.KMH,
     onLocatePeer: () -> Unit,
     onRingPeer: () -> Unit
 ) {
@@ -506,7 +509,7 @@ fun P2PPeerCard(
                         color = colorScheme.onSurface
                     )
                     Text(
-                        text = "$distanceText • ${String.format(Locale.US, "%.1f", peer.speed * 3.6f)} km/h",
+                        text = "$distanceText • ${String.format(Locale.US, "%.1f", peer.speed * speedUnit.multiplier)} ${speedUnit.label}",
                         fontSize = 11.sp,
                         color = colorScheme.onSurfaceVariant
                     )

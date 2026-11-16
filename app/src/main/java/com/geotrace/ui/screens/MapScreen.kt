@@ -125,6 +125,7 @@ fun MapScreen(
     val isPickingGeofenceCenter by viewModel.isPickingGeofenceCenter.collectAsState()
     val geofencePickDraft by viewModel.geofencePickDraft.collectAsState()
 
+    val currentUser by (groupViewModel?.currentUser ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
     val activeGroup by (groupViewModel?.activeGroup ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
     val groupMembers by (groupViewModel?.groupMembers ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsState()
     val personalDevices by (groupViewModel?.personalDevices ?: kotlinx.coroutines.flow.MutableStateFlow(emptyList())).collectAsState()
@@ -136,8 +137,13 @@ fun MapScreen(
     val remotePersonalDevices = remember(personalDevices, currentDeviceId) {
         personalDevices.filter { it.deviceId != currentDeviceId && it.id != currentDeviceId }
     }
-    val remoteGroupMembers = remember(groupMembers, currentDeviceId) {
-        groupMembers.filter { currentDeviceId.isBlank() || it.deviceId != currentDeviceId }
+    val remoteGroupMembers = remember(groupMembers, currentUser?.uid, currentDeviceId) {
+        groupMembers.filter { member ->
+            val isSelf = currentUser?.uid != null &&
+                member.userId == currentUser?.uid &&
+                (member.deviceId.isBlank() || member.deviceId == currentDeviceId)
+            !isSelf && (currentDeviceId.isBlank() || member.deviceId != currentDeviceId)
+        }
     }
     val groupDeviceIds = remember(groupMembers) {
         groupMembers.map { it.deviceId }.filter { it.isNotBlank() }.toSet()
@@ -177,15 +183,71 @@ fun MapScreen(
     }
 
 
-    // Keep screen awake while recording if enabled in settings
+    // Keep screen awake only while actively recording (release when paused)
     val activity = context as? Activity
-    DisposableEffect(settings.keepScreenOn, activeSession) {
-        if (settings.keepScreenOn && activeSession != null) {
+    DisposableEffect(settings.keepScreenOn, activeSession?.id, activeSession?.isPaused) {
+        if (settings.keepScreenOn && activeSession != null && activeSession?.isPaused != true) {
             activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
         onDispose {
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
+    }
+
+    val resolvedFocusTarget = remember(
+        mapFocusTarget,
+        remoteGroupMembers,
+        deduplicatedPersonalDevices,
+        nearbyPeers,
+        currentLocation,
+        settings.speedUnit,
+        nowMs
+    ) {
+        val target = mapFocusTarget ?: return@remember null
+        val matchedMember = remoteGroupMembers.firstOrNull {
+            it.id == target.id || it.userId == target.id || it.deviceId == target.id
+        }
+        if (matchedMember != null && (matchedMember.latitude != 0.0 || matchedMember.longitude != 0.0)) {
+            val dist = currentLocation?.let { matchedMember.distanceToMeters(it.latitude, it.longitude) }
+            val distStr = dist?.let { if (it < 1000f) "${it.toInt()}m" else String.format(Locale.US, "%.1fkm", it / 1000f) } ?: "--"
+            val updatedMs = matchedMember.lastUpdated?.toDate()?.time
+            val (freshness, isStale) = com.geotrace.ui.screens.devices.formatFreshness(updatedMs, nowMs, 120_000L)
+            val speedVal = String.format(Locale.US, "%.1f", matchedMember.speed * settings.speedUnit.multiplier)
+            return@remember target.copy(
+                label = matchedMember.displayName,
+                latitude = matchedMember.latitude,
+                longitude = matchedMember.longitude,
+                subtitle = if (isStale) "$freshness • $distStr • ${matchedMember.batteryPercent}%" else "$distStr • $speedVal ${settings.speedUnit.label} • ${matchedMember.batteryPercent}% • $freshness"
+            )
+        }
+        val matchedDevice = deduplicatedPersonalDevices.firstOrNull {
+            it.deviceId == target.id || it.id == target.id
+        }
+        if (matchedDevice != null && (matchedDevice.latitude != 0.0 || matchedDevice.longitude != 0.0)) {
+            val dist = currentLocation?.let { matchedDevice.distanceToMeters(it.latitude, it.longitude) }
+            val distStr = dist?.let { if (it < 1000f) "${it.toInt()}m" else String.format(Locale.US, "%.1fkm", it / 1000f) } ?: "--"
+            val updatedMs = matchedDevice.lastUpdated?.toDate()?.time
+            val (freshness, _) = com.geotrace.ui.screens.devices.formatFreshness(updatedMs, nowMs, 90_000L)
+            return@remember target.copy(
+                label = matchedDevice.deviceName.ifBlank { matchedDevice.deviceModel },
+                latitude = matchedDevice.latitude,
+                longitude = matchedDevice.longitude,
+                subtitle = "$distStr • $freshness • ${matchedDevice.batteryPercent}%"
+            )
+        }
+        val matchedPeer = nearbyPeers.firstOrNull { it.endpointId == target.id }
+        if (matchedPeer != null && (matchedPeer.latitude != 0.0 || matchedPeer.longitude != 0.0)) {
+            val dist = currentLocation?.let { matchedPeer.distanceToMeters(it.latitude, it.longitude) }
+            val distStr = dist?.let { if (it < 1000f) "${it.toInt()}m" else String.format(Locale.US, "%.1fkm", it / 1000f) } ?: "Nearby"
+            val speedVal = String.format(Locale.US, "%.1f", matchedPeer.speed * settings.speedUnit.multiplier)
+            return@remember target.copy(
+                label = matchedPeer.displayName,
+                latitude = matchedPeer.latitude,
+                longitude = matchedPeer.longitude,
+                subtitle = "P2P • $distStr • $speedVal ${settings.speedUnit.label} • ${matchedPeer.batteryPercent}%"
+            )
+        }
+        target
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -205,8 +267,9 @@ fun MapScreen(
             groupMembers = groupMembers,
             personalDevices = deduplicatedPersonalDevices,
             currentDeviceId = currentDeviceId,
+            currentUserUid = currentUser?.uid,
             nearbyPeers = nearbyPeers,
-            focusedTarget = mapFocusTarget,
+            focusedTarget = resolvedFocusTarget,
             isRecording = activeSession != null,
             trailWaypoints = displayedWaypoints,
             inspectedTrailName = if (activeSession == null) inspectedTrail?.session?.name else null,
@@ -220,7 +283,6 @@ fun MapScreen(
             onRecenterSelf = {
                 groupViewModel?.clearMapFocusTarget()
                 viewModel.clearInspectedTrail()
-                viewModel.toggleFollowUser(true)
             },
             offlineRegionsCount = offlineMapRegions.size,
             settings = settings,
@@ -235,6 +297,12 @@ fun MapScreen(
             },
             onMapBoundsChanged = { bounds ->
                 viewModel.updateMapViewportBounds(bounds)
+            },
+            initialMapCenter = viewModel.savedMapCenter,
+            initialMapZoom = viewModel.savedMapZoom,
+            onSaveMapCamera = { center, zoom ->
+                viewModel.savedMapCenter = center
+                viewModel.savedMapZoom = zoom
             },
             isMapPickMode = isPickingGeofenceCenter,
             onMapCoordinatePicked = { lat, lon ->
@@ -659,77 +727,79 @@ fun MapScreen(
                     }
                 }
 
-                // Floating Devices / Tracking Group & Off-Grid P2P Pill (opens Quick Devices Sheet if targets exist)
-                Surface(
-                    shape = RoundedCornerShape(20.dp),
-                    color = when {
-                        activeGroup != null -> colorScheme.primaryContainer.copy(alpha = 0.5f)
-                        deduplicatedPersonalDevices.isNotEmpty() -> colorScheme.secondaryContainer.copy(alpha = 0.5f)
-                        isP2PEnabled -> colorScheme.tertiaryContainer.copy(alpha = 0.55f)
-                        else -> colorScheme.surface
-                    },
-                    shadowElevation = 3.dp,
-                    border = BorderStroke(
-                        1.dp,
-                        when {
-                            activeGroup != null -> colorScheme.primary
-                            deduplicatedPersonalDevices.isNotEmpty() -> colorScheme.secondary
-                            isP2PEnabled -> colorScheme.tertiary
-                            else -> colorScheme.outlineVariant
-                        }
-                    ),
-                    modifier = Modifier
-                        .clickable {
-                            if (hasQuickLocateTargets) {
-                                showDevicesSheet = true
-                            } else {
-                                onNavigateToGroups?.invoke()
-                            }
-                        }
-                        .testTag("floating_group_pill")
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Group,
-                            contentDescription = "Devices and Offline P2P Mesh",
-                            tint = when {
+                // Floating Devices / Tracking Group & Off-Grid P2P Pill (shown only when groups, fleet, or P2P are active — bottom bar already houses Devices)
+                if (hasQuickLocateTargets || activeGroup != null || isP2PEnabled) {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = when {
+                            activeGroup != null -> colorScheme.primaryContainer.copy(alpha = 0.5f)
+                            deduplicatedPersonalDevices.isNotEmpty() -> colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                            isP2PEnabled -> colorScheme.tertiaryContainer.copy(alpha = 0.55f)
+                            else -> colorScheme.surface
+                        },
+                        shadowElevation = 3.dp,
+                        border = BorderStroke(
+                            1.dp,
+                            when {
                                 activeGroup != null -> colorScheme.primary
                                 deduplicatedPersonalDevices.isNotEmpty() -> colorScheme.secondary
                                 isP2PEnabled -> colorScheme.tertiary
-                                else -> colorScheme.onSurfaceVariant
-                            },
-                            modifier = Modifier.size(15.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        val liveGroupCount = groupMembers.count { m ->
-                            val ts = m.lastUpdated?.toDate()?.time
-                            ts != null && (nowMs - ts) <= 120_000L
-                        }
-                        val pillLabel = when {
-                            activeGroup != null && isP2PEnabled -> "${activeGroup!!.name} ($liveGroupCount/${groupMembers.size}) • P2P (${nearbyPeers.size})"
-                            activeGroup != null -> "${activeGroup!!.name} ($liveGroupCount/${groupMembers.size})"
-                            deduplicatedPersonalDevices.isNotEmpty() && isP2PEnabled -> "My Devices (${deduplicatedPersonalDevices.size}) • P2P (${nearbyPeers.size})"
-                            deduplicatedPersonalDevices.isNotEmpty() -> "My Devices (${deduplicatedPersonalDevices.size})"
-                            isP2PEnabled -> "P2P Mesh (${nearbyPeers.size})"
-                            else -> "Devices / P2P"
-                        }
-                        Text(
-                            text = pillLabel,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.onSurface
-                        )
-                        if (isGhostMode) {
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text(
-                                text = "GHOST",
-                                fontSize = 8.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFD97706)
+                                else -> colorScheme.outlineVariant
+                            }
+                        ),
+                        modifier = Modifier
+                            .clickable {
+                                if (hasQuickLocateTargets) {
+                                    showDevicesSheet = true
+                                } else {
+                                    onNavigateToGroups?.invoke()
+                                }
+                            }
+                            .testTag("floating_group_pill")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Group,
+                                contentDescription = "Devices and Offline P2P Mesh",
+                                tint = when {
+                                    activeGroup != null -> colorScheme.primary
+                                    deduplicatedPersonalDevices.isNotEmpty() -> colorScheme.secondary
+                                    isP2PEnabled -> colorScheme.tertiary
+                                    else -> colorScheme.onSurfaceVariant
+                                },
+                                modifier = Modifier.size(15.dp)
                             )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            val liveGroupCount = groupMembers.count { m ->
+                                val ts = m.lastUpdated?.toDate()?.time
+                                ts != null && (nowMs - ts) <= 120_000L
+                            }
+                            val fleetSuffix = if (deduplicatedPersonalDevices.isNotEmpty()) " +${deduplicatedPersonalDevices.size}" else ""
+                            val pillLabel = when {
+                                activeGroup != null && isP2PEnabled -> "${activeGroup!!.name} ($liveGroupCount/${groupMembers.size})$fleetSuffix • P2P (${nearbyPeers.size})"
+                                activeGroup != null -> "${activeGroup!!.name} ($liveGroupCount/${groupMembers.size})$fleetSuffix"
+                                deduplicatedPersonalDevices.isNotEmpty() && isP2PEnabled -> "My Devices (${deduplicatedPersonalDevices.size}) • P2P (${nearbyPeers.size})"
+                                deduplicatedPersonalDevices.isNotEmpty() -> "My Devices (${deduplicatedPersonalDevices.size})"
+                                else -> "P2P Mesh (${nearbyPeers.size})"
+                            }
+                            Text(
+                                text = pillLabel,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onSurface
+                            )
+                            if (isGhostMode) {
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = "GHOST",
+                                    fontSize = 8.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFFD97706)
+                                )
+                            }
                         }
                     }
                 }
@@ -846,7 +916,12 @@ fun MapScreen(
                         border = BorderStroke(1.dp, Color(0xFFD97706).copy(alpha = 0.55f)),
                         modifier = Modifier
                             .clickable {
-                                viewModel.toggleCellTowerPin(!settings.showCellTowerPin)
+                                viewModel.toggleCellTowerPin(false)
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Cell tower pin hidden — restore in Layers",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
                             }
                             .testTag("cell_tower_status_chip")
                     ) {
@@ -1223,7 +1298,7 @@ fun MapScreen(
             currentLocation = currentLocation,
             currentMapBounds = currentMapBounds,
             onJumpToRegion = { _, target ->
-                viewModel.toggleFollowUser(false)
+                viewModel.clearInspectedTrail()
                 groupViewModel?.focusMapOnTarget(target)
             },
             onDismiss = { showOfflineMapsDialog = false }
@@ -1298,7 +1373,7 @@ fun MapScreen(
                             .clickable {
                                 showDevicesSheet = false
                                 if (member.latitude != 0.0 || member.longitude != 0.0) {
-                                    viewModel.toggleFollowUser(false)
+                                    viewModel.clearInspectedTrail()
                                     val statusNote = if (isOffline) "Offline • $distStr • ${member.batteryPercent}%" else "$distStr • ${member.batteryPercent}%"
                                     groupViewModel?.focusMapOnTarget(
                                         MapFocusTarget(
@@ -1310,7 +1385,11 @@ fun MapScreen(
                                         )
                                     )
                                 } else {
-                                    onNavigateToGroups?.invoke()
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "Waiting for ${member.displayName}'s location sync...",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
                                 }
                             }
                             .testTag("sheet_member_${member.userId}")
@@ -1358,33 +1437,43 @@ fun MapScreen(
                 }
 
                 for (device in deduplicatedPersonalDevices) {
-                    val dist = if (currentLocation != null) device.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude) else null
+                    val hasCoords = device.latitude != 0.0 || device.longitude != 0.0
+                    val dist = if (currentLocation != null && hasCoords) {
+                        device.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude)
+                    } else null
                     val distStr = when {
+                        !hasCoords -> "Syncing..."
                         dist == null -> "--"
                         dist < 1000 -> "${dist.toInt()}m"
                         else -> String.format(Locale.US, "%.1fkm", dist / 1000f)
                     }
+                    val devUpdatedMs = device.lastUpdated?.toDate()?.time
+                    val (devFreshness, devStale) = com.geotrace.ui.screens.devices.formatFreshness(devUpdatedMs, nowMs, 90_000L)
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = customColors.surfaceContainerLow,
-                        border = BorderStroke(1.dp, Color(0xFF7C3AED).copy(alpha = 0.45f)),
+                        border = BorderStroke(1.dp, if (devStale) Color(0xFFD97706).copy(alpha = 0.5f) else Color(0xFF7C3AED).copy(alpha = 0.45f)),
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
                                 showDevicesSheet = false
-                                if (device.latitude != 0.0 || device.longitude != 0.0) {
-                                    viewModel.toggleFollowUser(false)
+                                if (hasCoords) {
+                                    viewModel.clearInspectedTrail()
                                     groupViewModel?.focusMapOnTarget(
                                         MapFocusTarget(
                                             id = device.deviceId,
                                             label = device.deviceName.ifBlank { device.deviceModel },
                                             latitude = device.latitude,
                                             longitude = device.longitude,
-                                            subtitle = "$distStr • ${device.batteryPercent}%"
+                                            subtitle = "$distStr • $devFreshness • ${device.batteryPercent}%"
                                         )
                                     )
                                 } else {
-                                    onNavigateToGroups?.invoke()
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "Waiting for ${device.deviceName.ifBlank { "device" }} location sync...",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
                                 }
                             }
                             .testTag("sheet_device_${device.deviceId}")
@@ -1410,15 +1499,15 @@ fun MapScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = device.deviceName,
+                                    text = device.deviceName.ifBlank { device.deviceModel },
                                     fontSize = 13.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = colorScheme.onSurface
                                 )
                                 Text(
-                                    text = "$distStr • ${device.batteryPercent}%",
+                                    text = "$distStr • $devFreshness • ${device.batteryPercent}%",
                                     fontSize = 11.sp,
-                                    color = colorScheme.onSurfaceVariant
+                                    color = if (devStale) Color(0xFFD97706) else colorScheme.onSurfaceVariant
                                 )
                             }
                             Icon(
@@ -1432,13 +1521,16 @@ fun MapScreen(
                 }
 
                 for (peer in nearbyPeers) {
-                    val distText = if (currentLocation != null) {
+                    val hasPeerCoords = peer.latitude != 0.0 || peer.longitude != 0.0
+                    val distText = if (currentLocation != null && hasPeerCoords) {
                         val d = peer.distanceToMeters(currentLocation!!.latitude, currentLocation!!.longitude)
                         val bearing = peer.bearingFrom(currentLocation!!.latitude, currentLocation!!.longitude)
                         val dirs = arrayOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
                         val compass = dirs[(((((bearing % 360f) + 360f) % 360f) + 22.5f) / 45f).toInt() % 8]
                         val distPart = if (d < 1000) "${d.toInt()}m" else String.format(Locale.US, "%.1fkm", d / 1000f)
                         "$distPart $compass"
+                    } else if (!hasPeerCoords) {
+                        "GPS pending"
                     } else {
                         "Nearby"
                     }
@@ -1450,16 +1542,24 @@ fun MapScreen(
                             .fillMaxWidth()
                             .clickable {
                                 showDevicesSheet = false
-                                viewModel.toggleFollowUser(false)
-                                groupViewModel?.focusMapOnTarget(
-                                    MapFocusTarget(
-                                        id = peer.endpointId,
-                                        label = peer.displayName,
-                                        latitude = peer.latitude,
-                                        longitude = peer.longitude,
-                                        subtitle = "P2P • $distText • ${peer.batteryPercent}%"
+                                if (hasPeerCoords) {
+                                    viewModel.clearInspectedTrail()
+                                    groupViewModel?.focusMapOnTarget(
+                                        MapFocusTarget(
+                                            id = peer.endpointId,
+                                            label = peer.displayName,
+                                            latitude = peer.latitude,
+                                            longitude = peer.longitude,
+                                            subtitle = "P2P • $distText • ${peer.batteryPercent}%"
+                                        )
                                     )
-                                )
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "Waiting for ${peer.displayName}'s GPS fix...",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
                             .testTag("sheet_p2p_${peer.endpointId}")
                     ) {
@@ -1660,7 +1760,7 @@ private fun TelemetryMetric(
     }
 }
 
-private fun formatCoordinates(lat: Double, lon: Double, format: CoordinateFormat): String {
+fun formatCoordinates(lat: Double, lon: Double, format: CoordinateFormat): String {
     return if (format == CoordinateFormat.DECIMAL) {
         String.format(Locale.US, "%.5f°, %.5f°", lat, lon)
     } else {

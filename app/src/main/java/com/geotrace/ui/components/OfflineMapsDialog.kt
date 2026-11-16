@@ -495,7 +495,8 @@ fun OfflineMapsDialog(
                                             label = region.name,
                                             latitude = region.centerLat,
                                             longitude = region.centerLng,
-                                            subtitle = "Offline ${region.tileType.label} (Z${region.minZoom}–${region.maxZoom})"
+                                            subtitle = "Offline ${region.tileType.label} (Z${region.minZoom}–${region.maxZoom})",
+                                            targetZoom = region.maxZoom.toDouble().coerceIn(13.0, 17.5)
                                         )
                                     )
                                     onDismiss()

@@ -91,6 +91,18 @@ private data class MarkerInspectData(
     val badge: String
 )
 
+private data class CachedGeofenceVisuals(
+    val zone: com.geotrace.model.GeofenceZone,
+    val mainPoints: List<GeoPoint>,
+    val outerExitPoints: List<GeoPoint>?,
+    val innerEntryPoints: List<GeoPoint>?,
+    val fillColor: Int,
+    val outlineColor: Int,
+    val hystColor: Int,
+    val entryR: Double,
+    val exitR: Double
+)
+
 private fun formatMarkerMode(rawMode: String): String = when (rawMode.uppercase()) {
     "HIGH_ACCURACY" -> "GPS High"
     "BALANCED" -> "Balanced"
@@ -109,6 +121,7 @@ fun MapViewComposable(
     groupMembers: List<com.geotrace.model.MemberLocation> = emptyList(),
     personalDevices: List<com.geotrace.model.PersonalDevice> = emptyList(),
     currentDeviceId: String = "",
+    currentUserUid: String? = null,
     nearbyPeers: List<com.geotrace.model.P2PPeer> = emptyList(),
     focusedTarget: com.geotrace.model.MapFocusTarget? = null,
     isRecording: Boolean = false,
@@ -124,6 +137,9 @@ fun MapViewComposable(
     onToggleCellTowerPin: ((Boolean) -> Unit)? = null,
     onOpenOfflineMaps: (() -> Unit)? = null,
     onMapBoundsChanged: ((BoundingBox) -> Unit)? = null,
+    initialMapCenter: GeoPoint? = null,
+    initialMapZoom: Double? = null,
+    onSaveMapCamera: ((GeoPoint, Double) -> Unit)? = null,
     isMapPickMode: Boolean = false,
     onMapCoordinatePicked: ((Double, Double) -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -141,9 +157,38 @@ fun MapViewComposable(
     val userPinColor = colorScheme.primary
 
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
-    var hasCenteredOnFirstFix by remember { mutableStateOf(false) }
+    var hasCenteredOnFirstFix by remember { mutableStateOf(initialMapCenter != null) }
     var showLayerMenu by remember { mutableStateOf(false) }
     var selectedMarkerInfo by remember { mutableStateOf<MarkerInspectData?>(null) }
+
+    val cachedGeofences = remember(geofenceZones, settings.geofenceHysteresisMeters) {
+        val deltaHyst = settings.geofenceHysteresisMeters.toDouble().coerceAtLeast(0.0)
+        geofenceZones.map { zone ->
+            val zoneCenter = GeoPoint(zone.latitude, zone.longitude)
+            val mainPoints = computeCircleGeoPoints(zoneCenter, zone.radiusMeters.toDouble())
+            val zoneColor = try {
+                android.graphics.Color.parseColor(zone.colorHex)
+            } catch (_: Exception) {
+                android.graphics.Color.parseColor("#006948")
+            }
+            val r = android.graphics.Color.red(zoneColor)
+            val g = android.graphics.Color.green(zoneColor)
+            val b = android.graphics.Color.blue(zoneColor)
+            val entryR = (zone.radiusMeters - deltaHyst).coerceAtLeast(minOf(10.0, zone.radiusMeters * 0.5))
+            val exitR = zone.radiusMeters + deltaHyst
+            CachedGeofenceVisuals(
+                zone = zone,
+                mainPoints = mainPoints,
+                outerExitPoints = if (deltaHyst > 0.0) computeCircleGeoPoints(zoneCenter, exitR) else null,
+                innerEntryPoints = if (deltaHyst > 0.0 && entryR < zone.radiusMeters - 2.0) computeCircleGeoPoints(zoneCenter, entryR) else null,
+                fillColor = android.graphics.Color.argb(40, r, g, b),
+                outlineColor = android.graphics.Color.argb(210, r, g, b),
+                hystColor = android.graphics.Color.argb(115, r, g, b),
+                entryR = entryR,
+                exitR = exitR
+            )
+        }
+    }
 
     // Reusable GIS icon drawables (cached once per composition to avoid per-fix Bitmap churn)
     val gpsChevronDrawable = remember(context) {
@@ -199,9 +244,14 @@ fun MapViewComposable(
     LaunchedEffect(currentLocation, settings.followUserLocation, focusedTarget, inspectedTrailName) {
         if (inspectedTrailName == null && focusedTarget == null && currentLocation != null) {
             if (!hasCenteredOnFirstFix || settings.followUserLocation) {
+                val targetZoom = if (!hasCenteredOnFirstFix) {
+                    16.5
+                } else {
+                    mapViewRef?.zoomLevelDouble ?: initialMapZoom ?: 16.5
+                }
                 mapViewRef?.controller?.animateTo(
                     GeoPoint(currentLocation.latitude, currentLocation.longitude),
-                    16.5,
+                    targetZoom,
                     800L
                 )
                 hasCenteredOnFirstFix = true
@@ -236,7 +286,7 @@ fun MapViewComposable(
         if (target.latitude != 0.0 || target.longitude != 0.0) {
             mapViewRef?.controller?.animateTo(
                 GeoPoint(target.latitude, target.longitude),
-                17.5,
+                target.targetZoom ?: 17.5,
                 750L
             )
             hasCenteredOnFirstFix = true
@@ -255,6 +305,10 @@ fun MapViewComposable(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            mapViewRef?.let { m ->
+                val c = m.mapCenter
+                onSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), m.zoomLevelDouble)
+            }
             lifecycleOwner.lifecycle.removeObserver(observer)
             hybridLabelsProvider.setTileRequestCompleteHandler(null)
             hybridLabelsProvider.detach()
@@ -279,9 +333,13 @@ fun MapViewComposable(
 
                     if (focusedTarget != null && (focusedTarget.latitude != 0.0 || focusedTarget.longitude != 0.0)) {
                         controller.setCenter(GeoPoint(focusedTarget.latitude, focusedTarget.longitude))
-                        controller.setZoom(17.5)
+                        controller.setZoom(focusedTarget.targetZoom ?: 17.5)
+                    } else if (initialMapCenter != null && inspectedTrailName == null) {
+                        controller.setCenter(initialMapCenter)
+                        controller.setZoom(initialMapZoom ?: 16.5)
                     } else if (currentLocation != null) {
                         controller.setCenter(GeoPoint(currentLocation.latitude, currentLocation.longitude))
+                        controller.setZoom(16.5)
                     } else {
                         // Global neutral view, awaiting genuine GNSS fix
                         controller.setCenter(GeoPoint(0.0, 0.0))
@@ -290,11 +348,15 @@ fun MapViewComposable(
                     addMapListener(object : MapListener {
                         override fun onScroll(event: ScrollEvent?): Boolean {
                             onMapBoundsChanged?.invoke(boundingBox)
+                            val c = mapCenter
+                            onSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), zoomLevelDouble)
                             return false
                         }
 
                         override fun onZoom(event: ZoomEvent?): Boolean {
                             onMapBoundsChanged?.invoke(boundingBox)
+                            val c = mapCenter
+                            onSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), zoomLevelDouble)
                             return false
                         }
                     })
@@ -394,7 +456,8 @@ fun MapViewComposable(
                             position = GeoPoint(wp.latitude, wp.longitude)
                             title = wp.name
                             val notePrefix = if (wp.note.isNotBlank()) "${wp.note} • " else ""
-                            snippet = "${notePrefix}Acc ±${wp.accuracy.toInt()}m • ${String.format(Locale.US, "%.5f°, %.5f°", wp.latitude, wp.longitude)}"
+                            val coordStr = com.geotrace.ui.screens.formatCoordinates(wp.latitude, wp.longitude, settings.coordinateFormat)
+                            snippet = "${notePrefix}Acc ±${wp.accuracy.toInt()}m • $coordStr"
                             infoWindow = null
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                             icon = iconBadge
@@ -448,70 +511,42 @@ fun MapViewComposable(
                     map.overlays.add(userMarker)
                 }
 
-                // 3. Draw Geofence Circular Zones (Nominal perimeter + Dual-Radius Hysteresis Band)
+                // 3. Draw Geofence Circular Zones (Nominal perimeter + Dual-Radius Hysteresis Band, cached per zone/hysteresis)
                 val deltaHyst = settings.geofenceHysteresisMeters.toDouble().coerceAtLeast(0.0)
-                for (zone in geofenceZones) {
-                    val zoneCenter = GeoPoint(zone.latitude, zone.longitude)
-                    val circlePoints = computeCircleGeoPoints(zoneCenter, zone.radiusMeters.toDouble())
-                    val zoneColor = try {
-                        android.graphics.Color.parseColor(zone.colorHex)
-                    } catch (e: Exception) {
-                        android.graphics.Color.parseColor("#006948")
-                    }
-                    val fillColor = android.graphics.Color.argb(
-                        40,
-                        android.graphics.Color.red(zoneColor),
-                        android.graphics.Color.green(zoneColor),
-                        android.graphics.Color.blue(zoneColor)
-                    )
-                    val outlineColor = android.graphics.Color.argb(
-                        210,
-                        android.graphics.Color.red(zoneColor),
-                        android.graphics.Color.green(zoneColor),
-                        android.graphics.Color.blue(zoneColor)
-                    )
-                    val entryR = (zone.radiusMeters - deltaHyst).coerceAtLeast(minOf(10.0, zone.radiusMeters * 0.5))
-                    val exitR = zone.radiusMeters + deltaHyst
-
-                    if (deltaHyst > 0.0) {
-                        val hystColor = android.graphics.Color.argb(
-                            115,
-                            android.graphics.Color.red(zoneColor),
-                            android.graphics.Color.green(zoneColor),
-                            android.graphics.Color.blue(zoneColor)
-                        )
+                for (cached in cachedGeofences) {
+                    val zone = cached.zone
+                    cached.outerExitPoints?.let { exitPts ->
                         val outerExitRing = Polygon(map).apply {
-                            points = computeCircleGeoPoints(zoneCenter, exitR)
+                            points = exitPts
                             infoWindow = null
                             fillPaint.color = android.graphics.Color.TRANSPARENT
-                            outlinePaint.color = hystColor
+                            outlinePaint.color = cached.hystColor
                             outlinePaint.strokeWidth = 1.5f
                             outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(10f, 8f), 0f)
                         }
                         map.overlays.add(outerExitRing)
-
-                        if (entryR < zone.radiusMeters - 2.0) {
-                            val innerEntryRing = Polygon(map).apply {
-                                points = computeCircleGeoPoints(zoneCenter, entryR)
-                                infoWindow = null
-                                fillPaint.color = android.graphics.Color.TRANSPARENT
-                                outlinePaint.color = hystColor
-                                outlinePaint.strokeWidth = 1.5f
-                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f, 6f), 0f)
-                            }
-                            map.overlays.add(innerEntryRing)
+                    }
+                    cached.innerEntryPoints?.let { entryPts ->
+                        val innerEntryRing = Polygon(map).apply {
+                            points = entryPts
+                            infoWindow = null
+                            fillPaint.color = android.graphics.Color.TRANSPARENT
+                            outlinePaint.color = cached.hystColor
+                            outlinePaint.strokeWidth = 1.5f
+                            outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f, 6f), 0f)
                         }
+                        map.overlays.add(innerEntryRing)
                     }
 
                     val zonePolygon = Polygon(map).apply {
-                        points = circlePoints
+                        points = cached.mainPoints
                         infoWindow = null
-                        fillPaint.color = fillColor
-                        outlinePaint.color = outlineColor
+                        fillPaint.color = cached.fillColor
+                        outlinePaint.color = cached.outlineColor
                         outlinePaint.strokeWidth = 3f
                         title = "${zone.name} (${zone.radiusMeters.toInt()}m)"
                         snippet = if (deltaHyst > 0.0) {
-                            "${zone.category.label} • ${if (zone.isInside) "Inside" else "Outside"} • Entry ≤${entryR.toInt()}m, Exit >${exitR.toInt()}m"
+                            "${zone.category.label} • ${if (zone.isInside) "Inside" else "Outside"} • Entry ≤${cached.entryR.toInt()}m, Exit >${cached.exitR.toInt()}m"
                         } else {
                             "${zone.category.label} • ${if (zone.isInside) "Inside Safe Zone" else "Outside"}"
                         }
@@ -623,7 +658,9 @@ fun MapViewComposable(
                 // 5. Draw Tracking Group Devices (excluding self device to avoid overlapping User pin)
                 val groupDeviceIds = groupMembers.map { it.deviceId }.filter { it.isNotBlank() }.toSet()
                 for (member in groupMembers) {
-                    if (currentDeviceId.isNotBlank() && member.deviceId == currentDeviceId) continue
+                    val isSelf = (currentDeviceId.isNotBlank() && member.deviceId == currentDeviceId) ||
+                        (currentUserUid != null && member.userId == currentUserUid && member.deviceId.isBlank())
+                    if (isSelf) continue
                     if (!isValidCoordinate(member.latitude, member.longitude)) continue
                     val memberGeoPoint = GeoPoint(member.latitude, member.longitude)
                     val memberColor = try {
@@ -808,7 +845,17 @@ fun MapViewComposable(
                     }
                     if (selectedMarkerInfo == null && activeFocus != null && onRecenterSelf != null) {
                         androidx.compose.material3.TextButton(
-                            onClick = { onRecenterSelf() },
+                            onClick = {
+                                onRecenterSelf()
+                                if (currentLocation != null) {
+                                    val targetZoom = (mapViewRef?.zoomLevelDouble ?: 16.5).coerceAtLeast(16.0)
+                                    mapViewRef?.controller?.animateTo(
+                                        GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                                        targetZoom,
+                                        800L
+                                    )
+                                }
+                            },
                             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                             modifier = Modifier
                                 .height(32.dp)
@@ -869,10 +916,13 @@ fun MapViewComposable(
             // Recenter FAB (48dp standard touch target)
             FloatingActionButton(
                 onClick = {
+                    selectedMarkerInfo = null
+                    onRecenterSelf?.invoke()
                     if (currentLocation != null) {
+                        val targetZoom = (mapViewRef?.zoomLevelDouble ?: 16.5).coerceAtLeast(16.0)
                         mapViewRef?.controller?.animateTo(
                             GeoPoint(currentLocation.latitude, currentLocation.longitude),
-                            17.0,
+                            targetZoom,
                             800L
                         )
                     }

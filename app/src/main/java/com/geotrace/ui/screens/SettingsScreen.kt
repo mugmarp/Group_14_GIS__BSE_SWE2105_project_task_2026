@@ -58,6 +58,9 @@ import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MapTileType
 import com.geotrace.model.SpeedUnit
 import com.geotrace.ui.components.OfflineMapsDialog
+import com.geotrace.ui.screens.devices.BackgroundLocationSettingsDialog
+import com.geotrace.ui.screens.devices.hasBackgroundLocationPermission
+import com.geotrace.ui.screens.devices.openAppLocationSettings
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.GroupViewModel
 import com.geotrace.viewmodel.TrackerViewModel
@@ -83,6 +86,7 @@ fun SettingsScreen(
     val offlineCacheSizeMb by viewModel.offlineCacheSizeMb.collectAsState()
     val currentMapBounds by viewModel.currentMapBoundingBox.collectAsState()
     var showOfflineMapsDialog by remember { mutableStateOf(false) }
+    var showBgSettingsDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.refreshTileCacheSize()
@@ -90,7 +94,10 @@ fun SettingsScreen(
 
     val settingsBgPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-    ) { _ ->
+    ) { granted ->
+        if (!granted && !hasBackgroundLocationPermission(context)) {
+            showBgSettingsDialog = true
+        }
         viewModel.resyncGeofencingApi()
     }
 
@@ -99,18 +106,23 @@ fun SettingsScreen(
     ) { _ ->
         viewModel.toggleGeofenceNotifications(true)
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
-            androidx.core.content.ContextCompat.checkSelfPermission(
-                context,
-                android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
-            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            !hasBackgroundLocationPermission(context)
         ) {
-            settingsBgPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                showBgSettingsDialog = true
+            } else {
+                settingsBgPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            }
         }
     }
 
     val protectionBgPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-    ) { _ -> }
+    ) { granted ->
+        if (!granted && !hasBackgroundLocationPermission(context)) {
+            showBgSettingsDialog = true
+        }
+    }
 
     val protectionPermissionsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
@@ -120,12 +132,13 @@ fun SettingsScreen(
         if (fineOrCoarse) {
             groupViewModel?.toggleBackgroundProtection(true)
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
-                androidx.core.content.ContextCompat.checkSelfPermission(
-                    context,
-                    android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                !hasBackgroundLocationPermission(context)
             ) {
-                protectionBgPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    showBgSettingsDialog = true
+                } else {
+                    protectionBgPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                }
             }
         } else {
             android.widget.Toast.makeText(
@@ -418,12 +431,13 @@ fun SettingsScreen(
                             } else {
                                 viewModel.toggleGeofenceNotifications(true)
                                 if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
-                                    androidx.core.content.ContextCompat.checkSelfPermission(
-                                        context,
-                                        android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                                    !hasBackgroundLocationPermission(context)
                                 ) {
-                                    settingsBgPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                                        showBgSettingsDialog = true
+                                    } else {
+                                        settingsBgPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                    }
                                 }
                             }
                         }
@@ -578,7 +592,11 @@ fun SettingsScreen(
                                 } else {
                                     groupViewModel.toggleBackgroundProtection(true)
                                     if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q && !hasBgLocation) {
-                                        protectionBgPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                                            showBgSettingsDialog = true
+                                        } else {
+                                            protectionBgPermissionLauncher.launch(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                                        }
                                     }
                                 }
                             }
@@ -876,11 +894,21 @@ fun SettingsScreen(
             currentLocation = currentLocation,
             currentMapBounds = currentMapBounds,
             onJumpToRegion = { _, target ->
-                viewModel.toggleFollowUser(false)
+                viewModel.clearInspectedTrail()
                 onJumpToOfflineRegion?.invoke(target)
                 onNavigateBack()
             },
             onDismiss = { showOfflineMapsDialog = false }
+        )
+    }
+
+    if (showBgSettingsDialog) {
+        BackgroundLocationSettingsDialog(
+            onOpenSettings = {
+                showBgSettingsDialog = false
+                openAppLocationSettings(context)
+            },
+            onDismiss = { showBgSettingsDialog = false }
         )
     }
 }
