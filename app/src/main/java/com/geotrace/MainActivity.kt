@@ -323,6 +323,27 @@ fun MainAppScreen(
                             showMenuSheet = true
                             sheetState.show()
                         }
+                    },
+                    onLocateTowerOnMap = { towerLoc ->
+                        viewModel.clearInspectedTrail()
+                        viewModel.clearSelectedSearchPin()
+                        if (!settings.showCellTowerPin) {
+                            viewModel.toggleCellTowerPin(true)
+                        }
+                        groupViewModel.focusMapOnTarget(
+                            com.geotrace.model.MapFocusTarget(
+                                id = "cell_mast_${towerLoc.cellId}_${towerLoc.lac}",
+                                label = "${towerLoc.operatorName} (${towerLoc.radioType} Mast)",
+                                latitude = towerLoc.latitude,
+                                longitude = towerLoc.longitude,
+                                subtitle = "CID ${towerLoc.cellId} • LAC ${towerLoc.lac} • ~${towerLoc.rangeMeters.toInt()}m radius",
+                                targetZoom = 15.4
+                            )
+                        )
+                        currentScreen = Screen.MAP
+                    },
+                    onOpenSettings = {
+                        currentScreen = Screen.SETTINGS
                     }
                 )
                 Screen.GROUPS -> GroupScreen(

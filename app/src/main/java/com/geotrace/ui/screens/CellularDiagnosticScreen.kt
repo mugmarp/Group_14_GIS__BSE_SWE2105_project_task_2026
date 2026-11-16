@@ -1,10 +1,16 @@
 package com.geotrace.ui.screens
 
+import android.Manifest
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,48 +20,65 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.LocationOff
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SignalCellularAlt
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.geotrace.model.CellTowerInfo
+import com.geotrace.model.CellTowerLocation
+import com.geotrace.service.OpenCellIdLookupState
+import com.geotrace.service.OpenCellIdStatus
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.TrackerViewModel
-
-import androidx.activity.compose.BackHandler
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material3.IconButton
+import java.util.Locale
 
 @Composable
 fun CellularDiagnosticScreen(
     viewModel: TrackerViewModel,
     onNavigateBack: (() -> Unit)? = null,
     onOpenMenu: (() -> Unit)? = null,
+    onLocateTowerOnMap: ((CellTowerLocation) -> Unit)? = null,
+    onOpenSettings: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     if (onNavigateBack != null) {
@@ -64,16 +87,46 @@ fun CellularDiagnosticScreen(
 
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    var hasLocationPermission by remember { mutableStateOf(viewModel.hasCellLocationPermission()) }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasLocationPermission = granted
+        if (granted) {
+            viewModel.refreshCellTowers()
+        }
+    }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                val nowGranted = viewModel.hasCellLocationPermission()
+                if (nowGranted && !hasLocationPermission) {
+                    viewModel.refreshCellTowers()
+                }
+                hasLocationPermission = nowGranted
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val cellTowers by viewModel.cellTowers.collectAsState()
+    val cellTowerLocation by viewModel.cellTowerLocation.collectAsState()
+    val allCellTowerLocations by viewModel.allCellTowerLocations.collectAsState()
+    val openCellIdStatus by viewModel.openCellIdStatus.collectAsState()
+    val isRefreshingCells by viewModel.isRefreshingCells.collectAsState()
+
     val servingCell = cellTowers.firstOrNull { it.isRegistered } ?: cellTowers.firstOrNull()
     val neighborCells = cellTowers.filter { it != servingCell }
 
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
-            .background(colorScheme.background)
-            .padding(16.dp),
+            .background(colorScheme.background),
+        contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         // Header
@@ -100,50 +153,70 @@ fun CellularDiagnosticScreen(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "Cellular Telemetry Hub",
-                            fontSize = 17.sp,
+                            fontSize = 16.sp,
+                            lineHeight = 20.sp,
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onBackground,
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = "TelephonyManager RF base stations",
                             fontSize = 11.sp,
                             color = colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.width(10.dp))
+                Spacer(modifier = Modifier.width(8.dp))
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Button(
-                        onClick = { viewModel.refreshCellTowers() },
+                        onClick = {
+                            if (hasLocationPermission) {
+                                viewModel.refreshCellTowers()
+                            } else {
+                                permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                            }
+                        },
+                        enabled = !isRefreshingCells,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = colorScheme.primary,
                             contentColor = colorScheme.onPrimary
                         ),
                         shape = RoundedCornerShape(10.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                         modifier = Modifier
-                            .height(44.dp)
+                            .height(48.dp)
                             .testTag("refresh_cells_btn")
                     ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        if (isRefreshingCells) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(15.dp),
+                                strokeWidth = 2.dp,
+                                color = colorScheme.onPrimary
+                            )
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        }
                         Spacer(modifier = Modifier.width(5.dp))
-                        Text("Refresh", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        Text(
+                            text = if (isRefreshingCells) "Scanning" else "Refresh",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
                     }
 
                     if (onOpenMenu != null) {
                         IconButton(
                             onClick = onOpenMenu,
                             modifier = Modifier
-                                .size(44.dp)
+                                .size(48.dp)
                                 .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
                                 .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
                                 .testTag("cellular_menu_btn")
@@ -160,22 +233,29 @@ fun CellularDiagnosticScreen(
             }
         }
 
-        // Serving Cell Mast Card (Level 1 Elevation)
+        // Serving Cell Mast Card / Permission Prompt / Empty State
         item {
-            if (servingCell != null) {
+            if (!hasLocationPermission) {
+                CellPermissionRequiredCard(
+                    onGrantPermission = {
+                        permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                    }
+                )
+            } else if (servingCell != null) {
                 ServingCellCard(cell = servingCell)
             } else {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
+                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
                 ) {
                     Column(
-                        modifier = Modifier.padding(20.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // Top accent
                         Box(
                             modifier = Modifier
                                 .size(width = 36.dp, height = 3.dp)
@@ -195,30 +275,46 @@ fun CellularDiagnosticScreen(
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 0.04.sp,
-                            color = colorScheme.onSurface
+                            color = colorScheme.onSurface,
+                            textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "No active physical cellular signal detected from TelephonyManager. Ensure an active SIM is inserted and Airplane Mode is disabled.",
                             fontSize = 12.sp,
                             color = colorScheme.onSurfaceVariant,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(14.dp))
                         Button(
                             onClick = { viewModel.refreshCellTowers() },
+                            enabled = !isRefreshingCells,
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = colorScheme.primary,
                                 contentColor = colorScheme.onPrimary
                             ),
-                            shape = RoundedCornerShape(10.dp)
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.height(48.dp)
                         ) {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
                             Text("Query Radio Hardware", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
+            }
+        }
+
+        // OpenCellID Geolocation & Mast Map Status Card
+        if (hasLocationPermission && (servingCell != null || openCellIdStatus.state != OpenCellIdLookupState.IDLE)) {
+            item {
+                OpenCellIdStatusCard(
+                    status = openCellIdStatus,
+                    servingTowerLocation = cellTowerLocation,
+                    resolvedCount = allCellTowerLocations.size,
+                    onLocateTowerOnMap = onLocateTowerOnMap,
+                    onOpenSettings = onOpenSettings
+                )
             }
         }
 
@@ -237,13 +333,16 @@ fun CellularDiagnosticScreen(
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(6.dp),
+                    shape = RoundedCornerShape(10.dp),
                     colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f))
+                    border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f))
                 ) {
                     Text(
-                        text = if (servingCell != null) "Single sector serving (no neighbor base stations in immediate measurement frame)"
-                        else "No neighbor cells detected",
+                        text = when {
+                            !hasLocationPermission -> "Grant Precise Location permission above to scan neighbor RF sectors."
+                            servingCell != null -> "Single sector serving (no neighbor base stations in immediate measurement frame)"
+                            else -> "No neighbor cells detected"
+                        },
                         color = colorScheme.onSurfaceVariant,
                         fontSize = 12.sp,
                         modifier = Modifier.padding(14.dp)
@@ -251,7 +350,12 @@ fun CellularDiagnosticScreen(
                 }
             }
         } else {
-            items(neighborCells) { neighbor ->
+            itemsIndexed(
+                items = neighborCells,
+                key = { idx, cell ->
+                    "${idx}_${cell.type}_${cell.cid}_${cell.lac}_${cell.pci}_${cell.earfcn}"
+                }
+            ) { _, neighbor ->
                 NeighborCellItem(cell = neighbor)
             }
         }
@@ -259,6 +363,216 @@ fun CellularDiagnosticScreen(
         // Educational Comparison Card: GPS vs Cell Triangulation
         item {
             TriangulationComparisonCard()
+        }
+    }
+}
+
+@Composable
+private fun CellPermissionRequiredCard(
+    onGrantPermission: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("cell_permission_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+        border = BorderStroke(1.dp, colorScheme.outlineVariant)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 36.dp, height = 3.dp)
+                    .background(customColors.warning, RoundedCornerShape(2.dp))
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Icon(
+                Icons.Default.LocationOff,
+                contentDescription = null,
+                tint = customColors.warning,
+                modifier = Modifier.size(32.dp)
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "PRECISE LOCATION REQUIRED FOR RF SCAN",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.04.sp,
+                color = colorScheme.onSurface,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Android blocks TelephonyManager cell tower IDs (MCC, MNC, LAC/TAC, CID) until Precise Location permission is granted.",
+                fontSize = 12.sp,
+                color = colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Button(
+                onClick = onGrantPermission,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colorScheme.primary,
+                    contentColor = colorScheme.onPrimary
+                ),
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier
+                    .height(48.dp)
+                    .testTag("grant_cell_permission_btn")
+            ) {
+                Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Grant Location Permission", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@Composable
+private fun OpenCellIdStatusCard(
+    status: OpenCellIdStatus,
+    servingTowerLocation: CellTowerLocation?,
+    resolvedCount: Int,
+    onLocateTowerOnMap: ((CellTowerLocation) -> Unit)?,
+    onOpenSettings: (() -> Unit)?
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
+
+    val (badgeLabel, badgeBg, badgeBorder, badgeText) = when (status.state) {
+        OpenCellIdLookupState.RESOLVED -> listOf(
+            "MAST RESOLVED",
+            customColors.statusActiveBg,
+            customColors.statusActiveBorder,
+            customColors.statusActiveText
+        )
+        OpenCellIdLookupState.NO_API_KEY, OpenCellIdLookupState.AUTH_ERROR -> listOf(
+            "API KEY NEEDED",
+            colorScheme.errorContainer.copy(alpha = 0.55f),
+            colorScheme.error.copy(alpha = 0.45f),
+            colorScheme.error
+        )
+        OpenCellIdLookupState.RATE_LIMITED, OpenCellIdLookupState.NETWORK_ERROR -> listOf(
+            "LOOKUP DEGRADED",
+            customColors.surfaceContainerHigh,
+            colorScheme.outlineVariant,
+            customColors.warning
+        )
+        OpenCellIdLookupState.NOT_FOUND -> listOf(
+            "UNINDEXED SECTOR",
+            customColors.surfaceContainerHigh,
+            colorScheme.outlineVariant,
+            colorScheme.onSurfaceVariant
+        )
+        OpenCellIdLookupState.IDLE -> listOf(
+            "OPENCELLID STANDBY",
+            customColors.surfaceContainerHigh,
+            colorScheme.outlineVariant,
+            colorScheme.onSurfaceVariant
+        )
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("opencellid_status_card"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+        border = BorderStroke(1.dp, colorScheme.outlineVariant)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "OPENCELLID MAST GEOLOCATION",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.04.sp,
+                    color = colorScheme.onSurfaceVariant
+                )
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = badgeBg as androidx.compose.ui.graphics.Color,
+                    border = BorderStroke(1.dp, badgeBorder as androidx.compose.ui.graphics.Color)
+                ) {
+                    Text(
+                        text = badgeLabel as String,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = badgeText as androidx.compose.ui.graphics.Color,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = status.message,
+                fontSize = 12.sp,
+                color = colorScheme.onSurface
+            )
+
+            if (servingTowerLocation != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = String.format(
+                        Locale.US,
+                        "Coordinates: %.5f, %.5f • Coverage ~%d m • %d mast(s) pinned",
+                        servingTowerLocation.latitude,
+                        servingTowerLocation.longitude,
+                        servingTowerLocation.rangeMeters.toInt(),
+                        resolvedCount.coerceAtLeast(1)
+                    ),
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = colorScheme.onSurfaceVariant
+                )
+                if (onLocateTowerOnMap != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Button(
+                        onClick = { onLocateTowerOnMap(servingTowerLocation) },
+                        shape = RoundedCornerShape(10.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = colorScheme.primary,
+                            contentColor = colorScheme.onPrimary
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("locate_cell_mast_btn")
+                    ) {
+                        Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Locate Serving Mast on Map", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            } else if ((status.state == OpenCellIdLookupState.NO_API_KEY || status.state == OpenCellIdLookupState.AUTH_ERROR) && onOpenSettings != null) {
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onOpenSettings,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("configure_opencellid_key_btn")
+                ) {
+                    Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Configure OpenCellID API Key in Settings", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
         }
     }
 }
@@ -275,7 +589,7 @@ private fun ServingCellCard(cell: CellTowerInfo) {
             .testTag("serving_cell_card"),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
+        border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
         Column {
             // Top Accent Line (clipped cleanly by Card shape)
@@ -293,7 +607,9 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
@@ -307,7 +623,7 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
                                 color = customColors.statusActiveBg,
-                                border = androidx.compose.foundation.BorderStroke(1.dp, customColors.statusActiveBorder)
+                                border = BorderStroke(1.dp, customColors.statusActiveBorder)
                             ) {
                                 Text(
                                     text = "PRIMARY SERVING CELL",
@@ -323,7 +639,9 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                                 text = cell.operatorDisplayName,
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = colorScheme.onSurface
+                                color = colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -331,7 +649,7 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = customColors.surfaceContainerLow,
-                        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
+                        border = BorderStroke(1.dp, colorScheme.outlineVariant)
                     ) {
                         Text(
                             text = cell.type,
@@ -391,14 +709,15 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                             letterSpacing = 0.04.sp,
                             color = colorScheme.onSurfaceVariant
                         )
+                        val signalLabel = cell.signalDbm?.let { "$it dBm (${cell.signalLevel}/4 bars)" } ?: "Signal N/A"
                         Text(
-                            text = "${cell.signalDbm ?: -85} dBm (${cell.signalLevel}/4 bars)",
+                            text = signalLabel,
                             fontSize = 12.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.SemiBold,
-                            color = colorScheme.onSurface,
+                            color = if (cell.signalDbm != null) colorScheme.onSurface else colorScheme.onSurfaceVariant,
                             maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                     Column(horizontalAlignment = Alignment.End) {
@@ -409,12 +728,15 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                             letterSpacing = 0.04.sp,
                             color = colorScheme.onSurfaceVariant
                         )
+                        val radiusLabel = cell.estimatedDistanceKm?.let {
+                            "~${String.format(Locale.US, "%.2f", it)} km"
+                        } ?: "--"
                         Text(
-                            text = "~${String.format(java.util.Locale.US, "%.2f", cell.estimatedDistanceKm ?: 0.45)} km",
+                            text = radiusLabel,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace,
-                            color = colorScheme.primary,
+                            color = if (cell.estimatedDistanceKm != null) colorScheme.primary else colorScheme.onSurfaceVariant,
                             maxLines = 1
                         )
                     }
@@ -422,7 +744,9 @@ private fun ServingCellCard(cell: CellTowerInfo) {
 
                 Spacer(modifier = Modifier.height(6.dp))
 
-                val signalProgress = (((cell.signalDbm ?: -100) + 120) / 70f).coerceIn(0.1f, 1.0f)
+                val signalProgress = cell.signalDbm?.let {
+                    ((it + 120) / 70f).coerceIn(0.06f, 1.0f)
+                } ?: 0f
                 LinearProgressIndicator(
                     progress = { signalProgress },
                     modifier = Modifier
@@ -433,13 +757,23 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                     trackColor = customColors.surfaceContainerHigh
                 )
 
-                if (cell.timingAdvance != null) {
+                val extraMeta = buildList {
+                    cell.timingAdvance?.let {
+                        val radioLabel = if (cell.type.contains("NR")) "NR" else "LTE"
+                        add("$radioLabel TA: $it (1 step ≈ 78.12m)")
+                    }
+                    cell.pci?.let { add("PCI: $it") }
+                    cell.earfcn?.let { add("Ch: $it") }
+                }
+                if (extraMeta.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = "LTE Timing Advance (TA): ${cell.timingAdvance} (1 step ≈ 78.12m)",
+                        text = extraMeta.joinToString(" • "),
                         fontSize = 11.sp,
                         color = colorScheme.onSurfaceVariant,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
@@ -454,7 +788,7 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
+        border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
         Row(
             modifier = Modifier
@@ -463,7 +797,12 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Icon(
                     Icons.Default.SignalCellularAlt,
                     contentDescription = null,
@@ -471,12 +810,14 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = cell.operatorDisplayName,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold,
-                        color = colorScheme.onSurface
+                        color = colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     val radioDetails = buildString {
                         append(cell.type)
@@ -484,7 +825,11 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
                             append(" | CID: ${cell.cid}")
                             if (cell.lac != null) append(" | LAC: ${cell.lac}")
                         } else if (cell.pci != null) {
-                            val pciLabel = if (cell.type.contains("WCDMA")) "PSC" else if (cell.type.contains("GSM")) "BSIC" else "PCI"
+                            val pciLabel = when {
+                                cell.type.contains("WCDMA") -> "PSC"
+                                cell.type.contains("GSM") -> "BSIC"
+                                else -> "PCI"
+                            }
                             append(" | $pciLabel: ${cell.pci}")
                             if (cell.earfcn != null) append(" | Ch: ${cell.earfcn}")
                         } else {
@@ -495,21 +840,23 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
                         text = radioDetails,
                         fontSize = 11.sp,
                         color = colorScheme.onSurfaceVariant,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
 
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = "${cell.signalDbm ?: -95} dBm",
+                    text = cell.signalDbm?.let { "$it dBm" } ?: "Signal N/A",
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace,
-                    color = colorScheme.primary
+                    color = if (cell.signalDbm != null) colorScheme.primary else colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = "~${String.format("%.1f", cell.estimatedDistanceKm ?: 1.2)} km",
+                    text = cell.estimatedDistanceKm?.let { "~${String.format(Locale.US, "%.1f", it)} km" } ?: "--",
                     fontSize = 11.sp,
                     color = colorScheme.onSurfaceVariant
                 )
@@ -536,7 +883,7 @@ private fun CellMetricBox(label: String, value: String, subtext: String? = null)
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis
         )
         if (!subtext.isNullOrBlank()) {
             Text(
@@ -544,7 +891,7 @@ private fun CellMetricBox(label: String, value: String, subtext: String? = null)
                 fontSize = 9.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis
             )
         }
     }
@@ -557,7 +904,7 @@ private fun TriangulationComparisonCard() {
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
+        border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

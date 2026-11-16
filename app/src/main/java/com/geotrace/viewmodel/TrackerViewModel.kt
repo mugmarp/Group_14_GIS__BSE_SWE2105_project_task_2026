@@ -26,6 +26,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -75,6 +77,15 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     private val _allCellTowerLocations = MutableStateFlow<List<com.geotrace.model.CellTowerLocation>>(emptyList())
     val allCellTowerLocations: StateFlow<List<com.geotrace.model.CellTowerLocation>> = _allCellTowerLocations.asStateFlow()
+
+    val openCellIdStatus: StateFlow<com.geotrace.service.OpenCellIdStatus> =
+        com.geotrace.service.OpenCellIdClient.lookupStatus
+
+    private val _isRefreshingCells = MutableStateFlow(false)
+    val isRefreshingCells: StateFlow<Boolean> = _isRefreshingCells.asStateFlow()
+
+    private val cellLookupRefreshTrigger = MutableStateFlow(0)
+    private var cellRefreshJob: Job? = null
 
     private val _settings = MutableStateFlow(
         com.geotrace.model.TrackerSettings(
@@ -205,12 +216,16 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     private fun observeCellTowerLocation() {
         viewModelScope.launch {
-            combine(cellTowers, trackingMode) { towers, mode ->
-                Pair(towers, mode)
-            }.collect { (towers, mode) ->
+            combine(
+                cellTowers,
+                trackingMode,
+                settings.map { it.openCellIdApiKey }.distinctUntilChanged(),
+                cellLookupRefreshTrigger
+            ) { towers, mode, apiKey, _ ->
+                Triple(towers, mode, apiKey)
+            }.collect { (towers, mode, apiKey) ->
                 val loc = currentLocation.value
                 val servingCell = towers.firstOrNull { it.isRegistered } ?: towers.firstOrNull()
-                val apiKey = _settings.value.openCellIdApiKey
 
                 if (servingCell != null) {
                     val location = com.geotrace.service.OpenCellIdClient.resolveCellLocation(
@@ -747,9 +762,20 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun hasCellLocationPermission(): Boolean = cellManager.hasFineLocationPermission()
+
     fun refreshCellTowers() {
-        val towers = cellManager.readCurrentCellTowers()
-        repository.updateCellTowers(towers)
+        cellRefreshJob?.cancel()
+        cellRefreshJob = viewModelScope.launch {
+            _isRefreshingCells.value = true
+            try {
+                val towers = cellManager.requestFreshCellTowers()
+                repository.updateCellTowers(towers)
+                cellLookupRefreshTrigger.value += 1
+            } finally {
+                _isRefreshingCells.value = false
+            }
+        }
     }
 
     fun updateSpeedUnit(unit: com.geotrace.model.SpeedUnit) {
@@ -876,8 +902,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun updateOpenCellIdApiKey(apiKey: String) {
-        repository.saveOpenCellIdApiKey(apiKey)
-        _settings.value = _settings.value.copy(openCellIdApiKey = apiKey)
+        val cleaned = apiKey.trim()
+        repository.saveOpenCellIdApiKey(cleaned)
+        _settings.value = _settings.value.copy(openCellIdApiKey = cleaned)
+        com.geotrace.service.OpenCellIdClient.clearCache()
         refreshCellTowers()
     }
 
