@@ -134,7 +134,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             }
         }
 
-        fun sendNotification(context: Context, title: String, content: String, notificationId: Int = 2001) {
+        fun sendNotification(context: Context, title: String, content: String, notificationId: Int = 2001): Boolean {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 val granted = ContextCompat.checkSelfPermission(
                     context,
@@ -142,7 +142,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 ) == PackageManager.PERMISSION_GRANTED
                 if (!granted) {
                     Log.w(TAG, "Skipping geofence notification: POST_NOTIFICATIONS permission not granted.")
-                    return
+                    return false
                 }
             }
 
@@ -171,6 +171,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
 
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.notify(notificationId, notification)
+            return true
         }
     }
 }

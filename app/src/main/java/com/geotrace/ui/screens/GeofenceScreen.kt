@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -94,6 +95,7 @@ fun GeofenceScreen(
     viewModel: TrackerViewModel,
     onNavigateBack: () -> Unit,
     onPickOnMap: ((TrackerViewModel.GeofencePickDraft) -> Unit)? = null,
+    onLocateOnMap: ((GeofenceZone) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     BackHandler(onBack = onNavigateBack)
@@ -116,6 +118,8 @@ fun GeofenceScreen(
     var editingZone by remember { mutableStateOf<GeofenceZone?>(null) }
     var preloadedPreset by remember { mutableStateOf<ZonePreset?>(null) }
     var draftOverrides by remember { mutableStateOf<TrackerViewModel.GeofencePickDraft?>(null) }
+    var pendingDeleteZone by remember { mutableStateOf<GeofenceZone?>(null) }
+    var showAllAlerts by remember { mutableStateOf(false) }
 
     LaunchedEffect(geofencePickDraft, isPickingGeofenceCenter) {
         val draft = geofencePickDraft
@@ -482,9 +486,22 @@ fun GeofenceScreen(
                                     color = colorScheme.onSurfaceVariant
                                 )
                                 TextButton(
-                                    onClick = { viewModel.sendTestAcademicNotification() },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    modifier = Modifier.height(32.dp).testTag("test_geofence_alert_btn")
+                                    onClick = {
+                                        val sent = viewModel.sendTestAcademicNotification()
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            if (sent) {
+                                                "Test perimeter alert dispatched"
+                                            } else {
+                                                "Notifications blocked — enable Notifications in Android Settings"
+                                            },
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                    modifier = Modifier
+                                        .heightIn(min = 36.dp)
+                                        .testTag("test_geofence_alert_btn")
                                 ) {
                                     Text("Test Alert", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
@@ -763,15 +780,52 @@ fun GeofenceScreen(
             // Recent Alerts Banner
             if (recentAlerts.isNotEmpty()) {
                 item {
-                    Text(
-                        text = "Recent Zone Transitions (${recentAlerts.size})",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.secondary
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Recent Zone Transitions (${recentAlerts.size})",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.secondary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            if (recentAlerts.size > 3) {
+                                TextButton(
+                                    onClick = { showAllAlerts = !showAllAlerts },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.heightIn(min = 36.dp)
+                                ) {
+                                    Text(
+                                        text = if (showAllAlerts) "Show Top 3" else "Show All",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                            TextButton(
+                                onClick = { viewModel.clearGeofenceAlerts() },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier
+                                    .heightIn(min = 36.dp)
+                                    .testTag("clear_geofence_alerts_btn")
+                            ) {
+                                Text(
+                                    text = "Clear",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.error
+                                )
+                            }
+                        }
+                    }
                 }
 
-                items(recentAlerts.take(3)) { alert ->
+                val visibleAlerts = if (showAllAlerts) recentAlerts else recentAlerts.take(3)
+                items(visibleAlerts, key = { it.id }) { alert ->
                     Surface(
                         shape = RoundedCornerShape(10.dp),
                         color = colorScheme.surface,
@@ -834,24 +888,69 @@ fun GeofenceScreen(
 
             // Zone Cards
             items(zones, key = { it.id }) { zone ->
-                val distMeters = if (currentLocation != null) {
-                    viewModel.currentLocation.value?.let { curr ->
-                        viewModel.calculateDistanceMeters(curr.latitude, curr.longitude, zone.latitude, zone.longitude)
-                    } ?: 0.0
-                } else 0.0
+                val distMeters = currentLocation?.let { curr ->
+                    viewModel.calculateDistanceMeters(curr.latitude, curr.longitude, zone.latitude, zone.longitude)
+                }
 
                 GeofenceZoneCard(
                     zone = zone,
                     distanceMeters = distMeters,
                     hysteresisMeters = settings.geofenceHysteresisMeters,
+                    onLocate = if (onLocateOnMap != null) {
+                        { onLocateOnMap(zone) }
+                    } else null,
                     onEdit = {
                         draftOverrides = null
                         editingZone = zone
                     },
-                    onDelete = { viewModel.deleteGeofence(zone.id) }
+                    onDelete = { pendingDeleteZone = zone }
                 )
             }
         }
+    }
+
+    // Delete Confirmation Dialog
+    pendingDeleteZone?.let { zoneToDelete ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteZone = null },
+            title = {
+                Text(
+                    text = "Delete Safe Zone?",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = colorScheme.onSurface
+                )
+            },
+            text = {
+                Text(
+                    text = "Remove \"${zoneToDelete.name}\" (${zoneToDelete.radiusMeters.toInt()}m perimeter) from monitored safe zones?",
+                    fontSize = 13.sp,
+                    color = colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteGeofence(zoneToDelete.id)
+                        pendingDeleteZone = null
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = colorScheme.error,
+                        contentColor = colorScheme.onError
+                    ),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("confirm_delete_geofence_btn")
+                ) {
+                    Text("Delete", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteZone = null }) {
+                    Text("Cancel", color = colorScheme.onSurfaceVariant)
+                }
+            },
+            containerColor = colorScheme.surface
+        )
     }
 
     // Dialog for Adding a Zone (with optional preset or map-picked draft)
@@ -862,8 +961,7 @@ fun GeofenceScreen(
             initialZone = null,
             preset = initialPreset,
             draft = draftOverrides,
-            currentLat = currentLocation?.latitude ?: -0.5982,
-            currentLon = currentLocation?.longitude ?: 30.6178,
+            currentLocation = currentLocation,
             onPickOnMap = if (onPickOnMap != null) {
                 { draft ->
                     showAddDialog = false
@@ -884,7 +982,9 @@ fun GeofenceScreen(
                     longitude = updated.longitude,
                     radius = updated.radiusMeters,
                     category = updated.category,
-                    colorHex = updated.colorHex
+                    colorHex = updated.colorHex,
+                    alertOnEntry = updated.alertOnEntry,
+                    alertOnExit = updated.alertOnExit
                 )
                 showAddDialog = false
                 preloadedPreset = null
@@ -900,8 +1000,7 @@ fun GeofenceScreen(
             initialZone = zoneToEdit,
             preset = null,
             draft = draftOverrides,
-            currentLat = currentLocation?.latitude ?: zoneToEdit.latitude,
-            currentLon = currentLocation?.longitude ?: zoneToEdit.longitude,
+            currentLocation = currentLocation,
             onPickOnMap = if (onPickOnMap != null) {
                 { draft ->
                     editingZone = null
@@ -925,18 +1024,20 @@ fun GeofenceScreen(
 @Composable
 private fun GeofenceZoneCard(
     zone: GeofenceZone,
-    distanceMeters: Double,
+    distanceMeters: Double?,
     hysteresisMeters: Float,
+    onLocate: (() -> Unit)? = null,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
 
     val categoryColor = when (zone.category) {
         GeofenceCategory.CAMPUS, GeofenceCategory.SAFE_ZONE, GeofenceCategory.HOME -> colorScheme.tertiary
         GeofenceCategory.LIBRARY, GeofenceCategory.SCHOOL, GeofenceCategory.WORK -> colorScheme.secondary
-        GeofenceCategory.HOSTEL -> Color(0xFF7C3AED)
-        GeofenceCategory.BODA_HOTSPOT -> colorScheme.error
+        GeofenceCategory.HOSTEL -> colorScheme.primary
+        GeofenceCategory.BODA_HOTSPOT -> customColors.warning
         GeofenceCategory.CUSTOM -> colorScheme.primary
     }
 
@@ -1003,7 +1104,7 @@ private fun GeofenceZoneCard(
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // Middle Row: Technical Details & Distance (Fixed distance display flaw)
+            // Middle Row: Technical Details & Distance
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1030,54 +1131,87 @@ private fun GeofenceZoneCard(
                         color = colorScheme.onSurfaceVariant,
                         fontFamily = FontFamily.Monospace
                     )
+                    val triggersLabel = listOfNotNull(
+                        if (zone.alertOnEntry) "Entry Alert" else null,
+                        if (zone.alertOnExit) "Exit Alert" else null
+                    ).joinToString(" • ").ifBlank { "No alerts enabled" }
                     Text(
-                        text = "Triggers: ${if (zone.alertOnEntry) "Entry Alert" else ""}${if (zone.alertOnEntry && zone.alertOnExit) " • " else ""}${if (zone.alertOnExit) "Exit Alert" else ""}",
+                        text = "Triggers: $triggersLabel",
                         fontSize = 10.sp,
                         color = colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
                     )
                 }
 
-                // Distance formatting with smart threshold to eliminate emulator distance glitch
+                // Distance formatting with null-fix awareness and non-hardcoded remote badge
                 Column(horizontalAlignment = Alignment.End) {
-                    if (distanceMeters > 1_000_000) {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = colorScheme.surfaceVariant
-                        ) {
+                    when {
+                        distanceMeters == null -> {
                             Text(
-                                text = "Uganda Field Zone",
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                text = "Awaiting GPS fix",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = colorScheme.onSurfaceVariant
                             )
                         }
-                        Text(
-                            text = "~${(distanceMeters / 1000).toInt()} km away",
-                            fontSize = 10.sp,
-                            color = colorScheme.outline
-                        )
-                    } else if (distanceMeters >= 1000) {
-                        Text(
-                            text = "${String.format(Locale.US, "%.1f", distanceMeters / 1000)} km away",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.primary
-                        )
-                    } else {
-                        Text(
-                            text = "${distanceMeters.toInt()} m away",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.primary
-                        )
+                        distanceMeters > 1_000_000 -> {
+                            val isUgandaZone = zone.latitude in -1.6..4.3 && zone.longitude in 29.5..35.1
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = colorScheme.surfaceVariant
+                            ) {
+                                Text(
+                                    text = if (isUgandaZone) "Uganda Field Zone" else "Remote Perimeter",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                            Text(
+                                text = "~${(distanceMeters / 1000).toInt()} km away",
+                                fontSize = 10.sp,
+                                color = colorScheme.outline
+                            )
+                        }
+                        distanceMeters >= 1000 -> {
+                            Text(
+                                text = "${String.format(Locale.US, "%.1f", distanceMeters / 1000)} km away",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.primary
+                            )
+                        }
+                        else -> {
+                            Text(
+                                text = "${distanceMeters.toInt()} m away",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.primary
+                            )
+                        }
                     }
 
-                    // Action Controls: Edit & Delete Buttons
+                    // Action Controls: Locate, Edit & Delete Buttons (48dp touch targets)
                     Row(
                         modifier = Modifier.padding(top = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        if (onLocate != null) {
+                            IconButton(
+                                onClick = onLocate,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .testTag("locate_geofence_${zone.id}")
+                            ) {
+                                Icon(
+                                    Icons.Default.MyLocation,
+                                    contentDescription = "Locate Safe Zone on Map",
+                                    tint = colorScheme.tertiary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+
                         IconButton(
                             onClick = onEdit,
                             modifier = Modifier
@@ -1118,13 +1252,15 @@ private fun GeofenceEditDialog(
     initialZone: GeofenceZone?,
     preset: ZonePreset?,
     draft: TrackerViewModel.GeofencePickDraft? = null,
-    currentLat: Double,
-    currentLon: Double,
+    currentLocation: com.geotrace.model.LocationPoint?,
     onPickOnMap: ((TrackerViewModel.GeofencePickDraft) -> Unit)? = null,
     onDismiss: () -> Unit,
     onSave: (GeofenceZone) -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val fallbackLat = initialZone?.latitude ?: currentLocation?.latitude ?: -0.5982
+    val fallbackLon = initialZone?.longitude ?: currentLocation?.longitude ?: 30.6178
 
     var name by remember(draft?.latitude, draft?.longitude, preset?.name, initialZone?.id, isNew) {
         mutableStateOf(
@@ -1144,15 +1280,21 @@ private fun GeofenceEditDialog(
         )
     }
 
+    var colorHex by remember(draft?.latitude, draft?.longitude, preset?.name, initialZone?.id, isNew) {
+        mutableStateOf(
+            draft?.colorHex ?: preset?.colorHex ?: initialZone?.colorHex ?: selectedCategory.defaultColor
+        )
+    }
+
     var lat by remember(draft?.latitude, draft?.longitude, preset?.name, initialZone?.id, isNew) {
         mutableStateOf(
-            String.format(Locale.US, "%.5f", draft?.latitude ?: preset?.latitude ?: initialZone?.latitude ?: currentLat)
+            String.format(Locale.US, "%.5f", draft?.latitude ?: preset?.latitude ?: initialZone?.latitude ?: fallbackLat)
         )
     }
 
     var lon by remember(draft?.latitude, draft?.longitude, preset?.name, initialZone?.id, isNew) {
         mutableStateOf(
-            String.format(Locale.US, "%.5f", draft?.longitude ?: preset?.longitude ?: initialZone?.longitude ?: currentLon)
+            String.format(Locale.US, "%.5f", draft?.longitude ?: preset?.longitude ?: initialZone?.longitude ?: fallbackLon)
         )
     }
 
@@ -1164,7 +1306,12 @@ private fun GeofenceEditDialog(
         mutableStateOf(draft?.alertOnExit ?: initialZone?.alertOnExit ?: true)
     }
 
-    val colorHex = draft?.colorHex ?: preset?.colorHex ?: initialZone?.colorHex ?: selectedCategory.defaultColor
+    val parsedLat = lat.trim().toDoubleOrNull()
+    val parsedLon = lon.trim().toDoubleOrNull()
+    val isLatValid = parsedLat != null && parsedLat.isFinite() && parsedLat in -90.0..90.0
+    val isLonValid = parsedLon != null && parsedLon.isFinite() && parsedLon in -180.0..180.0
+    val isNotNullIsland = parsedLat != null && parsedLon != null && (parsedLat != 0.0 || parsedLon != 0.0)
+    val areCoordsValid = isLatValid && isLonValid && isNotNullIsland
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1194,7 +1341,7 @@ private fun GeofenceEditDialog(
                     )
                 }
 
-                // Category Selection Chips
+                // Category Selection Chips (all GeofenceCategory values)
                 item {
                     Text(
                         text = "Category & Icon:",
@@ -1209,18 +1356,13 @@ private fun GeofenceEditDialog(
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        listOf(
-                            GeofenceCategory.CAMPUS,
-                            GeofenceCategory.LIBRARY,
-                            GeofenceCategory.HOSTEL,
-                            GeofenceCategory.SAFE_ZONE,
-                            GeofenceCategory.SCHOOL,
-                            GeofenceCategory.BODA_HOTSPOT,
-                            GeofenceCategory.HOME
-                        ).forEach { cat ->
+                        GeofenceCategory.entries.forEach { cat ->
                             FilterChip(
                                 selected = selectedCategory == cat,
-                                onClick = { selectedCategory = cat },
+                                onClick = {
+                                    selectedCategory = cat
+                                    colorHex = cat.defaultColor
+                                },
                                 label = { Text("${cat.iconEmoji} ${cat.label}", fontSize = 11.sp) },
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = colorScheme.primary.copy(alpha = 0.15f),
@@ -1276,8 +1418,8 @@ private fun GeofenceEditDialog(
                                 listOf(50f, 100f, 250f, 500f).forEach { r ->
                                     OutlinedButton(
                                         onClick = { radius = r },
-                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(28.dp)
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        modifier = Modifier.heightIn(min = 34.dp)
                                     ) {
                                         Text("${r.toInt()}m", fontSize = 10.sp)
                                     }
@@ -1314,8 +1456,8 @@ private fun GeofenceEditDialog(
                                 if (onPickOnMap != null) {
                                     TextButton(
                                         onClick = {
-                                            val curLat = lat.toDoubleOrNull() ?: currentLat
-                                            val curLon = lon.toDoubleOrNull() ?: currentLon
+                                            val pickLat = if (isLatValid && parsedLat != null) parsedLat else fallbackLat
+                                            val pickLon = if (isLonValid && parsedLon != null) parsedLon else fallbackLon
                                             onPickOnMap(
                                                 TrackerViewModel.GeofencePickDraft(
                                                     isNew = isNew,
@@ -1326,15 +1468,17 @@ private fun GeofenceEditDialog(
                                                     colorHex = colorHex,
                                                     alertOnEntry = alertOnEntry,
                                                     alertOnExit = alertOnExit,
-                                                    latitude = curLat,
-                                                    longitude = curLon
+                                                    latitude = pickLat,
+                                                    longitude = pickLon
                                                 )
                                             )
                                         },
-                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(28.dp).testTag("pick_geofence_map_btn")
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        modifier = Modifier
+                                            .heightIn(min = 34.dp)
+                                            .testTag("pick_geofence_map_btn")
                                     ) {
-                                        Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(12.dp))
+                                        Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(13.dp))
                                         Spacer(modifier = Modifier.width(3.dp))
                                         Text("Pick on Map", fontSize = 10.sp, fontWeight = FontWeight.Bold)
                                     }
@@ -1342,13 +1486,22 @@ private fun GeofenceEditDialog(
 
                                 TextButton(
                                     onClick = {
-                                        lat = String.format(Locale.US, "%.5f", currentLat)
-                                        lon = String.format(Locale.US, "%.5f", currentLon)
+                                        val fix = currentLocation
+                                        if (fix == null) {
+                                            android.widget.Toast.makeText(
+                                                context,
+                                                "Waiting for live GPS fix...",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        } else {
+                                            lat = String.format(Locale.US, "%.5f", fix.latitude)
+                                            lon = String.format(Locale.US, "%.5f", fix.longitude)
+                                        }
                                     },
-                                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
-                                    modifier = Modifier.height(28.dp)
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.heightIn(min = 34.dp)
                                 ) {
-                                    Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(12.dp))
+                                    Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(13.dp))
                                     Spacer(modifier = Modifier.width(3.dp))
                                     Text("Use GPS Fix", fontSize = 10.sp)
                                 }
@@ -1363,6 +1516,7 @@ private fun GeofenceEditDialog(
                                 value = lat,
                                 onValueChange = { lat = it },
                                 label = { Text("Latitude") },
+                                isError = !isLatValid || !isNotNullIsland,
                                 singleLine = true,
                                 modifier = Modifier.weight(1f)
                             )
@@ -1370,8 +1524,17 @@ private fun GeofenceEditDialog(
                                 value = lon,
                                 onValueChange = { lon = it },
                                 label = { Text("Longitude") },
+                                isError = !isLonValid || !isNotNullIsland,
                                 singleLine = true,
                                 modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (!areCoordsValid) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Enter valid WGS84 coordinates (Lat -90..90, Lon -180..180, non-zero).",
+                                fontSize = 10.sp,
+                                color = colorScheme.error
                             )
                         }
                     }
@@ -1416,14 +1579,15 @@ private fun GeofenceEditDialog(
         },
         confirmButton = {
             Button(
+                enabled = areCoordsValid,
                 onClick = {
-                    val parsedLat = lat.toDoubleOrNull() ?: currentLat
-                    val parsedLon = lon.toDoubleOrNull() ?: currentLon
+                    val safeLat = parsedLat ?: return@Button
+                    val safeLon = parsedLon ?: return@Button
                     val zone = GeofenceZone(
                         id = initialZone?.id ?: UUID.randomUUID().toString(),
-                        name = name.ifBlank { "Safe Zone" },
-                        latitude = parsedLat,
-                        longitude = parsedLon,
+                        name = name.trim().ifBlank { "Safe Zone" },
+                        latitude = safeLat,
+                        longitude = safeLon,
                         radiusMeters = radius,
                         category = selectedCategory,
                         colorHex = colorHex,

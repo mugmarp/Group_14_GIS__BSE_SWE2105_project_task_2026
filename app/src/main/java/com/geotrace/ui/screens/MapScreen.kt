@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.expandVertically
@@ -149,6 +150,7 @@ fun MapScreen(
     val isSearchingOnline by viewModel.isSearchingOnline.collectAsState()
     val isNetworkOnline by viewModel.isNetworkOnline.collectAsState()
     val offlinePlacesCount by viewModel.offlinePlacesCount.collectAsState()
+    val searchError by viewModel.searchError.collectAsState()
     val selectedSearchPin by viewModel.selectedSearchPin.collectAsState()
 
     val currentUser by (groupViewModel?.currentUser ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
@@ -257,6 +259,13 @@ fun MapScreen(
     }
 
 
+    // Intercept Back press while picking a Safe Zone center so user returns cleanly to GeofenceScreen
+    androidx.activity.compose.BackHandler(enabled = isPickingGeofenceCenter) {
+        groupViewModel?.clearMapFocusTarget()
+        viewModel.cancelMapPick()
+        onReturnToGeofence?.invoke()
+    }
+
     // Keep screen awake only while actively recording (release when paused)
     val activity = context as? Activity
     DisposableEffect(settings.keepScreenOn, activeSession?.id, activeSession?.isPaused) {
@@ -346,12 +355,19 @@ fun MapScreen(
             focusedTarget = resolvedFocusTarget,
             isRecording = activeSession != null,
             trailWaypoints = displayedWaypoints,
+            inspectedTrailId = if (activeSession == null) inspectedTrail?.session?.id else null,
             inspectedTrailName = if (activeSession == null) inspectedTrail?.session?.name else null,
             inspectedTrailSummary = if (activeSession == null) inspectedSummary else null,
             selectedSearchPin = selectedSearchPin,
             onClearSearchPin = {
                 viewModel.clearSelectedSearchPin()
             },
+            lastHandledFocusMs = viewModel.lastHandledFocusRequestMs,
+            onMarkFocusHandled = { viewModel.lastHandledFocusRequestMs = it },
+            lastHandledSearchMs = viewModel.lastHandledSearchRequestMs,
+            onMarkSearchHandled = { viewModel.lastHandledSearchRequestMs = it },
+            lastHandledInspectedTrail = viewModel.lastHandledInspectedTrailId,
+            onMarkInspectedTrailHandled = { viewModel.lastHandledInspectedTrailId = it },
             isFollowPaused = isMapFollowPaused,
             onFollowPausedByUser = {
                 viewModel.setMapFollowPaused(true)
@@ -908,7 +924,7 @@ fun MapScreen(
                             color = colorScheme.onSurface,
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            modifier = Modifier.width(if (selectedSearchPin != null) 88.dp else 46.dp)
+                            modifier = Modifier.widthIn(max = if (selectedSearchPin != null) 124.dp else 72.dp)
                         )
                     }
                 }
@@ -1526,6 +1542,7 @@ fun MapScreen(
             currentMapBounds = currentMapBounds,
             onJumpToRegion = { _, target ->
                 viewModel.clearInspectedTrail()
+                viewModel.clearSelectedSearchPin()
                 groupViewModel?.focusMapOnTarget(target)
             },
             onDismiss = { showOfflineMapsDialog = false }
@@ -1540,6 +1557,7 @@ fun MapScreen(
             isNetworkOnline = isNetworkOnline,
             offlinePlacesCount = offlinePlacesCount,
             offlineRegionsCount = offlineMapRegions.size,
+            searchError = searchError,
             onQueryChange = { newQ ->
                 viewModel.updateSearchQuery(newQ, deviceSearchTargets)
             },
@@ -1625,6 +1643,7 @@ fun MapScreen(
                                 showDevicesSheet = false
                                 if (member.latitude != 0.0 || member.longitude != 0.0) {
                                     viewModel.clearInspectedTrail()
+                                    viewModel.clearSelectedSearchPin()
                                     val statusNote = if (isOffline) "Offline • $distStr • ${member.batteryPercent}%" else "$distStr • ${member.batteryPercent}%"
                                     groupViewModel?.focusMapOnTarget(
                                         MapFocusTarget(
@@ -1710,6 +1729,7 @@ fun MapScreen(
                                 showDevicesSheet = false
                                 if (hasCoords) {
                                     viewModel.clearInspectedTrail()
+                                    viewModel.clearSelectedSearchPin()
                                     groupViewModel?.focusMapOnTarget(
                                         MapFocusTarget(
                                             id = device.deviceId,
@@ -1795,6 +1815,7 @@ fun MapScreen(
                                 showDevicesSheet = false
                                 if (hasPeerCoords) {
                                     viewModel.clearInspectedTrail()
+                                    viewModel.clearSelectedSearchPin()
                                     groupViewModel?.focusMapOnTarget(
                                         MapFocusTarget(
                                             id = peer.endpointId,

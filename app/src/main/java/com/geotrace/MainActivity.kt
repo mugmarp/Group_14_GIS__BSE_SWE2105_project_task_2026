@@ -313,6 +313,7 @@ fun MainAppScreen(
                     speedUnit = settings.speedUnit,
                     onLocateOnMap = { target ->
                         viewModel.clearInspectedTrail()
+                        viewModel.clearSelectedSearchPin()
                         groupViewModel.focusMapOnTarget(target)
                         currentScreen = Screen.MAP
                     }
@@ -322,6 +323,7 @@ fun MainAppScreen(
                     onNavigateBack = { currentScreen = Screen.MAP },
                     onPickOnMap = { draft ->
                         viewModel.clearInspectedTrail()
+                        viewModel.clearSelectedSearchPin()
                         viewModel.beginMapPickForGeofence(draft)
                         groupViewModel.focusMapOnTarget(
                             com.geotrace.model.MapFocusTarget(
@@ -333,6 +335,21 @@ fun MainAppScreen(
                             )
                         )
                         currentScreen = Screen.MAP
+                    },
+                    onLocateOnMap = { zone ->
+                        viewModel.clearInspectedTrail()
+                        viewModel.clearSelectedSearchPin()
+                        groupViewModel.focusMapOnTarget(
+                            com.geotrace.model.MapFocusTarget(
+                                id = zone.id,
+                                label = zone.name,
+                                latitude = zone.latitude,
+                                longitude = zone.longitude,
+                                subtitle = "${zone.category.label} • ${zone.radiusMeters.toInt()}m perimeter",
+                                targetZoom = if (zone.radiusMeters >= 500f) 15.2 else 16.5
+                            )
+                        )
+                        currentScreen = Screen.MAP
                     }
                 )
                 Screen.HISTORY -> HistoryScreen(
@@ -341,6 +358,7 @@ fun MainAppScreen(
                     onViewTrailOnMap = { session ->
                         viewModel.inspectSessionOnMap(session) { hasData ->
                             if (hasData) {
+                                viewModel.clearSelectedSearchPin()
                                 groupViewModel.clearMapFocusTarget()
                                 currentScreen = Screen.MAP
                             } else {
@@ -363,6 +381,7 @@ fun MainAppScreen(
                     groupViewModel = groupViewModel,
                     onJumpToOfflineRegion = { target ->
                         viewModel.clearInspectedTrail()
+                        viewModel.clearSelectedSearchPin()
                         groupViewModel.focusMapOnTarget(target)
                     }
                 )

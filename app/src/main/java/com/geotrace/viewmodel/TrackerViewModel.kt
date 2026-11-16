@@ -134,9 +134,18 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val isSearchingOnline: StateFlow<Boolean> = _isSearchingOnline.asStateFlow()
     private val _isNetworkOnline = MutableStateFlow(placeSearchManager.isNetworkConnected())
     val isNetworkOnline: StateFlow<Boolean> = _isNetworkOnline.asStateFlow()
+    private val _searchError = MutableStateFlow<String?>(null)
+    val searchError: StateFlow<String?> = _searchError.asStateFlow()
     private val _selectedSearchPin = MutableStateFlow<SearchPlaceResult?>(null)
     val selectedSearchPin: StateFlow<SearchPlaceResult?> = _selectedSearchPin.asStateFlow()
     private var searchJob: Job? = null
+
+    @Volatile
+    var lastHandledFocusRequestMs: Long = 0L
+    @Volatile
+    var lastHandledSearchRequestMs: Long = 0L
+    @Volatile
+    var lastHandledInspectedTrailId: String? = null
 
     private val _currentMapBoundingBox = MutableStateFlow<org.osmdroid.util.BoundingBox?>(null)
     val currentMapBoundingBox: StateFlow<org.osmdroid.util.BoundingBox?> = _currentMapBoundingBox.asStateFlow()
@@ -559,7 +568,16 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun addGeofence(name: String, latitude: Double, longitude: Double, radius: Float, category: GeofenceCategory, colorHex: String) {
+    fun addGeofence(
+        name: String,
+        latitude: Double,
+        longitude: Double,
+        radius: Float,
+        category: GeofenceCategory,
+        colorHex: String,
+        alertOnEntry: Boolean = true,
+        alertOnExit: Boolean = true
+    ) {
         viewModelScope.launch {
             val zone = GeofenceZone(
                 id = UUID.randomUUID().toString(),
@@ -568,27 +586,49 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 longitude = longitude,
                 radiusMeters = radius,
                 category = category,
-                colorHex = colorHex
+                colorHex = colorHex,
+                alertOnEntry = alertOnEntry,
+                alertOnExit = alertOnExit
             )
             repository.addGeofence(zone)
+            syncGeofencesIfEnabled()
         }
     }
 
     fun updateGeofence(zone: GeofenceZone) {
         viewModelScope.launch {
             repository.updateGeofence(zone)
+            syncGeofencesIfEnabled()
         }
     }
 
     fun deleteGeofence(id: String) {
         viewModelScope.launch {
             repository.deleteGeofence(id)
+            syncGeofencesIfEnabled()
         }
     }
 
     fun resetSampleGeofences() {
         viewModelScope.launch {
             repository.resetSampleGeofences()
+            syncGeofencesIfEnabled()
+        }
+    }
+
+    fun clearGeofenceAlerts() {
+        viewModelScope.launch {
+            repository.clearGeofenceAlerts()
+        }
+    }
+
+    private fun syncGeofencesIfEnabled() {
+        if (_settings.value.geofenceNotificationEnabled) {
+            geofenceManager.syncGeofences(
+                repository.geofenceZones.value,
+                true,
+                _settings.value.geofenceHysteresisMeters
+            )
         }
     }
 
@@ -618,6 +658,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             if (_inspectedTrail.value?.session?.id == sessionId) {
                 _inspectedTrail.value = null
+                lastHandledInspectedTrailId = null
             }
             repository.deleteSession(sessionId)
         }
@@ -643,6 +684,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 onResult?.invoke(false)
                 return@launch
             }
+            lastHandledInspectedTrailId = null
             _inspectedTrail.value = InspectedTrail(session, points, waypoints)
             onResult?.invoke(true)
         }
@@ -650,6 +692,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     fun clearInspectedTrail() {
         _inspectedTrail.value = null
+        lastHandledInspectedTrailId = null
     }
 
     fun exportSession(
@@ -837,14 +880,14 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         geofenceManager.syncGeofences(geofenceZones.value, enabled, _settings.value.geofenceHysteresisMeters)
     }
 
-    fun sendTestAcademicNotification() {
-        if (!_settings.value.geofenceNotificationEnabled) return
+    fun sendTestAcademicNotification(): Boolean {
+        if (!_settings.value.geofenceNotificationEnabled) return false
         val academicZone = geofenceZones.value.firstOrNull { it.category.isAcademicZone }
             ?: geofenceZones.value.firstOrNull()
         val zoneName = academicZone?.name ?: "MUST Kihumuro Campus (FAST)"
         val emoji = academicZone?.category?.iconEmoji ?: "🎓"
         val label = academicZone?.category?.label ?: "University Campus"
-        com.geotrace.service.GeofenceBroadcastReceiver.sendNotification(
+        return com.geotrace.service.GeofenceBroadcastReceiver.sendNotification(
             context = getApplication(),
             title = "$emoji $label: Entered (Test Alert)",
             content = "Geofencing API alert active for $zoneName",
@@ -865,6 +908,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         val trimmed = query.trim()
         val onlineNow = placeSearchManager.isNetworkConnected()
         _isNetworkOnline.value = onlineNow
+        _searchError.value = null
 
         searchJob = viewModelScope.launch {
             val curLoc = currentLocation.value
@@ -926,8 +970,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 )
             }
 
-            // 5. Active & Inspected Waypoints
-            val wpts = (activeWaypoints.value + (inspectedTrail.value?.waypoints ?: emptyList()))
+            // 5. Active, Inspected & Historical Saved Waypoints across all trails
+            val liveAndInspectedWpts = (activeWaypoints.value + (inspectedTrail.value?.waypoints ?: emptyList()))
+            val dbSavedWpts = if (trimmed.isNotBlank()) repository.searchSavedWaypoints(trimmed, limit = 12) else emptyList()
+            val wpts = (liveAndInspectedWpts + dbSavedWpts)
                 .distinctBy { it.id }
                 .filter {
                     trimmed.isNotBlank() && (
@@ -935,7 +981,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                             it.note.contains(trimmed, ignoreCase = true)
                         )
                 }
-                .take(6)
+                .take(8)
                 .map { wp ->
                     withDist(
                         SearchPlaceResult(
@@ -975,12 +1021,20 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 emptyList()
             }
 
-            localMatches.addAll(recents)
-            localMatches.addAll(safeZoneMatches)
-            localMatches.addAll(wpts)
-            localMatches.addAll(deviceMatches)
-            localMatches.addAll(regionMatches)
-            localMatches.addAll(offlinePoiMatches)
+            if (trimmed.isBlank()) {
+                // On blank query show Recents first, then Safe Zones & Offline Regions
+                localMatches.addAll(recents)
+                localMatches.addAll(safeZoneMatches)
+                localMatches.addAll(regionMatches)
+            } else {
+                // On active search prefer authoritative typed local sources before Recents
+                localMatches.addAll(safeZoneMatches)
+                localMatches.addAll(wpts)
+                localMatches.addAll(deviceMatches)
+                localMatches.addAll(regionMatches)
+                localMatches.addAll(offlinePoiMatches)
+                localMatches.addAll(recents)
+            }
 
             val dedupLocal = deduplicateSearchResults(localMatches)
             _searchResults.value = dedupLocal
@@ -993,9 +1047,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 val viewBox = _currentMapBoundingBox.value
                 val biasLat = curLoc?.latitude ?: viewBox?.centerLatitude
                 val biasLon = curLoc?.longitude ?: viewBox?.centerLongitude
-                val onlineRaw = placeSearchManager.searchOnline(trimmed, biasLat, biasLon, viewBox)
+                val outcome = placeSearchManager.searchOnline(trimmed, biasLat, biasLon, viewBox)
                 if (isActive) {
-                    val onlineWithDist = onlineRaw.map { withDist(it) }
+                    val onlineWithDist = outcome.results.map { withDist(it) }
+                    _searchError.value = outcome.errorMessage
                     _searchResults.value = deduplicateSearchResults(dedupLocal + onlineWithDist)
                     _isSearchingOnline.value = false
                 }
@@ -1009,7 +1064,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         val seen = HashSet<String>()
         val out = mutableListOf<SearchPlaceResult>()
         for (item in items) {
-            val key = "${item.source.name}:${item.name.lowercase(java.util.Locale.US)}:${
+            // Omit source from key so a recently selected Safe Zone / Offline POI / OSM place never renders twice
+            val key = "${item.name.trim().lowercase(java.util.Locale.US)}:${
                 String.format(java.util.Locale.US, "%.4f,%.4f", item.latitude, item.longitude)
             }"
             if (seen.add(key)) {

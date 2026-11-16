@@ -19,7 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -81,6 +81,7 @@ fun PlaceSearchDialog(
     results: List<SearchPlaceResult>,
     isSearchingOnline: Boolean,
     isNetworkOnline: Boolean,
+    searchError: String? = null,
     offlinePlacesCount: Int,
     offlineRegionsCount: Int,
     onQueryChange: (String) -> Unit,
@@ -212,21 +213,21 @@ fun PlaceSearchDialog(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                             Icon(
-                                imageVector = if (isNetworkOnline) Icons.Default.CloudQueue else Icons.Default.CloudOff,
+                                imageVector = if (isNetworkOnline && searchError == null) Icons.Default.CloudQueue else Icons.Default.CloudOff,
                                 contentDescription = null,
-                                tint = if (isNetworkOnline) colorScheme.tertiary else customColors.warning,
+                                tint = if (isNetworkOnline && searchError == null) colorScheme.tertiary else customColors.warning,
                                 modifier = Modifier.size(14.dp)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = if (isNetworkOnline) {
-                                    "Online OSM + Offline Index ($offlinePlacesCount POIs)"
-                                } else {
-                                    "Offline Mode • $offlinePlacesCount cached POIs • Coords & Zones"
+                                text = when {
+                                    searchError != null -> searchError
+                                    isNetworkOnline -> "Online OSM + Offline Index ($offlinePlacesCount POIs)"
+                                    else -> "Offline Mode • $offlinePlacesCount cached POIs • Coords & Zones"
                                 },
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.SemiBold,
-                                color = if (isNetworkOnline) colorScheme.tertiary else customColors.warning,
+                                color = if (isNetworkOnline && searchError == null) colorScheme.tertiary else customColors.warning,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -234,8 +235,8 @@ fun PlaceSearchDialog(
                         if (results.any { it.source == SearchResultSource.RECENT }) {
                             TextButton(
                                 onClick = onClearRecents,
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                                modifier = Modifier.height(26.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                modifier = Modifier.heightIn(min = 36.dp)
                             ) {
                                 Text("Clear Recents", fontSize = 10.sp)
                             }
@@ -286,7 +287,10 @@ fun PlaceSearchDialog(
                                 .heightIn(max = 360.dp),
                             contentPadding = PaddingValues(vertical = 6.dp)
                         ) {
-                            items(results, key = { "${it.source.name}_${it.id}_${it.latitude}_${it.longitude}" }) { place ->
+                            itemsIndexed(
+                                items = results,
+                                key = { index, it -> "${index}_${it.source.name}_${it.id}" }
+                            ) { _, place ->
                                 SearchResultRow(
                                     place = place,
                                     onClick = {
@@ -309,13 +313,14 @@ private fun SearchResultRow(
     onClick: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
     val (icon, tintColor) = when (place.source) {
         SearchResultSource.COORDINATE -> Icons.Default.MyLocation to colorScheme.primary
         SearchResultSource.SAFE_ZONE -> Icons.Default.Shield to colorScheme.tertiary
-        SearchResultSource.WAYPOINT -> Icons.Default.Flag to Color(0xFFEA580C)
+        SearchResultSource.WAYPOINT -> Icons.Default.Flag to customColors.warning
         SearchResultSource.OFFLINE_REGION -> Icons.Default.Map to colorScheme.secondary
-        SearchResultSource.OFFLINE_POI -> Icons.Default.Bookmark to Color(0xFF0F766E)
-        SearchResultSource.DEVICE_OR_PEER -> Icons.Default.Devices to Color(0xFF7C3AED)
+        SearchResultSource.OFFLINE_POI -> Icons.Default.Bookmark to colorScheme.tertiary
+        SearchResultSource.DEVICE_OR_PEER -> Icons.Default.Devices to colorScheme.secondary
         SearchResultSource.RECENT -> Icons.Default.History to colorScheme.onSurfaceVariant
         SearchResultSource.ONLINE_OSM -> Icons.Default.Place to colorScheme.primary
     }

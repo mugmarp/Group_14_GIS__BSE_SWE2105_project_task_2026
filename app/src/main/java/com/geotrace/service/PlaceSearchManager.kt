@@ -46,8 +46,13 @@ class PlaceSearchManager(private val context: Context) {
             val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return false
             val network = cm.activeNetwork ?: return false
             val caps = cm.getNetworkCapabilities(network) ?: return false
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            val notSuspended = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
+            } else {
+                true
+            }
+            hasInternet && notSuspended
         } catch (_: Exception) {
             false
         }
@@ -133,34 +138,64 @@ class PlaceSearchManager(private val context: Context) {
         return lat.isFinite() && lon.isFinite() && lat in -90.0..90.0 && lon in -180.0..180.0
     }
 
+    data class OnlineSearchOutcome(
+        val results: List<SearchPlaceResult>,
+        val errorMessage: String? = null
+    )
+
     suspend fun searchOnline(
         query: String,
         biasLat: Double?,
         biasLon: Double?,
         viewBox: BoundingBox?
-    ): List<SearchPlaceResult> = withContext(Dispatchers.IO) {
+    ): OnlineSearchOutcome = withContext(Dispatchers.IO) {
         val trimmed = query.trim()
-        if (trimmed.length < 2) return@withContext emptyList()
+        if (trimmed.length < 2) return@withContext OnlineSearchOutcome(emptyList())
 
-        val photonResults = runCatching { queryPhoton(trimmed, biasLat, biasLon) }.getOrElse { emptyList() }
-        if (photonResults.isNotEmpty()) {
-            return@withContext photonResults
+        var photonFailed = false
+        val photonResults = try {
+            queryPhoton(trimmed, biasLat, biasLon)
+        } catch (e: Exception) {
+            Log.w(TAG, "Photon search failed: ${e.message}")
+            photonFailed = true
+            null
+        }
+        if (photonResults != null && photonResults.isNotEmpty()) {
+            return@withContext OnlineSearchOutcome(photonResults)
         }
 
-        return@withContext runCatching { queryNominatim(trimmed, viewBox) }.getOrElse { emptyList() }
+        return@withContext try {
+            val nomResults = queryNominatim(trimmed, viewBox)
+            if (nomResults != null) {
+                OnlineSearchOutcome(nomResults)
+            } else {
+                OnlineSearchOutcome(
+                    results = emptyList(),
+                    errorMessage = if (photonFailed || photonResults == null) {
+                        "Online geocoder unreachable — showing local & cached results"
+                    } else null
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Nominatim search failed: ${e.message}")
+            OnlineSearchOutcome(
+                results = emptyList(),
+                errorMessage = "Online geocoder unavailable — showing local & cached results"
+            )
+        }
     }
 
     private fun queryPhoton(
         query: String,
         biasLat: Double?,
         biasLon: Double?
-    ): List<SearchPlaceResult> {
+    ): List<SearchPlaceResult>? {
         val encoded = URLEncoder.encode(query, "UTF-8")
         val biasParams = if (biasLat != null && biasLon != null) {
             String.format(Locale.US, "&lat=%.5f&lon=%.5f", biasLat, biasLon)
         } else ""
         val urlStr = "https://photon.komoot.io/api/?q=$encoded&limit=8&lang=en$biasParams"
-        val body = httpGet(urlStr, timeoutMs = 6000) ?: return emptyList()
+        val body = httpGet(urlStr, timeoutMs = 6000) ?: return null
 
         val root = JSONObject(body)
         val features = root.optJSONArray("features") ?: return emptyList()
@@ -222,7 +257,7 @@ class PlaceSearchManager(private val context: Context) {
     private fun queryNominatim(
         query: String,
         viewBox: BoundingBox?
-    ): List<SearchPlaceResult> {
+    ): List<SearchPlaceResult>? {
         val encoded = URLEncoder.encode(query, "UTF-8")
         val viewBoxParam = viewBox?.let { box ->
             String.format(
@@ -235,7 +270,7 @@ class PlaceSearchManager(private val context: Context) {
             )
         } ?: ""
         val urlStr = "https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=8&q=$encoded$viewBoxParam"
-        val body = httpGet(urlStr, timeoutMs = 7000) ?: return emptyList()
+        val body = httpGet(urlStr, timeoutMs = 7000) ?: return null
 
         val arr = JSONArray(body)
         val results = mutableListOf<SearchPlaceResult>()

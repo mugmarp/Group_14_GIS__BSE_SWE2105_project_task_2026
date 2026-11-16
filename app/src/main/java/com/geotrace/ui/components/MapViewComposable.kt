@@ -136,10 +136,17 @@ fun MapViewComposable(
     focusedTarget: com.geotrace.model.MapFocusTarget? = null,
     isRecording: Boolean = false,
     trailWaypoints: List<com.geotrace.model.TrailWaypoint> = emptyList(),
+    inspectedTrailId: String? = null,
     inspectedTrailName: String? = null,
     inspectedTrailSummary: String? = null,
     selectedSearchPin: com.geotrace.model.SearchPlaceResult? = null,
     onClearSearchPin: (() -> Unit)? = null,
+    lastHandledFocusMs: Long = 0L,
+    onMarkFocusHandled: ((Long) -> Unit)? = null,
+    lastHandledSearchMs: Long = 0L,
+    onMarkSearchHandled: ((Long) -> Unit)? = null,
+    lastHandledInspectedTrail: String? = null,
+    onMarkInspectedTrailHandled: ((String) -> Unit)? = null,
     isFollowPaused: Boolean = false,
     onFollowPausedByUser: (() -> Unit)? = null,
     onClearInspectedTrail: (() -> Unit)? = null,
@@ -179,6 +186,9 @@ fun MapViewComposable(
     var selectedMarkerInfo by remember { mutableStateOf<MarkerInspectData?>(null) }
     var droppedInspectPin by remember { mutableStateOf<GeoPoint?>(null) }
     var inspectCoordsCopied by remember { mutableStateOf(false) }
+    var localHandledFocusMs by remember(lastHandledFocusMs) { mutableStateOf(lastHandledFocusMs) }
+    var localHandledSearchMs by remember(lastHandledSearchMs) { mutableStateOf(lastHandledSearchMs) }
+    var localHandledTrailKey by remember(lastHandledInspectedTrail) { mutableStateOf(lastHandledInspectedTrail) }
     LaunchedEffect(inspectCoordsCopied, selectedMarkerInfo, focusedTarget?.id) {
         if (inspectCoordsCopied) {
             kotlinx.coroutines.delay(1600L)
@@ -273,8 +283,8 @@ fun MapViewComposable(
 
     // Auto-center map ONLY on first genuine fix, or when followUserLocation is enabled AND user hasn't manually panned/zoomed away.
     // Never pass targetZoom on follow ticks (prevents fighting pinch-out / zoom-out gestures).
-    LaunchedEffect(currentLocation, settings.followUserLocation, isFollowPaused, focusedTarget, inspectedTrailName) {
-        if (inspectedTrailName == null && focusedTarget == null && currentLocation != null) {
+    LaunchedEffect(currentLocation, settings.followUserLocation, isFollowPaused, focusedTarget, selectedSearchPin, inspectedTrailName) {
+        if (inspectedTrailName == null && focusedTarget == null && selectedSearchPin == null && currentLocation != null) {
             val map = mapViewRef
             if (!hasCenteredOnFirstFix) {
                 map?.controller?.animateTo(
@@ -293,12 +303,17 @@ fun MapViewComposable(
         }
     }
 
-    // Zoom to inspected saved trail when selected from History
-    LaunchedEffect(inspectedTrailName, trailPoints.size, trailWaypoints.size, mapViewRef) {
+    // Zoom to inspected saved trail ONLY when newly requested (not when switching back to Map tab)
+    val inspectedTrailKey = inspectedTrailId ?: inspectedTrailName
+    LaunchedEffect(inspectedTrailKey, trailPoints.size, trailWaypoints.size, mapViewRef) {
         val map = mapViewRef ?: return@LaunchedEffect
-        if (inspectedTrailName == null) return@LaunchedEffect
+        val key = inspectedTrailKey ?: return@LaunchedEffect
+        if (key == localHandledTrailKey) return@LaunchedEffect
         val geoPts = trailPoints.map { GeoPoint(it.latitude, it.longitude) } +
             trailWaypoints.map { GeoPoint(it.latitude, it.longitude) }
+        if (geoPts.isEmpty()) return@LaunchedEffect
+        selectedMarkerInfo = null
+        droppedInspectPin = null
         if (geoPts.size >= 2) {
             val box = BoundingBox.fromGeoPointsSafe(geoPts)
             map.post {
@@ -308,29 +323,38 @@ fun MapViewComposable(
                     map.controller.animateTo(geoPts.first(), 16.5, 700L)
                 }
             }
-        } else if (geoPts.size == 1) {
+        } else {
             map.controller.animateTo(geoPts.first(), 17.0, 700L)
         }
         hasCenteredOnFirstFix = true
+        localHandledTrailKey = key
+        onMarkInspectedTrailHandled?.invoke(key)
     }
 
-    // Pan & zoom smoothly onto a requested remote device, group member, or P2P peer
+    // Pan & zoom smoothly onto a requested remote device, group member, or P2P peer (only once per request)
     LaunchedEffect(focusedTarget?.requestedAtMs, mapViewRef) {
         val target = focusedTarget ?: return@LaunchedEffect
+        val map = mapViewRef ?: return@LaunchedEffect
+        if (target.requestedAtMs <= maxOf(lastHandledFocusMs, localHandledFocusMs)) return@LaunchedEffect
         if (target.latitude != 0.0 || target.longitude != 0.0) {
-            mapViewRef?.controller?.animateTo(
+            selectedMarkerInfo = null
+            droppedInspectPin = null
+            map.controller.animateTo(
                 GeoPoint(target.latitude, target.longitude),
                 target.targetZoom ?: 17.5,
                 750L
             )
             hasCenteredOnFirstFix = true
+            localHandledFocusMs = target.requestedAtMs
+            onMarkFocusHandled?.invoke(target.requestedAtMs)
         }
     }
 
-    // Pan & zoom onto a searched place, safe zone, offline POI, or coordinate
+    // Pan & zoom onto a searched place, safe zone, offline POI, or coordinate (only once per selection)
     LaunchedEffect(selectedSearchPin?.requestedAtMs, mapViewRef) {
         val place = selectedSearchPin ?: return@LaunchedEffect
         val map = mapViewRef ?: return@LaunchedEffect
+        if (place.requestedAtMs <= maxOf(lastHandledSearchMs, localHandledSearchMs)) return@LaunchedEffect
         selectedMarkerInfo = null
         droppedInspectPin = null
         hasCenteredOnFirstFix = true
@@ -356,6 +380,8 @@ fun MapViewComposable(
             }
             map.controller.animateTo(GeoPoint(place.latitude, place.longitude), targetZoom, 750L)
         }
+        localHandledSearchMs = place.requestedAtMs
+        onMarkSearchHandled?.invoke(place.requestedAtMs)
     }
 
     // Manage MapView lifecycle
@@ -403,10 +429,19 @@ fun MapViewComposable(
                     zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
                     controller.setZoom(15.0)
 
-                    if (focusedTarget != null && (focusedTarget.latitude != 0.0 || focusedTarget.longitude != 0.0)) {
+                    val hasUnhandledFocus = focusedTarget != null &&
+                        (focusedTarget.latitude != 0.0 || focusedTarget.longitude != 0.0) &&
+                        focusedTarget.requestedAtMs > maxOf(lastHandledFocusMs, localHandledFocusMs)
+                    val hasUnhandledSearch = selectedSearchPin != null &&
+                        selectedSearchPin.requestedAtMs > maxOf(lastHandledSearchMs, localHandledSearchMs)
+
+                    if (hasUnhandledSearch && selectedSearchPin != null) {
+                        controller.setCenter(GeoPoint(selectedSearchPin.latitude, selectedSearchPin.longitude))
+                        controller.setZoom(16.5)
+                    } else if (hasUnhandledFocus && focusedTarget != null) {
                         controller.setCenter(GeoPoint(focusedTarget.latitude, focusedTarget.longitude))
                         controller.setZoom(focusedTarget.targetZoom ?: 17.5)
-                    } else if (initialMapCenter != null && inspectedTrailName == null) {
+                    } else if (initialMapCenter != null) {
                         controller.setCenter(initialMapCenter)
                         controller.setZoom(initialMapZoom ?: 16.5)
                     } else if (currentLocation != null) {
@@ -1010,6 +1045,8 @@ fun MapViewComposable(
         val hasInspectCoords = inspectLat != null && inspectLon != null && (inspectLat != 0.0 || inspectLon != 0.0)
 
         if (inspectCardTitle != null && inspectCardBadge != null) {
+            val showRecenterAction = selectedMarkerInfo == null && activeFocus != null && onRecenterSelf != null
+            val hasActionRow = hasInspectCoords || showRecenterAction
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = colorScheme.surface,
@@ -1025,138 +1062,209 @@ fun MapViewComposable(
                     .widthIn(max = 310.dp)
                     .testTag(if (selectedMarkerInfo != null) "marker_inspect_card" else "map_focus_banner")
             ) {
-                Row(
-                    modifier = Modifier.padding(start = 12.dp, top = 8.dp, bottom = 8.dp, end = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(
-                                shape = RoundedCornerShape(4.dp),
-                                color = colorScheme.primary.copy(alpha = 0.14f)
-                            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(
+                                start = 12.dp,
+                                top = 8.dp,
+                                bottom = if (hasActionRow) 6.dp else 8.dp,
+                                end = 4.dp
+                            ),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(top = 2.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = colorScheme.primary.copy(alpha = 0.14f)
+                                ) {
+                                    Text(
+                                        text = inspectCardBadge,
+                                        fontSize = 8.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = colorScheme.primary,
+                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(6.dp))
                                 Text(
-                                    text = inspectCardBadge,
-                                    fontSize = 8.sp,
+                                    text = inspectCardTitle,
+                                    fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = colorScheme.primary,
-                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                    color = colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                 )
                             }
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = inspectCardTitle,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                            )
-                        }
-                        if (!inspectCardDetail.isNullOrBlank()) {
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = inspectCardDetail,
-                                fontSize = 10.sp,
-                                color = colorScheme.onSurfaceVariant,
-                                maxLines = 2,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                    if (hasInspectCoords) {
-                        IconButton(
-                            onClick = {
-                                com.geotrace.ui.screens.copyCoordinatesWithFeedback(
-                                    context = context,
-                                    haptic = haptic,
-                                    lat = inspectLat!!,
-                                    lon = inspectLon!!,
-                                    format = settings.coordinateFormat,
-                                    label = inspectCardTitle
+                            if (!inspectCardDetail.isNullOrBlank()) {
+                                Spacer(modifier = Modifier.height(3.dp))
+                                Text(
+                                    text = inspectCardDetail,
+                                    fontSize = 10.sp,
+                                    color = colorScheme.onSurfaceVariant,
+                                    maxLines = 2,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                 )
-                                inspectCoordsCopied = true
-                            },
-                            modifier = Modifier
-                                .size(36.dp)
-                                .testTag("inspect_copy_coord_btn")
-                        ) {
-                            Icon(
-                                imageVector = if (inspectCoordsCopied) Icons.Default.Check else Icons.Default.ContentCopy,
-                                contentDescription = "Copy Coordinates",
-                                tint = if (inspectCoordsCopied) colorScheme.tertiary else colorScheme.primary,
-                                modifier = Modifier.size(16.dp)
-                            )
+                            }
                         }
                         IconButton(
                             onClick = {
-                                com.geotrace.ui.screens.shareCoordinatesIntent(
-                                    context = context,
-                                    lat = inspectLat!!,
-                                    lon = inspectLon!!,
-                                    format = settings.coordinateFormat,
-                                    title = inspectCardTitle
-                                )
+                                when {
+                                    selectedMarkerInfo != null -> {
+                                        selectedMarkerInfo = null
+                                        droppedInspectPin = null
+                                    }
+                                    activeFocus != null -> onClearFocusTarget?.invoke()
+                                    activeSearch != null -> onClearSearchPin?.invoke()
+                                    isInspectingHistoryTrail -> onClearInspectedTrail?.invoke()
+                                }
                             },
-                            modifier = Modifier
-                                .size(36.dp)
-                                .testTag("inspect_share_coord_btn")
+                            modifier = Modifier.size(38.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Share,
-                                contentDescription = "Share Coordinates",
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Dismiss Details",
                                 tint = colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
                     }
-                    if (selectedMarkerInfo == null && activeFocus != null && onRecenterSelf != null) {
-                        androidx.compose.material3.TextButton(
-                            onClick = {
-                                droppedInspectPin = null
-                                onRecenterSelf()
-                                if (currentLocation != null) {
-                                    val curZoom = mapViewRef?.zoomLevelDouble ?: 16.5
-                                    val targetZoom = if (curZoom < 10.0) 15.5 else curZoom
-                                    mapViewRef?.controller?.animateTo(
-                                        GeoPoint(currentLocation.latitude, currentLocation.longitude),
-                                        targetZoom,
-                                        800L
-                                    )
-                                }
-                            },
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                            modifier = Modifier
-                                .height(32.dp)
-                                .testTag("recenter_self_btn")
-                        ) {
-                            Text(
-                                text = "Re-center",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                    IconButton(
-                        onClick = {
-                            when {
-                                selectedMarkerInfo != null -> {
-                                    selectedMarkerInfo = null
-                                    droppedInspectPin = null
-                                }
-                                activeFocus != null -> onClearFocusTarget?.invoke()
-                                activeSearch != null -> onClearSearchPin?.invoke()
-                                isInspectingHistoryTrail -> onClearInspectedTrail?.invoke()
-                            }
-                        },
-                        modifier = Modifier.size(40.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Dismiss Details",
-                            tint = colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(16.dp)
+
+                    if (hasActionRow) {
+                        HorizontalDivider(
+                            color = colorScheme.outlineVariant.copy(alpha = 0.4f),
+                            modifier = Modifier.padding(horizontal = 12.dp)
                         )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 7.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (hasInspectCoords) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (inspectCoordsCopied) colorScheme.tertiary.copy(alpha = 0.14f) else colorScheme.primary.copy(alpha = 0.10f),
+                                    modifier = Modifier
+                                        .height(32.dp)
+                                        .clickable {
+                                            com.geotrace.ui.screens.copyCoordinatesWithFeedback(
+                                                context = context,
+                                                haptic = haptic,
+                                                lat = inspectLat!!,
+                                                lon = inspectLon!!,
+                                                format = settings.coordinateFormat,
+                                                label = inspectCardTitle
+                                            )
+                                            inspectCoordsCopied = true
+                                        }
+                                        .testTag("inspect_copy_coord_btn")
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 10.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (inspectCoordsCopied) Icons.Default.Check else Icons.Default.ContentCopy,
+                                            contentDescription = "Copy Coordinates",
+                                            tint = if (inspectCoordsCopied) colorScheme.tertiary else colorScheme.primary,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(5.dp))
+                                        Text(
+                                            text = if (inspectCoordsCopied) "Copied" else "Copy",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (inspectCoordsCopied) colorScheme.tertiary else colorScheme.primary
+                                        )
+                                    }
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = customColors.surfaceContainerLow,
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.65f)),
+                                    modifier = Modifier
+                                        .height(32.dp)
+                                        .clickable {
+                                            com.geotrace.ui.screens.shareCoordinatesIntent(
+                                                context = context,
+                                                lat = inspectLat!!,
+                                                lon = inspectLon!!,
+                                                format = settings.coordinateFormat,
+                                                title = inspectCardTitle
+                                            )
+                                        }
+                                        .testTag("inspect_share_coord_btn")
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 10.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Share,
+                                            contentDescription = "Share Coordinates",
+                                            tint = colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(5.dp))
+                                        Text(
+                                            text = "Share",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                            if (showRecenterAction) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = colorScheme.secondary.copy(alpha = 0.12f),
+                                    modifier = Modifier
+                                        .height(32.dp)
+                                        .clickable {
+                                            droppedInspectPin = null
+                                            onRecenterSelf?.invoke()
+                                            if (currentLocation != null) {
+                                                val curZoom = mapViewRef?.zoomLevelDouble ?: 16.5
+                                                val targetZoom = if (curZoom < 10.0) 15.5 else curZoom
+                                                mapViewRef?.controller?.animateTo(
+                                                    GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                                                    targetZoom,
+                                                    800L
+                                                )
+                                            }
+                                        }
+                                        .testTag("recenter_self_btn")
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 10.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.MyLocation,
+                                            contentDescription = "Re-center on Your Location",
+                                            tint = colorScheme.secondary,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(5.dp))
+                                        Text(
+                                            text = "Re-center",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.secondary
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -36,6 +36,7 @@ class LocationRepository(private val context: Context) {
     private val dbHelper = LocationDbHelper(context)
     private val scope = CoroutineScope(Dispatchers.IO)
     private val recordingMutex = Mutex()
+    private val geofenceMutex = Mutex()
 
     private val _currentLocation = MutableStateFlow<LocationPoint?>(null)
     val currentLocation: StateFlow<LocationPoint?> = _currentLocation.asStateFlow()
@@ -982,119 +983,137 @@ class LocationRepository(private val context: Context) {
     )
 
     suspend fun resetSampleGeofences() = withContext(Dispatchers.IO) {
-        val defaults = buildDefaultSampleZones()
-        val writeDb = dbHelper.writableDatabase
-        for (z in defaults) {
-            val cv = ContentValues().apply {
-                put("id", z.id)
-                put("name", z.name)
-                put("latitude", z.latitude)
-                put("longitude", z.longitude)
-                put("radius", z.radiusMeters)
-                put("category", z.category.name)
-                put("color_hex", z.colorHex)
-                put("alert_on_entry", if (z.alertOnEntry) 1 else 0)
-                put("alert_on_exit", if (z.alertOnExit) 1 else 0)
-                put("is_inside", 0)
+        geofenceMutex.withLock {
+            val defaults = buildDefaultSampleZones()
+            val writeDb = dbHelper.writableDatabase
+            for (z in defaults) {
+                val cv = ContentValues().apply {
+                    put("id", z.id)
+                    put("name", z.name)
+                    put("latitude", z.latitude)
+                    put("longitude", z.longitude)
+                    put("radius", z.radiusMeters)
+                    put("category", z.category.name)
+                    put("color_hex", z.colorHex)
+                    put("alert_on_entry", if (z.alertOnEntry) 1 else 0)
+                    put("alert_on_exit", if (z.alertOnExit) 1 else 0)
+                    put("is_inside", 0)
+                }
+                writeDb.insertWithOnConflict(LocationDbHelper.TABLE_GEOFENCES, null, cv, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
             }
-            writeDb.insertWithOnConflict(LocationDbHelper.TABLE_GEOFENCES, null, cv, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
+            loadGeofences()
         }
-        loadGeofences()
     }
 
     suspend fun addGeofence(zone: GeofenceZone) = withContext(Dispatchers.IO) {
-        val db = dbHelper.writableDatabase
-        val cv = ContentValues().apply {
-            put("id", zone.id)
-            put("name", zone.name)
-            put("latitude", zone.latitude)
-            put("longitude", zone.longitude)
-            put("radius", zone.radiusMeters)
-            put("category", zone.category.name)
-            put("color_hex", zone.colorHex)
-            put("alert_on_entry", if (zone.alertOnEntry) 1 else 0)
-            put("alert_on_exit", if (zone.alertOnExit) 1 else 0)
-            put("is_inside", if (zone.isInside) 1 else 0)
-            put("last_transition", zone.lastTransitionTime)
+        geofenceMutex.withLock {
+            val db = dbHelper.writableDatabase
+            val cv = ContentValues().apply {
+                put("id", zone.id)
+                put("name", zone.name)
+                put("latitude", zone.latitude)
+                put("longitude", zone.longitude)
+                put("radius", zone.radiusMeters)
+                put("category", zone.category.name)
+                put("color_hex", zone.colorHex)
+                put("alert_on_entry", if (zone.alertOnEntry) 1 else 0)
+                put("alert_on_exit", if (zone.alertOnExit) 1 else 0)
+                put("is_inside", if (zone.isInside) 1 else 0)
+                put("last_transition", zone.lastTransitionTime)
+            }
+            db.insertWithOnConflict(LocationDbHelper.TABLE_GEOFENCES, null, cv, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
+            loadGeofences()
         }
-        db.insertWithOnConflict(LocationDbHelper.TABLE_GEOFENCES, null, cv, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
-        loadGeofences()
     }
 
     suspend fun updateGeofence(zone: GeofenceZone) = withContext(Dispatchers.IO) {
-        val db = dbHelper.writableDatabase
-        val cv = ContentValues().apply {
-            put("name", zone.name)
-            put("latitude", zone.latitude)
-            put("longitude", zone.longitude)
-            put("radius", zone.radiusMeters)
-            put("category", zone.category.name)
-            put("color_hex", zone.colorHex)
-            put("alert_on_entry", if (zone.alertOnEntry) 1 else 0)
-            put("alert_on_exit", if (zone.alertOnExit) 1 else 0)
+        geofenceMutex.withLock {
+            val db = dbHelper.writableDatabase
+            val cv = ContentValues().apply {
+                put("name", zone.name)
+                put("latitude", zone.latitude)
+                put("longitude", zone.longitude)
+                put("radius", zone.radiusMeters)
+                put("category", zone.category.name)
+                put("color_hex", zone.colorHex)
+                put("alert_on_entry", if (zone.alertOnEntry) 1 else 0)
+                put("alert_on_exit", if (zone.alertOnExit) 1 else 0)
+            }
+            db.update(LocationDbHelper.TABLE_GEOFENCES, cv, "id = ?", arrayOf(zone.id))
+            loadGeofences()
         }
-        db.update(LocationDbHelper.TABLE_GEOFENCES, cv, "id = ?", arrayOf(zone.id))
-        loadGeofences()
     }
 
     suspend fun deleteGeofence(id: String) = withContext(Dispatchers.IO) {
-        val db = dbHelper.writableDatabase
-        db.delete(LocationDbHelper.TABLE_GEOFENCES, "id = ?", arrayOf(id))
-        loadGeofences()
+        geofenceMutex.withLock {
+            val db = dbHelper.writableDatabase
+            db.delete(LocationDbHelper.TABLE_GEOFENCES, "id = ?", arrayOf(id))
+            loadGeofences()
+        }
+    }
+
+    suspend fun clearGeofenceAlerts() = withContext(Dispatchers.IO) {
+        geofenceMutex.withLock {
+            dbHelper.writableDatabase.delete(LocationDbHelper.TABLE_ALERTS, null, null)
+            _recentAlerts.value = emptyList()
+        }
     }
 
     suspend fun handleApiGeofenceTransition(zoneId: String, isNowInside: Boolean) = withContext(Dispatchers.IO) {
         if (!geofenceNotificationsEnabled) return@withContext
-        if (_geofenceZones.value.isEmpty()) {
-            loadGeofences()
-        }
-        val zone = _geofenceZones.value.firstOrNull { it.id == zoneId || it.name == zoneId } ?: return@withContext
-        val now = System.currentTimeMillis()
-        if (shouldSuppressDuplicateTransition(zone.id, isNowInside, now)) return@withContext
-
-        val db = dbHelper.writableDatabase
-        val eventType = if (isNowInside) "ENTERED" else "EXITED"
-        val shouldAlert = (isNowInside && zone.alertOnEntry) || (!isNowInside && zone.alertOnExit)
-
-        val updatedZones = _geofenceZones.value.map { current ->
-            if (current.id == zone.id) {
-                current.copy(isInside = isNowInside, lastTransitionTime = now)
-            } else {
-                current
+        geofenceMutex.withLock {
+            if (_geofenceZones.value.isEmpty()) {
+                loadGeofences()
             }
-        }
-        val zoneCv = ContentValues().apply {
-            put("is_inside", if (isNowInside) 1 else 0)
-            put("last_transition", now)
-        }
-        db.update(LocationDbHelper.TABLE_GEOFENCES, zoneCv, "id = ?", arrayOf(zone.id))
-        _geofenceZones.value = updatedZones
+            val zone = _geofenceZones.value.firstOrNull { it.id == zoneId || it.name == zoneId } ?: return@withLock
+            val now = System.currentTimeMillis()
+            if (shouldSuppressDuplicateTransition(zone.id, isNowInside, now)) return@withLock
 
-        if (shouldAlert) {
-            val alert = GeofenceAlert(
-                id = UUID.randomUUID().toString(),
-                zoneName = zone.name,
-                eventType = eventType,
-                timestamp = now
-            )
-            val alertCv = ContentValues().apply {
-                put("id", alert.id)
-                put("zone_name", alert.zoneName)
-                put("event_type", alert.eventType)
-                put("timestamp", alert.timestamp)
+            val db = dbHelper.writableDatabase
+            val eventType = if (isNowInside) "ENTERED" else "EXITED"
+            val shouldAlert = (isNowInside && zone.alertOnEntry) || (!isNowInside && zone.alertOnExit)
+
+            val updatedZones = _geofenceZones.value.map { current ->
+                if (current.id == zone.id) {
+                    current.copy(isInside = isNowInside, lastTransitionTime = now)
+                } else {
+                    current
+                }
             }
-            db.insert(LocationDbHelper.TABLE_ALERTS, null, alertCv)
-            loadAlerts()
+            val zoneCv = ContentValues().apply {
+                put("is_inside", if (isNowInside) 1 else 0)
+                put("last_transition", now)
+            }
+            db.update(LocationDbHelper.TABLE_GEOFENCES, zoneCv, "id = ?", arrayOf(zone.id))
+            _geofenceZones.value = updatedZones
 
-            val verb = if (isNowInside) "Entered" else "Exited"
-            val notifTitle = "${zone.category.iconEmoji} ${zone.category.label}: $verb"
-            val notifContent = "You have $verb ${zone.name}"
-            com.geotrace.service.GeofenceBroadcastReceiver.sendNotification(
-                context = context,
-                title = notifTitle,
-                content = notifContent,
-                notificationId = zone.id.hashCode() + (if (isNowInside) 1 else 2)
-            )
+            if (shouldAlert) {
+                val alert = GeofenceAlert(
+                    id = UUID.randomUUID().toString(),
+                    zoneName = zone.name,
+                    eventType = eventType,
+                    timestamp = now
+                )
+                val alertCv = ContentValues().apply {
+                    put("id", alert.id)
+                    put("zone_name", alert.zoneName)
+                    put("event_type", alert.eventType)
+                    put("timestamp", alert.timestamp)
+                }
+                db.insert(LocationDbHelper.TABLE_ALERTS, null, alertCv)
+                pruneOldAlerts(db)
+                loadAlerts()
+
+                val verb = if (isNowInside) "Entered" else "Exited"
+                val notifTitle = "${zone.category.iconEmoji} ${zone.category.label}: $verb"
+                val notifContent = "You have $verb ${zone.name}"
+                com.geotrace.service.GeofenceBroadcastReceiver.sendNotification(
+                    context = context,
+                    title = notifTitle,
+                    content = notifContent,
+                    notificationId = zone.id.hashCode() + (if (isNowInside) 1 else 2)
+                )
+            }
         }
     }
 
@@ -1115,90 +1134,100 @@ class LocationRepository(private val context: Context) {
         accuracyMeters: Float = 10f,
         provider: String = "fused"
     ) = withContext(Dispatchers.IO) {
-        val zones = _geofenceZones.value
-        val updatedZones = mutableListOf<GeofenceZone>()
-        val newAlerts = mutableListOf<GeofenceAlert>()
-        var hasTransitions = false
-        val db = dbHelper.writableDatabase
-        val now = System.currentTimeMillis()
+        geofenceMutex.withLock {
+            val zones = _geofenceZones.value
+            val updatedZones = mutableListOf<GeofenceZone>()
+            val newAlerts = mutableListOf<GeofenceAlert>()
+            var hasTransitions = false
+            val db = dbHelper.writableDatabase
+            val now = System.currentTimeMillis()
 
-        // Dual-radius Schmitt-trigger hysteresis: smaller radius for entry, larger radius for exit
-        val delta = geofenceHysteresisMeters.toDouble().coerceAtLeast(0.0)
-        val useAccuracyGate = geofenceAccuracyGateEnabled
+            // Dual-radius Schmitt-trigger hysteresis: smaller radius for entry, larger radius for exit
+            val delta = geofenceHysteresisMeters.toDouble().coerceAtLeast(0.0)
+            val useAccuracyGate = geofenceAccuracyGateEnabled
 
-        for (z in zones) {
-            if (useAccuracyGate) {
-                val maxAllowedAcc = maxOf(35.0, z.radiusMeters * 0.75)
-                if (provider == "cellular" || accuracyMeters > maxAllowedAcc) {
-                    updatedZones.add(z)
-                    continue
-                }
-            }
-
-            val dist = calculateDistanceMeters(lat, lon, z.latitude, z.longitude)
-            val entryRadius = (z.radiusMeters - delta).coerceAtLeast(minOf(10.0, z.radiusMeters * 0.5))
-            val exitRadius = z.radiusMeters + delta
-
-            val isNowInside = if (z.isInside) {
-                dist <= exitRadius
-            } else {
-                dist <= entryRadius
-            }
-
-            if (isNowInside != z.isInside) {
-                hasTransitions = true
-                val eventType = if (isNowInside) "ENTERED" else "EXITED"
-                val shouldAlert = (isNowInside && z.alertOnEntry) || (!isNowInside && z.alertOnExit)
-                val notDuplicate = !shouldSuppressDuplicateTransition(z.id, isNowInside, now)
-
-                if (shouldAlert && notDuplicate) {
-                    val alert = GeofenceAlert(
-                        id = UUID.randomUUID().toString(),
-                        zoneName = z.name,
-                        eventType = eventType,
-                        timestamp = now
-                    )
-                    newAlerts.add(alert)
-                    val alertCv = ContentValues().apply {
-                        put("id", alert.id)
-                        put("zone_name", alert.zoneName)
-                        put("event_type", alert.eventType)
-                        put("timestamp", alert.timestamp)
+            for (z in zones) {
+                if (useAccuracyGate) {
+                    val maxAllowedAcc = maxOf(35.0, z.radiusMeters * 0.75)
+                    if (provider == "cellular" || accuracyMeters > maxAllowedAcc) {
+                        updatedZones.add(z)
+                        continue
                     }
-                    db.insert(LocationDbHelper.TABLE_ALERTS, null, alertCv)
+                }
 
-                    if (geofenceNotificationsEnabled) {
-                        val verb = if (eventType == "ENTERED") "Entered" else "Exited"
-                        val notifTitle = "${z.category.iconEmoji} ${z.category.label}: $verb"
-                        val notifContent = "You have $verb ${z.name}"
-                        com.geotrace.service.GeofenceBroadcastReceiver.sendNotification(
-                            context = context,
-                            title = notifTitle,
-                            content = notifContent,
-                            notificationId = z.id.hashCode() + (if (isNowInside) 1 else 2)
+                val dist = calculateDistanceMeters(lat, lon, z.latitude, z.longitude)
+                val entryRadius = (z.radiusMeters - delta).coerceAtLeast(minOf(10.0, z.radiusMeters * 0.5))
+                val exitRadius = z.radiusMeters + delta
+
+                val isNowInside = if (z.isInside) {
+                    dist <= exitRadius
+                } else {
+                    dist <= entryRadius
+                }
+
+                if (isNowInside != z.isInside) {
+                    hasTransitions = true
+                    val eventType = if (isNowInside) "ENTERED" else "EXITED"
+                    val shouldAlert = (isNowInside && z.alertOnEntry) || (!isNowInside && z.alertOnExit)
+                    val notDuplicate = !shouldSuppressDuplicateTransition(z.id, isNowInside, now)
+
+                    if (shouldAlert && notDuplicate) {
+                        val alert = GeofenceAlert(
+                            id = UUID.randomUUID().toString(),
+                            zoneName = z.name,
+                            eventType = eventType,
+                            timestamp = now
                         )
+                        newAlerts.add(alert)
+                        val alertCv = ContentValues().apply {
+                            put("id", alert.id)
+                            put("zone_name", alert.zoneName)
+                            put("event_type", alert.eventType)
+                            put("timestamp", alert.timestamp)
+                        }
+                        db.insert(LocationDbHelper.TABLE_ALERTS, null, alertCv)
+
+                        if (geofenceNotificationsEnabled) {
+                            val verb = if (eventType == "ENTERED") "Entered" else "Exited"
+                            val notifTitle = "${z.category.iconEmoji} ${z.category.label}: $verb"
+                            val notifContent = "You have $verb ${z.name}"
+                            com.geotrace.service.GeofenceBroadcastReceiver.sendNotification(
+                                context = context,
+                                title = notifTitle,
+                                content = notifContent,
+                                notificationId = z.id.hashCode() + (if (isNowInside) 1 else 2)
+                            )
+                        }
                     }
-                }
 
-                val updatedZone = z.copy(isInside = isNowInside, lastTransitionTime = now)
-                updatedZones.add(updatedZone)
+                    val updatedZone = z.copy(isInside = isNowInside, lastTransitionTime = now)
+                    updatedZones.add(updatedZone)
 
-                val zoneCv = ContentValues().apply {
-                    put("is_inside", if (isNowInside) 1 else 0)
-                    put("last_transition", updatedZone.lastTransitionTime)
+                    val zoneCv = ContentValues().apply {
+                        put("is_inside", if (isNowInside) 1 else 0)
+                        put("last_transition", updatedZone.lastTransitionTime)
+                    }
+                    db.update(LocationDbHelper.TABLE_GEOFENCES, zoneCv, "id = ?", arrayOf(z.id))
+                } else {
+                    updatedZones.add(z)
                 }
-                db.update(LocationDbHelper.TABLE_GEOFENCES, zoneCv, "id = ?", arrayOf(z.id))
-            } else {
-                updatedZones.add(z)
+            }
+
+            if (hasTransitions) {
+                _geofenceZones.value = updatedZones
+            }
+            if (newAlerts.isNotEmpty()) {
+                pruneOldAlerts(db)
+                loadAlerts()
             }
         }
+    }
 
-        if (hasTransitions) {
-            _geofenceZones.value = updatedZones
-        }
-        if (newAlerts.isNotEmpty()) {
-            loadAlerts()
-        }
+    private fun pruneOldAlerts(db: android.database.sqlite.SQLiteDatabase) {
+        db.execSQL(
+            "DELETE FROM ${LocationDbHelper.TABLE_ALERTS} WHERE id NOT IN (" +
+                "SELECT id FROM ${LocationDbHelper.TABLE_ALERTS} ORDER BY timestamp DESC LIMIT 100)"
+        )
     }
 
     private suspend fun loadAlerts() = withContext(Dispatchers.IO) {
@@ -1343,6 +1372,42 @@ class LocationRepository(private val context: Context) {
                         subtitle = c.getString(c.getColumnIndexOrThrow("subtitle")),
                         latitude = c.getDouble(c.getColumnIndexOrThrow("latitude")),
                         longitude = c.getDouble(c.getColumnIndexOrThrow("longitude"))
+                    )
+                )
+            }
+        }
+        list
+    }
+
+    suspend fun searchSavedWaypoints(query: String, limit: Int = 15): List<TrailWaypoint> = withContext(Dispatchers.IO) {
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) return@withContext emptyList()
+        val list = mutableListOf<TrailWaypoint>()
+        val db = dbHelper.readableDatabase
+        val likeArg = "%$trimmed%"
+        val cursor = db.query(
+            LocationDbHelper.TABLE_WAYPOINTS,
+            null,
+            "name LIKE ? COLLATE NOCASE OR note LIKE ? COLLATE NOCASE",
+            arrayOf(likeArg, likeArg),
+            null,
+            null,
+            "timestamp DESC",
+            limit.toString()
+        )
+        cursor.use { c ->
+            while (c.moveToNext()) {
+                list.add(
+                    TrailWaypoint(
+                        id = c.getString(c.getColumnIndexOrThrow("id")),
+                        sessionId = c.getString(c.getColumnIndexOrThrow("session_id")),
+                        name = c.getString(c.getColumnIndexOrThrow("name")),
+                        note = c.getString(c.getColumnIndexOrThrow("note")),
+                        latitude = c.getDouble(c.getColumnIndexOrThrow("latitude")),
+                        longitude = c.getDouble(c.getColumnIndexOrThrow("longitude")),
+                        altitude = c.getDouble(c.getColumnIndexOrThrow("altitude")),
+                        accuracy = c.getFloat(c.getColumnIndexOrThrow("accuracy")),
+                        timestamp = c.getLong(c.getColumnIndexOrThrow("timestamp"))
                     )
                 )
             }
