@@ -292,7 +292,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         stopStandbyLocationUpdates()
         if (activeSession.value != null) return
         if (!LocationForegroundService.hasLocationPermission(getApplication())) return
-        if (targetMode == TrackingMode.HIGH_ACCURACY) {
+        if (targetMode == TrackingMode.HIGH_ACCURACY || targetMode == TrackingMode.BALANCED) {
             requestLastKnownLocation(forceIfCellular = true)
         }
 
@@ -490,13 +490,17 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     @android.annotation.SuppressLint("MissingPermission")
     fun requestLastKnownLocation(forceIfCellular: Boolean = false) {
-        if (trackingMode.value != TrackingMode.HIGH_ACCURACY) return
+        val mode = trackingMode.value
+        if (mode == TrackingMode.POWER_SAVER) return
+        if (!LocationForegroundService.hasLocationPermission(getApplication())) return
         try {
             fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
                 val cur = currentLocation.value
                 val isFreshLastKnown = loc != null && loc.time > 0L && (System.currentTimeMillis() - loc.time) < 20_000L
+                val isBalancedBlockedGps = mode == TrackingMode.BALANCED &&
+                    loc?.provider == android.location.LocationManager.GPS_PROVIDER
                 val shouldApply = cur == null || (forceIfCellular && cur.provider == "cellular" && isFreshLastKnown)
-                if (loc != null && shouldApply) {
+                if (loc != null && shouldApply && !isBalancedBlockedGps) {
                     val normalizedTime = loc.time.takeIf { it > 0L } ?: System.currentTimeMillis()
                     val p = LocationPoint(
                         latitude = loc.latitude,
@@ -512,12 +516,54 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     viewModelScope.launch {
                         repository.recordLocation(p)
                     }
+                } else if (cur == null) {
+                    requestImmediateQuickFix(mode)
+                }
+            }.addOnFailureListener {
+                if (currentLocation.value == null) {
+                    requestImmediateQuickFix(mode)
                 }
             }
         } catch (e: SecurityException) {
             // Permission flow handled in UI
         } catch (e: Exception) {
             // Hardware unavailable
+        }
+    }
+
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun requestImmediateQuickFix(mode: TrackingMode) {
+        if (mode == TrackingMode.POWER_SAVER) return
+        if (!LocationForegroundService.hasLocationPermission(getApplication())) return
+        val priority = if (mode == TrackingMode.HIGH_ACCURACY) {
+            com.google.android.gms.location.Priority.PRIORITY_BALANCED_POWER_ACCURACY
+        } else {
+            com.google.android.gms.location.Priority.PRIORITY_BALANCED_POWER_ACCURACY
+        }
+        try {
+            val cancellation = com.google.android.gms.tasks.CancellationTokenSource()
+            fusedLocationClient.getCurrentLocation(priority, cancellation.token)
+                .addOnSuccessListener { loc ->
+                    if (loc != null && currentLocation.value == null) {
+                        val normalizedTime = loc.time.takeIf { it > 0L } ?: System.currentTimeMillis()
+                        val p = LocationPoint(
+                            latitude = loc.latitude,
+                            longitude = loc.longitude,
+                            accuracy = loc.accuracy,
+                            speed = if (loc.hasSpeed()) loc.speed else 0f,
+                            altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
+                            bearing = if (loc.hasBearing()) loc.bearing else 0f,
+                            provider = loc.provider ?: "fused",
+                            timestamp = normalizedTime,
+                            sessionId = "real_initial"
+                        )
+                        viewModelScope.launch {
+                            repository.recordLocation(p)
+                        }
+                    }
+                }
+        } catch (_: SecurityException) {
+        } catch (_: Exception) {
         }
     }
 

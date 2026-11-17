@@ -75,6 +75,7 @@ import com.geotrace.ui.screens.devices.LeaveGroupConfirmDialog
 import com.geotrace.ui.screens.devices.MemberCard
 import com.geotrace.ui.screens.devices.P2PPeerCard
 import com.geotrace.ui.screens.devices.P2PRadarControlCard
+import com.geotrace.ui.screens.devices.PendingMemberCard
 import com.geotrace.ui.screens.devices.PersonalDeviceCard
 import com.geotrace.ui.screens.devices.RemoveDeviceDialog
 import com.geotrace.ui.screens.devices.RemoveGroupMemberDialog
@@ -83,6 +84,7 @@ import com.geotrace.ui.screens.devices.SignOutConfirmDialog
 import com.geotrace.ui.screens.devices.ThisDeviceCompactCard
 import com.geotrace.ui.screens.devices.hasBackgroundLocationPermission
 import com.geotrace.ui.screens.devices.openAppLocationSettings
+import com.geotrace.ui.screens.devices.openAppNotificationSettings
 import com.geotrace.ui.screens.devices.performGoogleSignIn
 import com.geotrace.ui.screens.devices.performSignOut
 import com.geotrace.ui.screens.devices.sortGroupMembers
@@ -114,6 +116,8 @@ fun GroupScreen(
     val offlineCallsign by groupViewModel.offlineCallsign.collectAsState()
     val isGhostMode by groupViewModel.isGhostMode.collectAsState()
     val isBackgroundProtectionEnabled by groupViewModel.isBackgroundProtectionEnabled.collectAsState()
+    val isProtectionServiceRunning by groupViewModel.isProtectionServiceRunning.collectAsState()
+    val isProtectionPaused by groupViewModel.isProtectionPaused.collectAsState()
     val isP2PEnabled by groupViewModel.isP2PEnabled.collectAsState()
     val isSyncing by groupViewModel.isSyncing.collectAsState()
     val lastSyncTimestampMs by groupViewModel.lastSyncTimestampMs.collectAsState()
@@ -136,9 +140,23 @@ fun GroupScreen(
     var isAuthSigningIn by remember { mutableStateOf(false) }
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
 
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    var permissionRefreshTick by remember { mutableStateOf(0) }
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                permissionRefreshTick++
+                groupViewModel.ensureProtectionStartedIfEligible(refreshNotification = true)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     val bgLocationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
+        permissionRefreshTick++
         if (!granted && !hasBackgroundLocationPermission(context)) {
             showBgSettingsDialog = true
         }
@@ -147,9 +165,11 @@ fun GroupScreen(
     val protectionPermissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
-        val fineOrCoarse = (grants[Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
-            (grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true)
-        if (fineOrCoarse) {
+        permissionRefreshTick++
+        val hasLocation = (grants[Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
+            (grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true) ||
+            com.geotrace.service.LocationForegroundService.hasLocationPermission(context)
+        if (hasLocation) {
             groupViewModel.toggleBackgroundProtection(true)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !hasBackgroundLocationPermission(context)) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -247,10 +267,21 @@ fun GroupScreen(
     val sortedMembers = remember(groupMembers, currentUser?.uid, groupViewModel.currentDeviceId, nowMs) {
         sortGroupMembers(groupMembers, currentUser?.uid, groupViewModel.currentDeviceId, nowMs)
     }
+    val pendingMemberUids = remember(activeGroup?.memberIds, sortedMembers, currentUser?.uid) {
+        val publishedUids = sortedMembers.map { it.userId }.toSet()
+        activeGroup?.memberIds.orEmpty()
+            .filter { it.isNotBlank() && it !in publishedUids }
+            .sortedByDescending { it == currentUser?.uid }
+    }
     val sortedGroups = remember(userGroups, activeGroup?.id, currentUser?.uid) {
         sortUserGroups(userGroups, activeGroup?.id, currentUser?.uid)
     }
-    val hasBgPermission = hasBackgroundLocationPermission(context)
+    val hasBgPermission = remember(permissionRefreshTick, nowMs) {
+        hasBackgroundLocationPermission(context)
+    }
+    val hasNotifPermission = remember(permissionRefreshTick, nowMs) {
+        com.geotrace.service.LocationForegroundService.hasNotificationPermission(context)
+    }
 
     LazyColumn(
         modifier = modifier
@@ -289,7 +320,10 @@ fun GroupScreen(
                 nowMs = nowMs,
                 isGhostMode = isGhostMode,
                 isBackgroundProtectionEnabled = isBackgroundProtectionEnabled,
+                isProtectionServiceRunning = isProtectionServiceRunning,
+                isProtectionPaused = isProtectionPaused,
                 hasBgPermission = hasBgPermission,
+                hasNotificationPermission = hasNotifPermission,
                 isP2PEnabled = isP2PEnabled,
                 isSyncing = isSyncing,
                 onEditCallsign = {
@@ -325,7 +359,10 @@ fun GroupScreen(
                         }
                     }
                 },
-                onOpenBgLocationSettings = { showBgSettingsDialog = true }
+                onPauseBackgroundProtection = { groupViewModel.pauseBackgroundProtection() },
+                onResumeBackgroundProtection = { groupViewModel.resumeBackgroundProtection() },
+                onOpenBgLocationSettings = { showBgSettingsDialog = true },
+                onOpenNotificationSettings = { openAppNotificationSettings(context) }
             )
         }
 
@@ -426,7 +463,7 @@ fun GroupScreen(
                     if (activeGroup != null) {
                         item {
                             Text(
-                                text = "DEVICES IN THIS GROUP (${sortedMembers.size})",
+                                text = "DEVICES IN THIS GROUP (${sortedMembers.size + pendingMemberUids.size})",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 letterSpacing = 0.05.sp,
@@ -435,7 +472,7 @@ fun GroupScreen(
                             )
                         }
 
-                        if (sortedMembers.isEmpty()) {
+                        if (sortedMembers.isEmpty() && pendingMemberUids.isEmpty()) {
                             item {
                                 Card(
                                     shape = RoundedCornerShape(14.dp),
@@ -487,6 +524,15 @@ fun GroupScreen(
                                     },
                                     onRingOwnDeviceClick = { ownDev -> groupViewModel.ringPersonalDevice(ownDev) },
                                     onRemoveClick = { memberPendingRemoval = member }
+                                )
+                            }
+
+                            items(pendingMemberUids, key = { "pending_$it" }) { pendingUid ->
+                                PendingMemberCard(
+                                    memberUid = pendingUid,
+                                    isSelf = pendingUid == currentUser?.uid,
+                                    isGroupOwner = pendingUid == activeGroup?.createdBy,
+                                    isGhostMode = isGhostMode
                                 )
                             }
                         }

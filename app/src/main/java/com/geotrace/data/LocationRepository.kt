@@ -525,8 +525,24 @@ class LocationRepository(private val context: Context) {
         }
 
         val normalizedTimestamp = rawPoint.timestamp.takeIf { it > 0L } ?: System.currentTimeMillis()
-        val safePoint = if (normalizedTimestamp != rawPoint.timestamp) {
-            rawPoint.copy(timestamp = normalizedTimestamp)
+        val sanitizedAccuracy = if (rawPoint.accuracy.isFinite() && rawPoint.accuracy >= 0f) rawPoint.accuracy else 0f
+        val sanitizedSpeed = if (rawPoint.speed.isFinite() && rawPoint.speed >= 0f) rawPoint.speed else 0f
+        val sanitizedBearing = if (rawPoint.bearing.isFinite()) rawPoint.bearing else 0f
+        val sanitizedAltitude = if (rawPoint.altitude.isFinite()) rawPoint.altitude else 0.0
+        val safePoint = if (
+            normalizedTimestamp != rawPoint.timestamp ||
+            sanitizedAccuracy != rawPoint.accuracy ||
+            sanitizedSpeed != rawPoint.speed ||
+            sanitizedBearing != rawPoint.bearing ||
+            sanitizedAltitude != rawPoint.altitude
+        ) {
+            rawPoint.copy(
+                timestamp = normalizedTimestamp,
+                accuracy = sanitizedAccuracy,
+                speed = sanitizedSpeed,
+                bearing = sanitizedBearing,
+                altitude = sanitizedAltitude
+            )
         } else {
             rawPoint
         }

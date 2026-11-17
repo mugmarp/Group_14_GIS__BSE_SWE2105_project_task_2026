@@ -46,6 +46,27 @@ fun openAppLocationSettings(context: Context) {
     context.startActivity(intent)
 }
 
+fun openAppNotificationSettings(context: Context) {
+    val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+            putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    } else {
+        Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.fromParts("package", context.packageName, null)
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+    }
+    try {
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        openAppLocationSettings(context)
+    }
+}
+
 fun resolveBatteryIcon(isCharging: Boolean, batteryPercent: Int): ImageVector {
     return when {
         isCharging -> Icons.Default.Bolt

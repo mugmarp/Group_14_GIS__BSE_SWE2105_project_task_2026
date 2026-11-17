@@ -20,6 +20,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.geotrace.LocationTrackerApp
 import com.geotrace.MainActivity
@@ -39,6 +40,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -47,19 +51,31 @@ class LocationForegroundService : Service() {
 
     companion object {
         private const val TAG = "LocationFgService"
-        const val CHANNEL_ID = "gis_tracker_channel"
+        private const val LEGACY_CHANNEL_ID = "gis_tracker_channel"
+        const val CHANNEL_ID = "geotrace_protection_channel_v2"
         const val NOTIFICATION_ID = 1001
 
         const val ACTION_START = "ACTION_START_TRACKING"
+        const val ACTION_START_PAUSED = "ACTION_START_PAUSED_TRACKING"
         const val ACTION_UPDATE_MODE = "ACTION_UPDATE_MODE"
         const val ACTION_PAUSE = "ACTION_PAUSE_TRACKING"
         const val ACTION_RESUME = "ACTION_RESUME_TRACKING"
         const val ACTION_STOP = "ACTION_STOP_TRACKING"
         const val ACTION_START_PROTECTION = "ACTION_START_PROTECTION"
+        const val ACTION_PAUSE_PROTECTION = "ACTION_PAUSE_PROTECTION"
+        const val ACTION_RESUME_PROTECTION = "ACTION_RESUME_PROTECTION"
+        const val ACTION_REFRESH_PROTECTION = "ACTION_REFRESH_PROTECTION"
         const val ACTION_STOP_PROTECTION = "ACTION_STOP_PROTECTION"
         const val EXTRA_MODE = "EXTRA_MODE"
         const val EXTRA_PERSIST_DISABLE = "EXTRA_PERSIST_DISABLE"
+        const val EXTRA_FORCE_RESUME = "EXTRA_FORCE_RESUME"
         const val EXTRA_STARTED_AS_FOREGROUND = "EXTRA_STARTED_AS_FOREGROUND"
+
+        private val _isProtectionRunningFlow = MutableStateFlow(false)
+        val isProtectionRunningFlow: StateFlow<Boolean> = _isProtectionRunningFlow.asStateFlow()
+
+        private val _isProtectionPausedFlow = MutableStateFlow(false)
+        val isProtectionPausedFlow: StateFlow<Boolean> = _isProtectionPausedFlow.asStateFlow()
 
         fun hasLocationPermission(context: Context): Boolean {
             val fine = ContextCompat.checkSelfPermission(
@@ -84,10 +100,31 @@ class LocationForegroundService : Service() {
             }
         }
 
+        fun hasNotificationPermission(context: Context): Boolean {
+            val postGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+            return postGranted && NotificationManagerCompat.from(context).areNotificationsEnabled()
+        }
+
         fun startService(context: Context, mode: TrackingMode) {
             if (!hasLocationPermission(context)) return
             val intent = Intent(context, LocationForegroundService::class.java).apply {
                 action = ACTION_START
+                putExtra(EXTRA_MODE, mode.name)
+            }
+            safeStartForegroundService(context, intent)
+        }
+
+        fun startServicePaused(context: Context, mode: TrackingMode) {
+            if (!hasLocationPermission(context)) return
+            val intent = Intent(context, LocationForegroundService::class.java).apply {
+                action = ACTION_START_PAUSED
                 putExtra(EXTRA_MODE, mode.name)
             }
             safeStartForegroundService(context, intent)
@@ -140,13 +177,45 @@ class LocationForegroundService : Service() {
             safeStartForegroundService(context, intent)
         }
 
-        fun startProtectionMode(context: Context): Boolean {
+        fun startProtectionMode(context: Context, forceResume: Boolean = false): Boolean {
             if (!hasLocationPermission(context)) return false
             if (Firebase.auth.currentUser == null) return false
             val intent = Intent(context, LocationForegroundService::class.java).apply {
                 action = ACTION_START_PROTECTION
+                putExtra(EXTRA_FORCE_RESUME, forceResume)
             }
             return safeStartForegroundService(context, intent)
+        }
+
+        fun pauseProtectionMode(context: Context) {
+            if (!isServiceActive) return
+            val intent = Intent(context, LocationForegroundService::class.java).apply {
+                action = ACTION_PAUSE_PROTECTION
+            }
+            try {
+                context.startService(intent)
+            } catch (_: Exception) {
+            }
+        }
+
+        fun resumeProtectionMode(context: Context): Boolean {
+            if (!hasLocationPermission(context)) return false
+            if (Firebase.auth.currentUser == null) return false
+            val intent = Intent(context, LocationForegroundService::class.java).apply {
+                action = ACTION_RESUME_PROTECTION
+            }
+            return safeStartForegroundService(context, intent)
+        }
+
+        fun refreshProtectionNotification(context: Context) {
+            if (!isServiceActive) return
+            val intent = Intent(context, LocationForegroundService::class.java).apply {
+                action = ACTION_REFRESH_PROTECTION
+            }
+            try {
+                context.startService(intent)
+            } catch (_: Exception) {
+            }
         }
 
         fun stopProtectionMode(context: Context, disablePreference: Boolean = true) {
@@ -194,12 +263,18 @@ class LocationForegroundService : Service() {
     private var isForegroundStarted: Boolean = false
     private var isRecordingSession: Boolean = false
     private var isProtectionActive: Boolean = false
+    private var isProtectionPaused: Boolean = false
     @Volatile
     private var lastCloudSyncMs: Long = 0L
     @Volatile
     private var lastModeSwitchMs: Long = 0L
     private var lastBgCellularFallbackKey: String? = null
     private var lastBgCellularFallbackMs: Long = 0L
+
+    private fun syncProtectionRuntimeState() {
+        _isProtectionPausedFlow.value = isProtectionPaused
+        _isProtectionRunningFlow.value = isForegroundStarted && ((isProtectionActive && !isProtectionPaused) || isRecordingSession)
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -226,6 +301,22 @@ class LocationForegroundService : Service() {
                 isProtectionActive = groupRepo.isBackgroundProtectionActiveAndSignedIn()
                 startForegroundTracking(mode)
             }
+            ACTION_START_PAUSED -> {
+                val modeStr = intent.getStringExtra(EXTRA_MODE) ?: repo.trackingMode.value.name
+                val mode = parseMode(modeStr)
+                currentMode = mode
+                isRecordingSession = true
+                isProtectionActive = groupRepo.isBackgroundProtectionActiveAndSignedIn()
+                releaseWakeLock()
+                stopCellDiagnostics()
+                stopLocationUpdatesOnly()
+                ensureForeground(buildStatusNotification(mode))
+                if (isProtectionActive && !isProtectionPaused && hasLocationPermission(this)) {
+                    groupRepo.ensurePersonalDevicesListenerActive()
+                    requestProtectionLocationUpdates()
+                    startProtectionHeartbeat()
+                }
+            }
             ACTION_UPDATE_MODE -> {
                 val modeStr = intent.getStringExtra(EXTRA_MODE) ?: repo.trackingMode.value.name
                 val mode = parseMode(modeStr)
@@ -237,10 +328,15 @@ class LocationForegroundService : Service() {
                     if (!isSessionPaused) {
                         requestLocationUpdates(mode)
                         startPeriodicCellDiagnostics()
+                    } else if (isProtectionActive && !isProtectionPaused && hasLocationPermission(this)) {
+                        requestProtectionLocationUpdates()
                     }
                 } else if (isProtectionActive || (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this))) {
+                    isProtectionActive = true
                     ensureForeground(buildStatusNotification(mode))
-                    requestProtectionLocationUpdates()
+                    if (!isProtectionPaused) {
+                        requestProtectionLocationUpdates()
+                    }
                 } else {
                     if (startedAsForeground && !isForegroundStarted && hasLocationPermission(this)) {
                         ensureForeground(buildStatusNotification(mode))
@@ -250,6 +346,56 @@ class LocationForegroundService : Service() {
                 }
             }
             ACTION_START_PROTECTION -> {
+                val forceResume = intent.getBooleanExtra(EXTRA_FORCE_RESUME, false)
+                if (!groupRepo.isBackgroundProtectionActiveAndSignedIn() || !hasLocationPermission(this)) {
+                    if (!isRecordingSession && repo.activeSession.value == null) {
+                        if (startedAsForeground && !isForegroundStarted && hasLocationPermission(this)) {
+                            ensureForeground(buildStatusNotification(currentMode))
+                        }
+                        stopForegroundAndSelf()
+                        return START_NOT_STICKY
+                    }
+                    ensureForeground(buildStatusNotification(currentMode))
+                    return START_STICKY
+                }
+                if (forceResume) {
+                    isProtectionPaused = false
+                }
+                isProtectionActive = true
+                groupRepo.ensurePersonalDevicesListenerActive()
+                if (!isRecordingSession && repo.activeSession.value == null) {
+                    if (isProtectionPaused) {
+                        stopLocationUpdatesOnly()
+                        stopCellDiagnostics()
+                        stopProtectionHeartbeat()
+                        ensureForeground(buildStatusNotification(currentMode))
+                    } else {
+                        startLightweightProtectionMode()
+                    }
+                } else {
+                    ensureForeground(buildStatusNotification(currentMode))
+                }
+            }
+            ACTION_PAUSE_PROTECTION -> {
+                isProtectionPaused = true
+                stopProtectionHeartbeat()
+                if (!isRecordingSession && repo.activeSession.value == null) {
+                    releaseWakeLock()
+                    stopCellDiagnostics()
+                    stopLocationUpdatesOnly()
+                    if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this)) {
+                        isProtectionActive = true
+                        ensureForeground(buildStatusNotification(currentMode))
+                    } else {
+                        stopForegroundAndSelf()
+                        return START_NOT_STICKY
+                    }
+                } else {
+                    ensureForeground(buildStatusNotification(currentMode))
+                }
+            }
+            ACTION_RESUME_PROTECTION -> {
+                isProtectionPaused = false
                 if (!groupRepo.isBackgroundProtectionActiveAndSignedIn() || !hasLocationPermission(this)) {
                     if (!isRecordingSession && repo.activeSession.value == null) {
                         if (startedAsForeground && !isForegroundStarted && hasLocationPermission(this)) {
@@ -265,8 +411,24 @@ class LocationForegroundService : Service() {
                 groupRepo.ensurePersonalDevicesListenerActive()
                 if (!isRecordingSession && repo.activeSession.value == null) {
                     startLightweightProtectionMode()
+                } else if (repo.activeSession.value?.isPaused == true) {
+                    ensureForeground(buildStatusNotification(currentMode))
+                    requestProtectionLocationUpdates()
+                    startProtectionHeartbeat()
                 } else {
                     ensureForeground(buildStatusNotification(currentMode))
+                }
+            }
+            ACTION_REFRESH_PROTECTION -> {
+                if (isForegroundStarted) {
+                    ensureForeground(buildStatusNotification(currentMode))
+                } else if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this)) {
+                    isProtectionActive = true
+                    if (isProtectionPaused) {
+                        ensureForeground(buildStatusNotification(currentMode))
+                    } else {
+                        startLightweightProtectionMode()
+                    }
                 }
             }
             ACTION_STOP_PROTECTION -> {
@@ -274,6 +436,7 @@ class LocationForegroundService : Service() {
                 if (persistDisable) {
                     groupRepo.setBackgroundProtectionEnabled(false)
                 }
+                isProtectionPaused = false
                 isProtectionActive = false
                 protectionHeartbeatJob?.cancel()
                 protectionHeartbeatJob = null
@@ -293,7 +456,7 @@ class LocationForegroundService : Service() {
                 serviceScope.launch {
                     repo.pauseCurrentSession()
                     ensureForeground(buildStatusNotification(currentMode))
-                    if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this@LocationForegroundService)) {
+                    if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && !isProtectionPaused && hasLocationPermission(this@LocationForegroundService)) {
                         isProtectionActive = true
                         requestProtectionLocationUpdates()
                         startProtectionHeartbeat()
@@ -313,7 +476,11 @@ class LocationForegroundService : Service() {
                     } else if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this@LocationForegroundService)) {
                         isRecordingSession = false
                         isProtectionActive = true
-                        startLightweightProtectionMode()
+                        if (isProtectionPaused) {
+                            ensureForeground(buildStatusNotification(currentMode))
+                        } else {
+                            startLightweightProtectionMode()
+                        }
                     } else {
                         isRecordingSession = false
                         stopForegroundAndSelf()
@@ -340,7 +507,7 @@ class LocationForegroundService : Service() {
                             stopCellDiagnostics()
                             stopLocationUpdatesOnly()
                             ensureForeground(buildStatusNotification(currentMode))
-                            if (isProtectionActive && hasLocationPermission(this@LocationForegroundService)) {
+                            if (isProtectionActive && !isProtectionPaused && hasLocationPermission(this@LocationForegroundService)) {
                                 requestProtectionLocationUpdates()
                                 startProtectionHeartbeat()
                             }
@@ -350,13 +517,18 @@ class LocationForegroundService : Service() {
                     } else if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this@LocationForegroundService)) {
                         isProtectionActive = true
                         groupRepo.ensurePersonalDevicesListenerActive()
-                        startLightweightProtectionMode()
+                        if (isProtectionPaused) {
+                            ensureForeground(buildStatusNotification(currentMode))
+                        } else {
+                            startLightweightProtectionMode()
+                        }
                     } else {
                         stopForegroundAndSelf()
                     }
                 }
             }
         }
+        syncProtectionRuntimeState()
         return START_STICKY
     }
 
@@ -452,12 +624,24 @@ class LocationForegroundService : Service() {
                     startForeground(NOTIFICATION_ID, notification)
                 }
                 isForegroundStarted = true
+                syncProtectionRuntimeState()
             } catch (e: Exception) {
                 Log.e(TAG, "startForeground failed: ${e.message}")
+                isForegroundStarted = false
+                isServiceActive = false
+                isProtectionActive = false
+                isProtectionPaused = false
+                syncProtectionRuntimeState()
+                stopSelf()
             }
         } else {
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.notify(NOTIFICATION_ID, notification)
+            try {
+                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                nm.notify(NOTIFICATION_ID, notification)
+                syncProtectionRuntimeState()
+            } catch (e: Exception) {
+                Log.w(TAG, "notify failed: ${e.message}")
+            }
         }
     }
 
@@ -495,6 +679,14 @@ class LocationForegroundService : Service() {
         }
 
         val callsign = groupRepo.offlineCallsign.value
+        if (isProtectionPaused) {
+            return buildNotification(
+                title = "24/7 Protection Paused • $callsign",
+                content = "Background location sync & remote ring paused • Tap Resume",
+                isRecordingUi = false,
+                isPausedUi = true
+            )
+        }
         val privacyTag = if (groupRepo.isGhostMode.value) "Ghost Mode (My Devices only)" else "Fleet & Remote Ring ready"
         return buildNotification(
             title = "GeoTrace 24/7 Protection • $callsign",
@@ -859,28 +1051,29 @@ class LocationForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val actionIntent = Intent(this, LocationForegroundService::class.java).apply {
-            action = if (isRecordingUi) ACTION_STOP else ACTION_STOP_PROTECTION
-        }
-        val pendingAction = PendingIntent.getService(
-            this,
-            if (isRecordingUi) 1 else 2,
-            actionIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val actionLabel = if (isRecordingUi) "Stop & Save" else "Pause Protection"
-
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(content)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentIntent(pendingOpen)
-            .addAction(android.R.drawable.ic_media_pause, actionLabel, pendingAction)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOnlyAlertOnce(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
 
         if (isRecordingUi) {
+            val stopIntent = Intent(this, LocationForegroundService::class.java).apply {
+                action = ACTION_STOP
+            }
+            val pendingStop = PendingIntent.getService(
+                this,
+                1,
+                stopIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(android.R.drawable.ic_media_pause, "Stop & Save", pendingStop)
+
             val toggleIntent = Intent(this, LocationForegroundService::class.java).apply {
                 action = if (isPausedUi) ACTION_RESUME else ACTION_PAUSE
             }
@@ -895,6 +1088,33 @@ class LocationForegroundService : Service() {
                 if (isPausedUi) "Resume" else "Pause",
                 pendingToggle
             )
+        } else {
+            val toggleProtectionIntent = Intent(this, LocationForegroundService::class.java).apply {
+                action = if (isPausedUi) ACTION_RESUME_PROTECTION else ACTION_PAUSE_PROTECTION
+            }
+            val pendingToggleProtection = PendingIntent.getService(
+                this,
+                if (isPausedUi) 5 else 6,
+                toggleProtectionIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(
+                if (isPausedUi) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause,
+                if (isPausedUi) "Resume" else "Pause",
+                pendingToggleProtection
+            )
+
+            val turnOffIntent = Intent(this, LocationForegroundService::class.java).apply {
+                action = ACTION_STOP_PROTECTION
+                putExtra(EXTRA_PERSIST_DISABLE, true)
+            }
+            val pendingTurnOff = PendingIntent.getService(
+                this,
+                2,
+                turnOffIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(android.R.drawable.ic_menu_close_clear_cancel, "Turn Off", pendingTurnOff)
         }
 
         return builder.build()
@@ -902,15 +1122,21 @@ class LocationForegroundService : Service() {
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            try {
+                nm.deleteNotificationChannel(LEGACY_CHANNEL_ID)
+            } catch (_: Exception) {
+            }
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Real-Time GIS Tracking & Protection",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 description = "Shows live location telemetry, recording status, and 24/7 device protection"
+                setSound(null, null)
+                enableVibration(false)
                 setShowBadge(false)
             }
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(channel)
         }
     }
@@ -931,9 +1157,16 @@ class LocationForegroundService : Service() {
             if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this@LocationForegroundService)) {
                 isProtectionActive = true
                 groupRepo.ensurePersonalDevicesListenerActive()
-                startLightweightProtectionMode()
+                if (isProtectionPaused) {
+                    stopLocationUpdatesOnly()
+                    stopProtectionHeartbeat()
+                    ensureForeground(buildStatusNotification(currentMode))
+                } else {
+                    startLightweightProtectionMode()
+                }
             } else {
                 isProtectionActive = false
+                isProtectionPaused = false
                 stopLocationUpdatesOnly()
                 stopForegroundAndSelf()
             }
@@ -954,11 +1187,14 @@ class LocationForegroundService : Service() {
 
     private fun stopForegroundAndSelf() {
         isServiceActive = false
+        isProtectionActive = false
+        isProtectionPaused = false
         releaseWakeLock()
         stopCellDiagnostics()
         stopProtectionHeartbeat()
         val wasForeground = isForegroundStarted
         isForegroundStarted = false
+        syncProtectionRuntimeState()
         if (wasForeground) {
             stopForeground(STOP_FOREGROUND_REMOVE)
         }
@@ -968,11 +1204,14 @@ class LocationForegroundService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         isServiceActive = false
+        isProtectionActive = false
+        isProtectionPaused = false
         stopLocationUpdatesOnly()
         stopCellDiagnostics()
         stopProtectionHeartbeat()
         releaseWakeLock()
         isForegroundStarted = false
+        syncProtectionRuntimeState()
         serviceScope.cancel()
     }
 

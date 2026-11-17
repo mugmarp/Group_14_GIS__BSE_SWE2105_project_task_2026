@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.NearMe
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -668,6 +669,92 @@ fun GroupRowCard(
                         modifier = Modifier.size(18.dp)
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun PendingMemberCard(
+    memberUid: String,
+    isSelf: Boolean,
+    isGroupOwner: Boolean,
+    isGhostMode: Boolean
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
+
+    val title = when {
+        isSelf -> "This Device"
+        isGroupOwner -> "Group Owner (${memberUid.take(6)}…)"
+        else -> "Joined Member (${memberUid.take(6)}…)"
+    }
+    val subtitle = when {
+        isSelf && isGhostMode -> "Ghost Mode active — coordinates hidden from this group"
+        isSelf -> "Joined • Acquiring initial GPS/Wi-Fi fix to publish…"
+        else -> "Joined group • Waiting for device's first GPS/Wi-Fi broadcast"
+    }
+
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = customColors.surfaceContainerLow),
+        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("pending_member_card_$memberUid")
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(colorScheme.outlineVariant.copy(alpha = 0.4f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Person,
+                    contentDescription = "Joined Group Member",
+                    tint = colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = title,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    StatusChipBadge(
+                        label = if (isSelf && isGhostMode) "HIDDEN" else "JOINED",
+                        bg = customColors.statusWarningBg,
+                        textColor = customColors.statusWarningText
+                    )
+                    if (isGroupOwner) {
+                        StatusChipBadge(
+                            label = "OWNER",
+                            bg = customColors.statusNominalBg,
+                            textColor = customColors.statusNominalText
+                        )
+                    }
+                }
+                Text(
+                    text = subtitle,
+                    fontSize = 11.sp,
+                    color = colorScheme.onSurfaceVariant
+                )
             }
         }
     }

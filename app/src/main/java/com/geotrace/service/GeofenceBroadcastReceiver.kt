@@ -48,7 +48,15 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                         LocationForegroundService.hasLocationPermission(context.applicationContext) &&
                         LocationForegroundService.hasBackgroundLocationPermission(context.applicationContext)
                     ) {
-                        LocationForegroundService.startProtectionMode(context.applicationContext)
+                        val started = LocationForegroundService.startProtectionMode(context.applicationContext)
+                        if (!started) {
+                            sendNotification(
+                                context = context.applicationContext,
+                                title = "GeoTrace 24/7 Protection Ready",
+                                content = "Device rebooted. Tap to reactivate background protection & remote ring.",
+                                notificationId = 2099
+                            )
+                        }
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to restore services on boot: ${e.message}")

@@ -108,6 +108,14 @@ class GroupRepository(
     private val _lastSyncTimestampMs = MutableStateFlow<Long?>(null)
     val lastSyncTimestampMs = _lastSyncTimestampMs.asStateFlow()
 
+    private val _lastGroupSyncTimestampMs = MutableStateFlow<Long?>(null)
+    val lastGroupSyncTimestampMs = _lastGroupSyncTimestampMs.asStateFlow()
+
+    private val knownGroupIds = java.util.concurrent.CopyOnWriteArraySet<String>()
+
+    @Volatile
+    private var lastPermissionToastMs: Long = 0L
+
     private val _p2pRingCooldownsMs = MutableStateFlow<Map<String, Long>>(emptyMap())
     val p2pRingCooldownsMs = _p2pRingCooldownsMs.asStateFlow()
 
@@ -117,8 +125,12 @@ class GroupRepository(
 
     fun clearSyncStateOnSignOut() {
         _lastSyncTimestampMs.value = null
+        _lastGroupSyncTimestampMs.value = null
+        knownGroupIds.clear()
         saveSelectedGroupId(null)
     }
+
+    fun getKnownGroupIdsSnapshot(): List<String> = knownGroupIds.toList()
 
     fun setBackgroundProtectionEnabled(enabled: Boolean) {
         prefs.edit().putBoolean("background_protection_enabled", enabled).apply()
@@ -306,6 +318,7 @@ class GroupRepository(
                 createdBy = uid,
                 memberIds = listOf(uid)
             )
+            knownGroupIds.add(docRef.id)
             Result.success(created)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create group: ${e.message}", e)
@@ -341,7 +354,9 @@ class GroupRepository(
                     .update("memberIds", FieldValue.arrayUnion(uid))
                     .await()
             }
-            Result.success(group)
+            knownGroupIds.add(doc.id)
+            val updatedGroup = group.copy(memberIds = (group.memberIds + uid).distinct())
+            Result.success(updatedGroup)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to join group by code: ${e.message}", e)
             Result.failure(e)
@@ -376,6 +391,8 @@ class GroupRepository(
                         null
                     }
                 } ?: emptyList()
+                knownGroupIds.clear()
+                knownGroupIds.addAll(groups.map { it.id })
                 trySend(groups)
             }
 
@@ -418,6 +435,7 @@ class GroupRepository(
             } else {
                 groupRef.update("memberIds", FieldValue.arrayRemove(uid)).await()
             }
+            knownGroupIds.remove(groupId)
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to leave group: ${e.message}", e)
@@ -447,6 +465,7 @@ class GroupRepository(
                 batch.commit().await()
             }
             groupRef.delete().await()
+            knownGroupIds.remove(groupId)
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to delete group: ${e.message}", e)
@@ -530,6 +549,17 @@ class GroupRepository(
             return Result.success(Unit)
         }
 
+        if (!isValidCoordinate(location.latitude, location.longitude)) {
+            return Result.failure(IllegalArgumentException("Invalid GPS coordinates."))
+        }
+
+        val safeDisplayName = displayName.trim().ifBlank { "GeoTrace Device" }.take(50)
+        val safeBattery = batteryPercent.coerceIn(0, 100)
+        val safeAccuracy = if (location.accuracy.isFinite() && location.accuracy >= 0f) location.accuracy else 0f
+        val safeSpeed = if (location.speed.isFinite() && location.speed >= 0f) location.speed else 0f
+        val safeBearing = if (location.bearing.isFinite()) location.bearing else 0f
+        val safeAltitude = if (location.altitude.isFinite()) location.altitude else 0.0
+
         return try {
             val docId = "${uid}_${currentDeviceId}"
             val docRef = db.collection("groups").document(groupId)
@@ -538,18 +568,18 @@ class GroupRepository(
             val payload = mapOf(
                 "userId" to uid,
                 "deviceId" to currentDeviceId,
-                "deviceModel" to android.os.Build.MODEL,
-                "bleTag" to bleTag,
-                "displayName" to displayName,
+                "deviceModel" to android.os.Build.MODEL.take(80),
+                "bleTag" to bleTag.take(16),
+                "displayName" to safeDisplayName,
                 "avatarColor" to avatarColor,
                 "latitude" to location.latitude,
                 "longitude" to location.longitude,
-                "accuracy" to location.accuracy,
-                "speed" to location.speed,
-                "bearing" to location.bearing,
-                "altitude" to location.altitude,
+                "accuracy" to safeAccuracy,
+                "speed" to safeSpeed,
+                "bearing" to safeBearing,
+                "altitude" to safeAltitude,
                 "gait" to location.gaitLabel,
-                "batteryPercent" to batteryPercent,
+                "batteryPercent" to safeBattery,
                 "isCharging" to isCharging,
                 "trackingMode" to trackingMode,
                 "isSharingEnabled" to true,
@@ -557,15 +587,18 @@ class GroupRepository(
             )
 
             docRef.set(payload).await()
-            _lastSyncTimestampMs.value = System.currentTimeMillis()
+            val now = System.currentTimeMillis()
+            _lastSyncTimestampMs.value = now
+            _lastGroupSyncTimestampMs.value = now
 
             if (isP2PAdvertising || isP2PDiscovering || connectedEndpoints.isNotEmpty()) {
-                broadcastP2PLocation(location, displayName, batteryPercent)
+                broadcastP2PLocation(location, safeDisplayName, safeBattery)
             }
 
             Result.success(Unit)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to publish live location to group $groupId: ${e.message}")
+            maybeReportWritePermissionError(e, "group location")
             Result.failure(e)
         }
     }
@@ -585,7 +618,10 @@ class GroupRepository(
                 }
                 val locations = snapshot?.documents?.mapNotNull { doc ->
                     try {
-                        doc.toObject(MemberLocation::class.java)?.copy(id = doc.id)
+                        doc.toObject(
+                            MemberLocation::class.java,
+                            com.google.firebase.firestore.DocumentSnapshot.ServerTimestampBehavior.ESTIMATE
+                        )?.copy(id = doc.id)
                     } catch (e: Exception) {
                         Log.w(TAG, "Skipping malformed member location doc ${doc.id}: ${e.message}")
                         null
@@ -611,6 +647,16 @@ class GroupRepository(
         val uid = auth.currentUser?.uid
             ?: return Result.failure(IllegalStateException("User not signed in."))
 
+        if (!isValidCoordinate(location.latitude, location.longitude)) {
+            return Result.failure(IllegalArgumentException("Invalid GPS coordinates."))
+        }
+
+        val safeDeviceName = _offlineCallsign.value.trim().ifBlank { "GeoTrace Device" }.take(60)
+        val safeBattery = batteryPercent.coerceIn(0, 100)
+        val safeAccuracy = if (location.accuracy.isFinite() && location.accuracy >= 0f) location.accuracy else 0f
+        val safeSpeed = if (location.speed.isFinite() && location.speed >= 0f) location.speed else 0f
+        val safeBearing = if (location.bearing.isFinite()) location.bearing else 0f
+
         return try {
             val docRef = db.collection("users").document(uid)
                 .collection("devices").document(currentDeviceId)
@@ -618,15 +664,15 @@ class GroupRepository(
             val payload = mapOf(
                 "userId" to uid,
                 "deviceId" to currentDeviceId,
-                "deviceName" to _offlineCallsign.value,
-                "deviceModel" to android.os.Build.MODEL,
-                "bleTag" to bleTag,
+                "deviceName" to safeDeviceName,
+                "deviceModel" to android.os.Build.MODEL.take(80),
+                "bleTag" to bleTag.take(16),
                 "latitude" to location.latitude,
                 "longitude" to location.longitude,
-                "accuracy" to location.accuracy,
-                "speed" to location.speed,
-                "bearing" to location.bearing,
-                "batteryPercent" to batteryPercent,
+                "accuracy" to safeAccuracy,
+                "speed" to safeSpeed,
+                "bearing" to safeBearing,
+                "batteryPercent" to safeBattery,
                 "isCharging" to isCharging,
                 "trackingMode" to trackingMode,
                 "lastUpdated" to FieldValue.serverTimestamp()
@@ -637,12 +683,13 @@ class GroupRepository(
             Result.success(Unit)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to update personal device doc: ${e.message}")
+            maybeReportWritePermissionError(e, "device fleet")
             Result.failure(e)
         }
     }
 
     /**
-     * Publishes device fleet location + active tracking group telemetry safely from either foreground UI
+     * Publishes device fleet location + all known joined tracking groups safely from either foreground UI
      * or 24/7 background protection / trail service.
      */
     suspend fun syncDeviceAndGroupTelemetry(
@@ -663,31 +710,51 @@ class GroupRepository(
         )
         if (fleetRes.isSuccess) anySucceeded = true
 
-        if (!explicitGroupId.isNullOrBlank()) {
+        val targetGroupIds = (listOfNotNull(explicitGroupId) + knownGroupIds.toList()).distinct()
+        if (targetGroupIds.isNotEmpty()) {
             val colorPalette = listOf("#2563EB", "#059669", "#D97706", "#DC2626", "#7C3AED", "#DB2777", "#0891B2")
             val avatarColor = colorPalette[(uid.hashCode() and 0x7fffffff) % colorPalette.size]
-            val groupRes = publishLocation(
-                groupId = explicitGroupId,
-                location = location,
-                displayName = displayName,
-                avatarColor = avatarColor,
-                batteryPercent = batteryPercent,
-                isCharging = isCharging,
-                trackingMode = trackingModeName,
-                isSharingEnabled = !_isGhostMode.value
-            )
-            if (groupRes.isSuccess) anySucceeded = true
+            for (groupId in targetGroupIds) {
+                val groupRes = publishLocation(
+                    groupId = groupId,
+                    location = location,
+                    displayName = displayName,
+                    avatarColor = avatarColor,
+                    batteryPercent = batteryPercent,
+                    isCharging = isCharging,
+                    trackingMode = trackingModeName,
+                    isSharingEnabled = !_isGhostMode.value
+                )
+                if (groupRes.isSuccess) anySucceeded = true
+            }
         }
         return anySucceeded
+    }
+
+    private fun maybeReportWritePermissionError(error: Exception, targetLabel: String) {
+        val fsErr = error as? com.google.firebase.firestore.FirebaseFirestoreException ?: return
+        if (fsErr.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+            val now = System.currentTimeMillis()
+            if (now - lastPermissionToastMs >= 60_000L) {
+                lastPermissionToastMs = now
+                _firestoreError.value = "Sync blocked by permissions on $targetLabel. Check sign-in and group membership."
+            }
+        }
     }
 
     fun readBatteryInfo(): Pair<Int, Boolean> {
         return try {
             val intentFilter = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)
             val batteryStatus = context.registerReceiver(null, intentFilter)
-            val level = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: 100
-            val scale = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: 100
-            val batteryPct = if (scale > 0) (level * 100 / scale) else 100
+            val level = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+            val batteryPct = if (level >= 0 && scale > 0) {
+                (level * 100 / scale).coerceIn(0, 100)
+            } else {
+                val bm = context.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
+                val cap = bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+                if (cap in 0..100) cap else 100
+            }
             val status = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
             val isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
                 status == android.os.BatteryManager.BATTERY_STATUS_FULL

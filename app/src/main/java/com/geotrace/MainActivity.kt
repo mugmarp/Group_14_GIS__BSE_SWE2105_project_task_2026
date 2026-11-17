@@ -195,22 +195,34 @@ fun MainAppScreen(
     ) { permissions ->
         val fineGranted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
         val coarseGranted = permissions[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
-        if (fineGranted || coarseGranted) {
+        val postNotifGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions[Manifest.permission.POST_NOTIFICATIONS] ?: false
+        } else false
+        val hasAnyLocation = fineGranted || coarseGranted ||
+            com.geotrace.service.LocationForegroundService.hasLocationPermission(context)
+
+        if (hasAnyLocation && (fineGranted || coarseGranted || postNotifGranted)) {
             scope.launch {
                 viewModel.awaitInitialRestore()
                 val restored = viewModel.activeSession.value
                 if (restored != null) {
                     viewModel.stopStandbyLocationUpdates()
-                    if (!restored.isPaused && !com.geotrace.service.LocationForegroundService.isServiceActive) {
-                        com.geotrace.service.LocationForegroundService.startService(context, restored.trackingMode)
+                    if (!com.geotrace.service.LocationForegroundService.isServiceActive) {
+                        if (restored.isPaused) {
+                            com.geotrace.service.LocationForegroundService.startServicePaused(context, restored.trackingMode)
+                        } else {
+                            com.geotrace.service.LocationForegroundService.startService(context, restored.trackingMode)
+                        }
                     }
-                } else {
+                } else if (!viewModel.hasActiveStandbyUpdates()) {
                     viewModel.startStandbyLocationUpdates()
                 }
-                viewModel.refreshCellTowers()
-                groupViewModel.ensureProtectionStartedIfEligible()
+                if (fineGranted || coarseGranted) {
+                    viewModel.refreshCellTowers()
+                }
+                groupViewModel.ensureProtectionStartedIfEligible(refreshNotification = true)
             }
-            if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+            if ((fineGranted || coarseGranted) && Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
                 }
@@ -236,14 +248,18 @@ fun MainAppScreen(
             val restored = viewModel.activeSession.value
             if (restored != null) {
                 viewModel.stopStandbyLocationUpdates()
-                if (!restored.isPaused && !com.geotrace.service.LocationForegroundService.isServiceActive) {
-                    com.geotrace.service.LocationForegroundService.startService(context, restored.trackingMode)
+                if (!com.geotrace.service.LocationForegroundService.isServiceActive) {
+                    if (restored.isPaused) {
+                        com.geotrace.service.LocationForegroundService.startServicePaused(context, restored.trackingMode)
+                    } else {
+                        com.geotrace.service.LocationForegroundService.startService(context, restored.trackingMode)
+                    }
                 }
             } else if (!viewModel.hasActiveStandbyUpdates()) {
                 viewModel.startStandbyLocationUpdates()
             }
             viewModel.refreshCellTowers()
-            groupViewModel.ensureProtectionStartedIfEligible()
+            groupViewModel.ensureProtectionStartedIfEligible(refreshNotification = true)
             if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
                 if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     backgroundPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)

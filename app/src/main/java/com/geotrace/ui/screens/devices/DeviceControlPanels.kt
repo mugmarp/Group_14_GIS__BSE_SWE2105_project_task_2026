@@ -27,7 +27,9 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
@@ -133,14 +135,20 @@ fun ThisDeviceCompactCard(
     nowMs: Long,
     isGhostMode: Boolean,
     isBackgroundProtectionEnabled: Boolean,
+    isProtectionServiceRunning: Boolean,
+    isProtectionPaused: Boolean,
     hasBgPermission: Boolean,
+    hasNotificationPermission: Boolean,
     isP2PEnabled: Boolean,
     isSyncing: Boolean,
     onEditCallsign: () -> Unit,
     onSyncNow: () -> Unit,
     onToggleGhostMode: () -> Unit,
     onToggleBackgroundProtection: (Boolean) -> Unit,
-    onOpenBgLocationSettings: () -> Unit
+    onPauseBackgroundProtection: () -> Unit,
+    onResumeBackgroundProtection: () -> Unit,
+    onOpenBgLocationSettings: () -> Unit,
+    onOpenNotificationSettings: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
@@ -153,6 +161,24 @@ fun ThisDeviceCompactCard(
         "Cloud ready"
     } else {
         "Offline mode"
+    }
+
+    val badgeLabel = when {
+        isGhostMode -> "GHOST"
+        isProtectionPaused -> "PAUSED"
+        isBackgroundProtectionEnabled && currentUser != null && isProtectionServiceRunning -> "24/7"
+        isBackgroundProtectionEnabled && currentUser != null -> "ARMED"
+        else -> "STANDBY"
+    }
+    val badgeBg = when {
+        isGhostMode || isProtectionPaused || (isBackgroundProtectionEnabled && currentUser != null && !isProtectionServiceRunning) ->
+            customColors.statusWarningBg
+        else -> customColors.statusNominalBg
+    }
+    val badgeTextColor = when {
+        isGhostMode || isProtectionPaused || (isBackgroundProtectionEnabled && currentUser != null && !isProtectionServiceRunning) ->
+            customColors.statusWarningText
+        else -> customColors.statusNominalText
     }
 
     Card(
@@ -183,9 +209,9 @@ fun ThisDeviceCompactCard(
                             overflow = TextOverflow.Ellipsis
                         )
                         StatusChipBadge(
-                            label = if (isGhostMode) "GHOST" else if (isBackgroundProtectionEnabled && currentUser != null) "24/7" else "STANDBY",
-                            bg = if (isGhostMode) customColors.statusWarningBg else customColors.statusNominalBg,
-                            textColor = if (isGhostMode) customColors.statusWarningText else customColors.statusNominalText
+                            label = badgeLabel,
+                            bg = badgeBg,
+                            textColor = badgeTextColor
                         )
                     }
                     Text(
@@ -321,8 +347,11 @@ fun ThisDeviceCompactCard(
                                     text = when {
                                         !isBackgroundProtectionEnabled -> "Only syncs & rings while app is open"
                                         currentUser == null -> "Armed • Sign in to activate"
-                                        !hasBgPermission -> "Needs 'Allow all the time' location for reboot auto-start"
-                                        else -> "Locatable & Remote Ring active when closed"
+                                        isProtectionPaused -> "Paused • Background location sync stopped until resumed"
+                                        !isProtectionServiceRunning -> "Service standby • Tap Resume or check Location permission"
+                                        !hasNotificationPermission -> "Running • Allow Notifications for persistent status bar badge"
+                                        !hasBgPermission -> "Active • Grant 'Allow all the time' location for reboot auto-start"
+                                        else -> "Active • Persistent notification, sync & Remote Ring running"
                                     },
                                     fontSize = 11.sp,
                                     color = colorScheme.onSurfaceVariant
@@ -335,6 +364,53 @@ fun ThisDeviceCompactCard(
                             colors = SwitchDefaults.colors(checkedThumbColor = colorScheme.tertiary),
                             modifier = Modifier.testTag("background_protection_switch")
                         )
+                    }
+
+                    if (isBackgroundProtectionEnabled && currentUser != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (isProtectionPaused || !isProtectionServiceRunning) {
+                                FilledTonalButton(
+                                    onClick = onResumeBackgroundProtection,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f).height(48.dp).testTag("resume_protection_btn")
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        if (isProtectionPaused) "Resume 24/7" else "Start 24/7 Service",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            } else {
+                                OutlinedButton(
+                                    onClick = onPauseBackgroundProtection,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.weight(1f).height(48.dp).testTag("pause_protection_btn")
+                                ) {
+                                    Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Pause 24/7", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+                    }
+
+                    if (isBackgroundProtectionEnabled && currentUser != null && !hasNotificationPermission) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = onOpenNotificationSettings,
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("fix_notif_permission_btn")
+                        ) {
+                            Icon(Icons.Default.NotificationsActive, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Allow Notifications for Status Bar Badge", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
 
                     if (isBackgroundProtectionEnabled && currentUser != null && !hasBgPermission) {

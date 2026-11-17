@@ -27,6 +27,9 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Tune
@@ -73,6 +76,7 @@ import com.geotrace.ui.components.OfflineMapsDialog
 import com.geotrace.ui.screens.devices.BackgroundLocationSettingsDialog
 import com.geotrace.ui.screens.devices.hasBackgroundLocationPermission
 import com.geotrace.ui.screens.devices.openAppLocationSettings
+import com.geotrace.ui.screens.devices.openAppNotificationSettings
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.GroupViewModel
 import com.geotrace.viewmodel.TrackerViewModel
@@ -128,9 +132,23 @@ fun SettingsScreen(
         }
     }
 
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    var permissionRefreshTick by remember { mutableStateOf(0) }
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                permissionRefreshTick++
+                groupViewModel?.ensureProtectionStartedIfEligible(refreshNotification = true)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     val protectionBgPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
     ) { granted ->
+        permissionRefreshTick++
         if (!granted && !hasBackgroundLocationPermission(context)) {
             showBgSettingsDialog = true
         }
@@ -139,9 +157,11 @@ fun SettingsScreen(
     val protectionPermissionsLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
-        val fineOrCoarse = (grants[android.Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
-            (grants[android.Manifest.permission.ACCESS_COARSE_LOCATION] == true)
-        if (fineOrCoarse) {
+        permissionRefreshTick++
+        val hasLocation = (grants[android.Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
+            (grants[android.Manifest.permission.ACCESS_COARSE_LOCATION] == true) ||
+            com.geotrace.service.LocationForegroundService.hasLocationPermission(context)
+        if (hasLocation) {
             groupViewModel?.toggleBackgroundProtection(true)
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q &&
                 !hasBackgroundLocationPermission(context)
@@ -573,13 +593,15 @@ fun SettingsScreen(
 
                 if (groupViewModel != null) {
                     val isProtectionEnabled by groupViewModel.isBackgroundProtectionEnabled.collectAsState()
+                    val isProtectionRunning by groupViewModel.isProtectionServiceRunning.collectAsState()
+                    val isProtectionPaused by groupViewModel.isProtectionPaused.collectAsState()
                     val currentUser by groupViewModel.currentUser.collectAsState()
-                    val hasBgLocation = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
-                        androidx.core.content.ContextCompat.checkSelfPermission(
-                            context,
-                            android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
-                        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-                    } else true
+                    val hasBgLocation = remember(permissionRefreshTick) {
+                        hasBackgroundLocationPermission(context)
+                    }
+                    val hasNotifPermission = remember(permissionRefreshTick) {
+                        com.geotrace.service.LocationForegroundService.hasNotificationPermission(context)
+                    }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
@@ -588,8 +610,11 @@ fun SettingsScreen(
                         subtitle = when {
                             !isProtectionEnabled -> "OFF — Only syncs location & rings while GeoTrace is open"
                             currentUser == null -> "ON by default • Sign in on Devices tab to activate"
+                            isProtectionPaused -> "PAUSED — Persistent indicator active; background sync stopped until resumed"
+                            !isProtectionRunning -> "STANDBY — Grant Location permission or tap Start 24/7 Service"
+                            !hasNotifPermission -> "Running • Allow Notifications for persistent status bar badge"
                             !hasBgLocation -> "Active • Grant 'Allow all the time' location for reboot auto-start"
-                            else -> "ON — Locatable & Remote Ring active even when app is closed"
+                            else -> "ON — Persistent notification, sync & Remote Ring active even when closed"
                         },
                         checked = isProtectionEnabled,
                         switchTestTag = "settings_background_protection_switch",
@@ -628,6 +653,48 @@ fun SettingsScreen(
                             }
                         }
                     )
+
+                    if (isProtectionEnabled && currentUser != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        if (isProtectionPaused || !isProtectionRunning) {
+                            androidx.compose.material3.FilledTonalButton(
+                                onClick = { groupViewModel.resumeBackgroundProtection() },
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("settings_resume_protection_btn")
+                            ) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    if (isProtectionPaused) "Resume 24/7 Protection" else "Start 24/7 Service",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        } else {
+                            OutlinedButton(
+                                onClick = { groupViewModel.pauseBackgroundProtection() },
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.fillMaxWidth().height(48.dp).testTag("settings_pause_protection_btn")
+                            ) {
+                                Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Pause 24/7 Protection", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+
+                    if (isProtectionEnabled && currentUser != null && !hasNotifPermission) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedButton(
+                            onClick = { openAppNotificationSettings(context) },
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth().height(48.dp).testTag("settings_fix_notif_btn")
+                        ) {
+                            Icon(Icons.Default.NotificationsActive, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Allow Notifications for Status Badge", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
                 }
             }
         }

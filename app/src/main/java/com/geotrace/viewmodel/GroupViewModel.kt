@@ -16,6 +16,10 @@ import com.geotrace.model.P2PMeshState
 import com.geotrace.model.P2PPeer
 import com.geotrace.model.PersonalDevice
 import com.geotrace.service.FindDeviceAlarmManager
+import com.geotrace.service.LocationForegroundService
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import com.google.firebase.Firebase
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -28,8 +32,11 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
@@ -40,6 +47,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = (application as LocationTrackerApp).groupRepository
     private val locationRepository = (application as LocationTrackerApp).repository
     private val auth: FirebaseAuth = Firebase.auth
+    private val fusedLocationClient = LocationServices.getFusedLocationProviderClient(application)
 
     val currentDeviceId: String = repository.currentDeviceId
 
@@ -52,11 +60,13 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         _currentUser.value = nextUser
         if (nextUser != null) {
             repository.ensurePersonalDevicesListenerActive()
-            if (repository.isBackgroundProtectionEnabled.value && locationRepository.activeSession.value == null) {
-                com.geotrace.service.LocationForegroundService.startProtectionMode(getApplication())
-            }
+            ensureProtectionStartedIfEligible(refreshNotification = true)
             if (prevUser == null || prevUser.uid != nextUser.uid) {
-                triggerImmediateBroadcast()
+                if (locationRepository.currentLocation.value == null) {
+                    seedLocationIfMissingAndBroadcast()
+                } else {
+                    triggerImmediateBroadcast()
+                }
             }
         } else {
             if (prevUser != null) {
@@ -65,7 +75,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                 repository.clearSyncStateOnSignOut()
             }
             if (locationRepository.activeSession.value == null) {
-                com.geotrace.service.LocationForegroundService.stopProtectionMode(
+                LocationForegroundService.stopProtectionMode(
                     getApplication(),
                     disablePreference = false
                 )
@@ -75,8 +85,10 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val userGroups: StateFlow<List<Group>> = _currentUser
-        .flatMapLatest { user ->
-            if (user != null) {
+        .map { it?.uid }
+        .distinctUntilChanged()
+        .flatMapLatest { uid ->
+            if (uid != null) {
                 repository.observeUserGroups()
                     .retryWhen { cause, attempt ->
                         if (cause is CancellationException) {
@@ -103,11 +115,16 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     private val _activeGroup = MutableStateFlow<Group?>(null)
     val activeGroup: StateFlow<Group?> = _activeGroup.asStateFlow()
 
+    private val groupMembersRefreshTick = MutableStateFlow(0)
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    val groupMembers: StateFlow<List<MemberLocation>> = _activeGroup
-        .flatMapLatest { group ->
-            if (group != null) {
-                repository.observeGroupLocations(group.id)
+    val groupMembers: StateFlow<List<MemberLocation>> = combine(
+        _activeGroup.map { it?.id }.distinctUntilChanged(),
+        groupMembersRefreshTick
+    ) { groupId, _ -> groupId }
+        .flatMapLatest { groupId ->
+            if (!groupId.isNullOrBlank()) {
+                repository.observeGroupLocations(groupId)
                     .retryWhen { cause, attempt ->
                         if (cause is CancellationException) {
                             false
@@ -138,6 +155,8 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
     val isGhostMode: StateFlow<Boolean> = repository.isGhostMode
     val isBackgroundProtectionEnabled: StateFlow<Boolean> = repository.isBackgroundProtectionEnabled
+    val isProtectionServiceRunning: StateFlow<Boolean> = LocationForegroundService.isProtectionRunningFlow
+    val isProtectionPaused: StateFlow<Boolean> = LocationForegroundService.isProtectionPausedFlow
 
     private val _isP2PEnabled = MutableStateFlow(false)
     val isP2PEnabled: StateFlow<Boolean> = _isP2PEnabled.asStateFlow()
@@ -164,13 +183,12 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         auth.addAuthStateListener(authListener)
-        if (auth.currentUser != null && repository.isBackgroundProtectionEnabled.value && locationRepository.activeSession.value == null) {
-            com.geotrace.service.LocationForegroundService.startProtectionMode(getApplication())
-        }
+        ensureProtectionStartedIfEligible(refreshNotification = false)
         repository.onPeerConnectedCallback = { _ ->
             triggerImmediateBroadcast()
         }
         startBroadcastSyncLoop()
+        observeLocationAndGroupForCloudSync()
         observeLocationForP2P()
         viewModelScope.launch {
             userGroups.collect { groups ->
@@ -203,6 +221,36 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    private fun observeLocationAndGroupForCloudSync() {
+        viewModelScope.launch {
+            combine(
+                _currentUser.map { it?.uid }.distinctUntilChanged(),
+                _activeGroup.map { it?.id }.distinctUntilChanged(),
+                locationRepository.currentLocation,
+                isGhostMode
+            ) { uid, groupId, loc, ghost ->
+                SyncTriggerSnapshot(uid, groupId, loc, ghost)
+            }.collect { snapshot ->
+                if (snapshot.uid == null || snapshot.loc == null) return@collect
+                val now = System.currentTimeMillis()
+                val elapsedGroup = now - (repository.lastGroupSyncTimestampMs.value ?: 0L)
+                val elapsedFleet = now - (repository.lastSyncTimestampMs.value ?: 0L)
+                val shouldPublishGroup = !snapshot.groupId.isNullOrBlank() && elapsedGroup >= 4_000L
+                val shouldPublishFleet = elapsedFleet >= 9_000L
+                if (shouldPublishGroup || shouldPublishFleet) {
+                    performBroadcast(_activeGroup.value, snapshot.loc)
+                }
+            }
+        }
+    }
+
+    private data class SyncTriggerSnapshot(
+        val uid: String?,
+        val groupId: String?,
+        val loc: LocationPoint?,
+        val ghost: Boolean
+    )
 
     private fun observeLocationForP2P() {
         viewModelScope.launch {
@@ -256,7 +304,11 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                 _activeGroup.value = created
                 repository.saveSelectedGroupId(created.id)
                 _statusMessage.value = "Group '${created.name}' created! Share code: ${created.inviteCode}"
-                triggerImmediateBroadcast()
+                if (locationRepository.currentLocation.value != null) {
+                    triggerImmediateBroadcast()
+                } else {
+                    seedLocationIfMissingAndBroadcast()
+                }
             }.onFailure { e ->
                 _errorMessage.value = e.localizedMessage ?: "Failed to create group."
             }
@@ -280,7 +332,11 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                 _activeGroup.value = joined
                 repository.saveSelectedGroupId(joined.id)
                 _statusMessage.value = "Joined group '${joined.name}'!"
-                triggerImmediateBroadcast()
+                if (locationRepository.currentLocation.value != null) {
+                    triggerImmediateBroadcast()
+                } else {
+                    seedLocationIfMissingAndBroadcast()
+                }
             }.onFailure { e ->
                 _errorMessage.value = e.localizedMessage ?: "Failed to join group."
             }
@@ -376,41 +432,87 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
             "Ghost Mode OFF: Live group sharing resumed"
         }
         if (newMode) {
-            val activeId = _activeGroup.value?.id
-            if (!activeId.isNullOrBlank()) {
+            val activeIds = (userGroups.value.map { it.id } + repository.getKnownGroupIdsSnapshot() + listOfNotNull(_activeGroup.value?.id)).distinct()
+            if (activeIds.isNotEmpty()) {
                 viewModelScope.launch {
-                    repository.clearGroupPresence(activeId)
+                    for (groupId in activeIds) {
+                        repository.clearGroupPresence(groupId)
+                    }
                 }
             }
         }
-        if (repository.isBackgroundProtectionActiveAndSignedIn() && locationRepository.activeSession.value == null) {
-            com.geotrace.service.LocationForegroundService.startProtectionMode(getApplication())
-        }
+        ensureProtectionStartedIfEligible(refreshNotification = true)
         triggerImmediateBroadcast()
     }
 
     fun toggleBackgroundProtection(enabled: Boolean) {
+        val context = getApplication<Application>()
         repository.setBackgroundProtectionEnabled(enabled)
         if (enabled) {
             if (auth.currentUser != null) {
-                val started = com.geotrace.service.LocationForegroundService.startProtectionMode(getApplication())
-                _statusMessage.value = if (started) {
-                    "24/7 Protection ON: This device stays locatable & ringable even when closed."
-                } else {
-                    "24/7 Protection saved — grant Location permission to start background listener."
+                val started = LocationForegroundService.startProtectionMode(context, forceResume = true)
+                val hasNotif = LocationForegroundService.hasNotificationPermission(context)
+                _statusMessage.value = when {
+                    !started -> "24/7 Protection saved — grant Location permission to start background listener."
+                    !hasNotif -> "24/7 Protection active — allow Notifications in Settings to keep status bar badge visible."
+                    else -> "24/7 Protection ON: Persistent status bar indicator & background sync active."
                 }
             } else {
                 _statusMessage.value = "24/7 Protection enabled — sign in with Google to activate."
             }
         } else {
-            com.geotrace.service.LocationForegroundService.stopProtectionMode(getApplication())
+            LocationForegroundService.stopProtectionMode(context, disablePreference = true)
             _statusMessage.value = "24/7 Protection OFF: Background sync & Remote Ring paused when closed."
         }
     }
 
-    fun ensureProtectionStartedIfEligible() {
-        if (repository.isBackgroundProtectionActiveAndSignedIn() && locationRepository.activeSession.value == null) {
-            com.geotrace.service.LocationForegroundService.startProtectionMode(getApplication())
+    fun pauseBackgroundProtection() {
+        val context = getApplication<Application>()
+        LocationForegroundService.pauseProtectionMode(context)
+        _statusMessage.value = "24/7 Protection paused — tap Resume anytime to continue background sync."
+    }
+
+    fun resumeBackgroundProtection() {
+        val context = getApplication<Application>()
+        if (auth.currentUser == null) {
+            _statusMessage.value = "Sign in with Google to resume 24/7 Protection."
+            return
+        }
+        if (!repository.isBackgroundProtectionEnabled.value) {
+            repository.setBackgroundProtectionEnabled(true)
+        }
+        val started = LocationForegroundService.resumeProtectionMode(context)
+        val hasNotif = LocationForegroundService.hasNotificationPermission(context)
+        _statusMessage.value = when {
+            !started -> "Grant Location permission to resume 24/7 Protection."
+            !hasNotif -> "24/7 Protection resumed — allow Notifications to keep status badge visible."
+            else -> "24/7 Protection resumed."
+        }
+    }
+
+    fun ensureProtectionStartedIfEligible(refreshNotification: Boolean = false) {
+        val context = getApplication<Application>()
+        val activeSess = locationRepository.activeSession.value
+        if (activeSess != null) {
+            if (!LocationForegroundService.isServiceActive && LocationForegroundService.hasLocationPermission(context)) {
+                if (activeSess.isPaused) {
+                    LocationForegroundService.startServicePaused(context, activeSess.trackingMode)
+                } else {
+                    LocationForegroundService.startService(context, activeSess.trackingMode)
+                }
+            } else if (refreshNotification) {
+                LocationForegroundService.refreshProtectionNotification(context)
+            }
+            return
+        }
+        if (repository.isBackgroundProtectionActiveAndSignedIn() && LocationForegroundService.hasLocationPermission(context)) {
+            if (LocationForegroundService.isServiceActive) {
+                if (refreshNotification) {
+                    LocationForegroundService.refreshProtectionNotification(context)
+                }
+            } else {
+                LocationForegroundService.startProtectionMode(context)
+            }
         }
     }
 
@@ -499,16 +601,17 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun syncNow() {
-        val loc = locationRepository.currentLocation.value
-        if (loc == null) {
-            _errorMessage.value = "Waiting for GPS or cellular fix before syncing."
-            return
-        }
+        groupMembersRefreshTick.value += 1
         val group = _activeGroup.value
         val p2pActive = _isP2PEnabled.value
         val isSignedIn = auth.currentUser != null
         if (group == null && !p2pActive && !isSignedIn) {
             _errorMessage.value = "Sign in or enable Off-Grid P2P to broadcast your location."
+            return
+        }
+        val loc = locationRepository.currentLocation.value
+        if (loc == null) {
+            seedLocationIfMissingAndBroadcast(forceUiFeedback = true)
             return
         }
         viewModelScope.launch {
@@ -585,6 +688,85 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    @android.annotation.SuppressLint("MissingPermission")
+    private fun seedLocationIfMissingAndBroadcast(forceUiFeedback: Boolean = false) {
+        val context = getApplication<Application>()
+        if (!LocationForegroundService.hasLocationPermission(context)) {
+            if (forceUiFeedback) {
+                _errorMessage.value = "Grant Location permission to sync your device position."
+            }
+            return
+        }
+        if (forceUiFeedback) {
+            _isSyncing.value = true
+        }
+        try {
+            fusedLocationClient.lastLocation.addOnSuccessListener { lastLoc ->
+                if (lastLoc != null) {
+                    applySeededLocation(lastLoc, forceUiFeedback)
+                } else {
+                    val tokenSource = CancellationTokenSource()
+                    fusedLocationClient.getCurrentLocation(Priority.PRIORITY_BALANCED_POWER_ACCURACY, tokenSource.token)
+                        .addOnSuccessListener { quickLoc ->
+                            if (quickLoc != null) {
+                                applySeededLocation(quickLoc, forceUiFeedback)
+                            } else if (forceUiFeedback) {
+                                _isSyncing.value = false
+                                _errorMessage.value = "Waiting for GPS or Wi-Fi fix before syncing."
+                            }
+                        }
+                        .addOnFailureListener {
+                            if (forceUiFeedback) {
+                                _isSyncing.value = false
+                                _errorMessage.value = "Waiting for GPS or cellular fix before syncing."
+                            }
+                        }
+                }
+            }.addOnFailureListener {
+                if (forceUiFeedback) {
+                    _isSyncing.value = false
+                    _errorMessage.value = "Waiting for GPS or cellular fix before syncing."
+                }
+            }
+        } catch (_: SecurityException) {
+            if (forceUiFeedback) {
+                _isSyncing.value = false
+                _errorMessage.value = "Location permission required to sync."
+            }
+        } catch (_: Exception) {
+            if (forceUiFeedback) {
+                _isSyncing.value = false
+            }
+        }
+    }
+
+    private fun applySeededLocation(loc: android.location.Location, showToast: Boolean) {
+        val normalizedTime = loc.time.takeIf { it > 0L } ?: System.currentTimeMillis()
+        val point = LocationPoint(
+            latitude = loc.latitude,
+            longitude = loc.longitude,
+            accuracy = loc.accuracy,
+            speed = if (loc.hasSpeed()) loc.speed else 0f,
+            altitude = if (loc.hasAltitude()) loc.altitude else 0.0,
+            bearing = if (loc.hasBearing()) loc.bearing else 0f,
+            provider = loc.provider ?: "fused",
+            timestamp = normalizedTime,
+            sessionId = locationRepository.activeSession.value?.id ?: "group_seed"
+        )
+        viewModelScope.launch {
+            locationRepository.recordLocation(point)
+            val ok = performBroadcast(_activeGroup.value, point)
+            if (showToast) {
+                _isSyncing.value = false
+                if (ok) {
+                    _statusMessage.value = "Live telemetry synced."
+                } else {
+                    _errorMessage.value = "Sync incomplete — check network connection."
+                }
+            }
+        }
+    }
+
     private suspend fun performBroadcast(group: Group?, loc: LocationPoint): Boolean {
         val context = getApplication<Application>()
         val (batteryLevel, isCharging) = getBatteryInfo(context)
@@ -603,21 +785,23 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
             if (fleetRes.isSuccess) anySucceeded = true
         }
 
-        val colorPalette = listOf("#2563EB", "#059669", "#D97706", "#DC2626", "#7C3AED", "#DB2777", "#0891B2")
-        val avatarColor = colorPalette[((auth.currentUser?.uid ?: "").hashCode() and 0x7fffffff) % colorPalette.size]
-
-        if (group != null) {
-            val groupRes = repository.publishLocation(
-                groupId = group.id,
-                location = loc,
-                displayName = displayName,
-                avatarColor = avatarColor,
-                batteryPercent = batteryLevel,
-                isCharging = isCharging,
-                trackingMode = mode,
-                isSharingEnabled = !isGhostMode.value
-            )
-            if (groupRes.isSuccess) anySucceeded = true
+        val targetGroupIds = (userGroups.value.map { it.id } + repository.getKnownGroupIdsSnapshot() + listOfNotNull(group?.id)).distinct()
+        if (targetGroupIds.isNotEmpty() && auth.currentUser != null) {
+            val colorPalette = listOf("#2563EB", "#059669", "#D97706", "#DC2626", "#7C3AED", "#DB2777", "#0891B2")
+            val avatarColor = colorPalette[((auth.currentUser?.uid ?: "").hashCode() and 0x7fffffff) % colorPalette.size]
+            for (groupId in targetGroupIds) {
+                val groupRes = repository.publishLocation(
+                    groupId = groupId,
+                    location = loc,
+                    displayName = displayName,
+                    avatarColor = avatarColor,
+                    batteryPercent = batteryLevel,
+                    isCharging = isCharging,
+                    trackingMode = mode,
+                    isSharingEnabled = !isGhostMode.value
+                )
+                if (groupRes.isSuccess) anySucceeded = true
+            }
         } else if (_isP2PEnabled.value && !isGhostMode.value) {
             repository.broadcastP2PLocationDirect(loc, displayName, batteryLevel)
             lastP2PLocationPushMs = System.currentTimeMillis()
@@ -631,9 +815,15 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         return try {
             val intentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
             val batteryStatus = context.registerReceiver(null, intentFilter)
-            val level = batteryStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: 100
-            val scale = batteryStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: 100
-            val batteryPct = if (scale > 0) (level * 100 / scale) else 100
+            val level = batteryStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = batteryStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+            val batteryPct = if (level >= 0 && scale > 0) {
+                (level * 100 / scale).coerceIn(0, 100)
+            } else {
+                val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+                val cap = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
+                if (cap in 0..100) cap else 100
+            }
             val status = batteryStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
             val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
             Pair(batteryPct, isCharging)

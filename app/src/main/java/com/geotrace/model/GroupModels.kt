@@ -1,13 +1,16 @@
 package com.geotrace.model
 
+import androidx.annotation.Keep
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentId
 import com.google.firebase.firestore.IgnoreExtraProperties
+import com.google.firebase.firestore.PropertyName
 import com.google.firebase.firestore.ServerTimestamp
 
 /**
  * Group representing a shared multi-user or multi-device tracking group.
  */
+@Keep
 @IgnoreExtraProperties
 data class Group(
     @DocumentId val id: String = "",
@@ -22,6 +25,7 @@ data class Group(
  * Real-time live telemetry published by an individual device within a group.
  * Document ID uses `{userId}_{deviceId}` so a user with multiple devices does not overwrite themselves.
  */
+@Keep
 @IgnoreExtraProperties
 data class MemberLocation(
     @DocumentId val id: String = "",
@@ -39,8 +43,12 @@ data class MemberLocation(
     val altitude: Double = 0.0,
     val gait: String = "Stationary",
     val batteryPercent: Int = 100,
+    @get:PropertyName("isCharging")
+    @PropertyName("isCharging")
     val isCharging: Boolean = false,
     val trackingMode: String = "BALANCED",
+    @get:PropertyName("isSharingEnabled")
+    @PropertyName("isSharingEnabled")
     val isSharingEnabled: Boolean = true,
     @ServerTimestamp val lastUpdated: Timestamp? = null
 ) {
@@ -70,6 +78,7 @@ data class MemberLocation(
 /**
  * A personal phone or tablet signed into the user's Google account under `/users/{uid}/devices/{deviceId}`.
  */
+@Keep
 @IgnoreExtraProperties
 data class PersonalDevice(
     @DocumentId val id: String = "",
@@ -84,6 +93,8 @@ data class PersonalDevice(
     val speed: Float = 0f,
     val bearing: Float = 0f,
     val batteryPercent: Int = 100,
+    @get:PropertyName("isCharging")
+    @PropertyName("isCharging")
     val isCharging: Boolean = false,
     val trackingMode: String = "BALANCED",
     val ringRequestedAt: Long = 0L,
