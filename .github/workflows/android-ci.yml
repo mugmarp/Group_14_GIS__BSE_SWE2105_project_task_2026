@@ -133,8 +133,11 @@ jobs:
             VERSION="1.0.${{ github.run_number }}"
           fi
 
-          echo "VERSION_NAME=$VERSION" >> $GITHUB_OUTPUT
-
+          # echo "VERSION_NAME=$VERSION" >> $GITHUB_OUTPUT
+          
+          
+          # Trim any whitespace
+          VERSION=$(echo "$VERSION" | xargs) echo "VERSION_NAME=$VERSION" >> $GITHUB_OUTPUT
           # Compute integer version code: MAJOR * 10000 + MINOR * 100 + PATCH
           # Fallback to run number if not semver
           if [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
@@ -246,3 +249,4 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+          fail_on_unmatched_files: true
