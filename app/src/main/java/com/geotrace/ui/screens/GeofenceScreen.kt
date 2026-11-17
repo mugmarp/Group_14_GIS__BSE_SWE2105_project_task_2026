@@ -64,6 +64,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -168,7 +170,8 @@ fun GeofenceScreen(
                         category = draft.category,
                         colorHex = draft.colorHex,
                         alertOnEntry = draft.alertOnEntry,
-                        alertOnExit = draft.alertOnExit
+                        alertOnExit = draft.alertOnExit,
+                        isEnabled = draft.isEnabled
                     )
             }
             viewModel.clearGeofencePickDraft()
@@ -406,8 +409,13 @@ fun GeofenceScreen(
                                     .padding(vertical = 12.dp, horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.SpaceAround
                             ) {
-                                val insideCount = zones.count { it.isInside }
-                                StatBox("TOTAL ZONES", "${zones.size}", colorScheme.primary)
+                                val enabledCount = zones.count { it.isEnabled }
+                                val insideCount = zones.count { it.isEnabled && it.isInside }
+                                StatBox(
+                                    "ACTIVE ZONES",
+                                    "$enabledCount/${zones.size}",
+                                    if (enabledCount > 0) colorScheme.primary else colorScheme.onSurfaceVariant
+                                )
                                 StatBox(
                                     "INSIDE SAFE ZONE",
                                     "$insideCount",
@@ -478,19 +486,20 @@ fun GeofenceScreen(
                     // Immediate Active Monitored Perimeters List
                     item {
                         Spacer(modifier = Modifier.height(2.dp))
+                        val enabledCount = zones.count { it.isEnabled }
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Active Monitored Perimeters (${zones.size})",
+                                text = "Safe Zones & Perimeters ($enabledCount/${zones.size} active)",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = colorScheme.primary
                             )
                             Text(
-                                text = "Editable Radius & Security",
+                                text = "Toggle On/Off & Edit",
                                 fontSize = 10.sp,
                                 color = colorScheme.onSurfaceVariant
                             )
@@ -551,6 +560,9 @@ fun GeofenceScreen(
                                 zone = zone,
                                 distanceMeters = distMeters,
                                 hysteresisMeters = settings.geofenceHysteresisMeters,
+                                onToggleEnabled = { enabled ->
+                                    viewModel.toggleGeofenceEnabled(zone.id, enabled)
+                                },
                                 onLocate = if (onLocateOnMap != null) {
                                     { onLocateOnMap(zone) }
                                 } else null,
@@ -682,7 +694,8 @@ fun GeofenceScreen(
                     category = updated.category,
                     colorHex = updated.colorHex,
                     alertOnEntry = updated.alertOnEntry,
-                    alertOnExit = updated.alertOnExit
+                    alertOnExit = updated.alertOnExit,
+                    isEnabled = updated.isEnabled
                 )
                 showAddDialog = false
                 preloadedPreset = null
@@ -724,6 +737,7 @@ private fun GeofenceZoneCard(
     zone: GeofenceZone,
     distanceMeters: Double?,
     hysteresisMeters: Float,
+    onToggleEnabled: (Boolean) -> Unit,
     onLocate: (() -> Unit)? = null,
     onEdit: () -> Unit,
     onDelete: () -> Unit
@@ -739,19 +753,24 @@ private fun GeofenceZoneCard(
         GeofenceCategory.CUSTOM -> colorScheme.primary
     }
 
+    val borderColor = when {
+        !zone.isEnabled -> colorScheme.outlineVariant.copy(alpha = 0.6f)
+        zone.isInside -> colorScheme.tertiary
+        else -> colorScheme.outline.copy(alpha = 0.35f)
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("geofence_card_${zone.id}"),
         shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-        border = androidx.compose.foundation.BorderStroke(
-            1.2.dp,
-            if (zone.isInside) colorScheme.tertiary else colorScheme.outline.copy(alpha = 0.35f)
-        )
+        colors = CardDefaults.cardColors(
+            containerColor = if (zone.isEnabled) colorScheme.surface else customColors.surfaceContainerLow
+        ),
+        border = BorderStroke(1.2.dp, borderColor)
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
-            // Top Row: Category Icon + Zone Name + Inside/Outside State
+            // Top Row: Category Icon + Zone Name + Status Pill + On/Off Switch
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -764,7 +783,10 @@ private fun GeofenceZoneCard(
                     Box(
                         modifier = Modifier
                             .size(32.dp)
-                            .background(categoryColor.copy(alpha = 0.15f), RoundedCornerShape(8.dp)),
+                            .background(
+                                categoryColor.copy(alpha = if (zone.isEnabled) 0.15f else 0.08f),
+                                RoundedCornerShape(8.dp)
+                            ),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(zone.category.iconEmoji, fontSize = 15.sp)
@@ -775,27 +797,53 @@ private fun GeofenceZoneCard(
                             text = zone.name,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
-                            color = colorScheme.onSurface
+                            color = if (zone.isEnabled) colorScheme.onSurface else colorScheme.onSurfaceVariant
                         )
                         Text(
                             text = zone.category.label,
                             fontSize = 10.sp,
-                            color = categoryColor,
+                            color = if (zone.isEnabled) categoryColor else colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (zone.isInside) colorScheme.tertiary.copy(alpha = 0.15f) else colorScheme.surfaceVariant
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = if (zone.isInside) "🟢 INSIDE ZONE" else "OUTSIDE",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (zone.isInside) colorScheme.tertiary else colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = when {
+                            !zone.isEnabled -> colorScheme.surfaceVariant
+                            zone.isInside -> colorScheme.tertiary.copy(alpha = 0.15f)
+                            else -> colorScheme.primary.copy(alpha = 0.12f)
+                        }
+                    ) {
+                        Text(
+                            text = when {
+                                !zone.isEnabled -> "OFF"
+                                zone.isInside -> "🟢 INSIDE ZONE"
+                                else -> "ACTIVE"
+                            },
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = when {
+                                !zone.isEnabled -> colorScheme.onSurfaceVariant
+                                zone.isInside -> colorScheme.tertiary
+                                else -> colorScheme.primary
+                            },
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+
+                    Switch(
+                        checked = zone.isEnabled,
+                        onCheckedChange = onToggleEnabled,
+                        colors = SwitchDefaults.colors(checkedThumbColor = colorScheme.primary),
+                        modifier = Modifier.testTag("toggle_geofence_${zone.id}")
                     )
                 }
             }
@@ -1004,6 +1052,10 @@ private fun GeofenceEditDialog(
         mutableStateOf(draft?.alertOnExit ?: initialZone?.alertOnExit ?: true)
     }
 
+    var isEnabled by remember(draft?.latitude, draft?.longitude, preset?.name, initialZone?.id, isNew) {
+        mutableStateOf(draft?.isEnabled ?: initialZone?.isEnabled ?: false)
+    }
+
     val parsedLat = lat.trim().toDoubleOrNull()
     val parsedLon = lon.trim().toDoubleOrNull()
     val isLatValid = parsedLat != null && parsedLat.isFinite() && parsedLat in -90.0..90.0
@@ -1166,6 +1218,7 @@ private fun GeofenceEditDialog(
                                                     colorHex = colorHex,
                                                     alertOnEntry = alertOnEntry,
                                                     alertOnExit = alertOnExit,
+                                                    isEnabled = isEnabled,
                                                     latitude = pickLat,
                                                     longitude = pickLon
                                                 )
@@ -1271,6 +1324,41 @@ private fun GeofenceEditDialog(
                             )
                             Text("Notify on Perimeter Exit", fontSize = 11.sp, color = colorScheme.onSurface)
                         }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(
+                                    colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                    RoundedCornerShape(10.dp)
+                                )
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Enable Zone on Map & Monitoring",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Zones start off by default until turned on",
+                                    fontSize = 10.sp,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Switch(
+                                checked = isEnabled,
+                                onCheckedChange = { isEnabled = it },
+                                colors = SwitchDefaults.colors(checkedThumbColor = colorScheme.primary),
+                                modifier = Modifier.testTag("geofence_enabled_switch")
+                            )
+                        }
                     }
                 }
             }
@@ -1291,7 +1379,8 @@ private fun GeofenceEditDialog(
                         colorHex = colorHex,
                         alertOnEntry = alertOnEntry,
                         alertOnExit = alertOnExit,
-                        isInside = initialZone?.isInside ?: false,
+                        isEnabled = isEnabled,
+                        isInside = if (isEnabled) (initialZone?.isInside ?: false) else false,
                         lastTransitionTime = initialZone?.lastTransitionTime
                     )
                     onSave(zone)

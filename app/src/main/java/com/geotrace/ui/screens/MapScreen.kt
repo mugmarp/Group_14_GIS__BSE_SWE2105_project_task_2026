@@ -1128,7 +1128,7 @@ fun MapScreen(
                 }
 
                 // Live Geofence Zone Proximity Chip (Active Perimeter Alert)
-                val activeZone = geofenceZones.firstOrNull { it.isInside }
+                val activeZone = geofenceZones.firstOrNull { it.isEnabled && it.isInside }
                 if (activeZone != null) {
                     val isHotspot = activeZone.category == com.geotrace.model.GeofenceCategory.BODA_HOTSPOT
                     Surface(

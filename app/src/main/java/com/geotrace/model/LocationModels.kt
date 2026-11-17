@@ -209,7 +209,8 @@ data class GeofenceZone(
     val alertOnEntry: Boolean = true,
     val alertOnExit: Boolean = true,
     val isInside: Boolean = false,
-    val lastTransitionTime: Long? = null
+    val lastTransitionTime: Long? = null,
+    val isEnabled: Boolean = false
 )
 
 data class GeofenceAlert(

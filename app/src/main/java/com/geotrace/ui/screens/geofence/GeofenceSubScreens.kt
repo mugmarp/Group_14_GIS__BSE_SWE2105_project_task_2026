@@ -391,9 +391,10 @@ internal fun GeofenceAlertsPrecisionSubScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val academicTotal = zones.count { it.category.isAcademicZone }
+                            val enabledZones = zones.filter { it.isEnabled }
+                            val academicEnabled = enabledZones.count { it.category.isAcademicZone }
                             Text(
-                                text = "GeofencingClient: $academicTotal academic / ${zones.size} total zones",
+                                text = "GeofencingClient: ${enabledZones.size} enabled ($academicEnabled academic) / ${zones.size} saved",
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
                                 color = colorScheme.onSurfaceVariant,
@@ -648,7 +649,9 @@ internal fun GeofencePresetsSubScreen(
         }
 
         items(presets) { preset ->
-            val alreadyExists = zones.any { it.name.equals(preset.name, ignoreCase = true) }
+            val matchingZone = zones.firstOrNull { it.name.equals(preset.name, ignoreCase = true) }
+            val alreadyExists = matchingZone != null
+            val isZoneEnabled = matchingZone?.isEnabled == true
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -658,7 +661,11 @@ internal fun GeofencePresetsSubScreen(
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                 border = BorderStroke(
                     1.dp,
-                    if (alreadyExists) colorScheme.primary.copy(alpha = 0.55f) else colorScheme.outlineVariant
+                    when {
+                        isZoneEnabled -> colorScheme.tertiary.copy(alpha = 0.55f)
+                        alreadyExists -> colorScheme.primary.copy(alpha = 0.35f)
+                        else -> colorScheme.outlineVariant
+                    }
                 )
             ) {
                 Row(
@@ -693,8 +700,11 @@ internal fun GeofencePresetsSubScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = if (alreadyExists) colorScheme.tertiary.copy(alpha = 0.15f)
-                        else colorScheme.primary.copy(alpha = 0.12f)
+                        color = when {
+                            isZoneEnabled -> colorScheme.tertiary.copy(alpha = 0.15f)
+                            alreadyExists -> colorScheme.surfaceVariant
+                            else -> colorScheme.primary.copy(alpha = 0.12f)
+                        }
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -710,10 +720,18 @@ internal fun GeofencePresetsSubScreen(
                                 Spacer(modifier = Modifier.width(2.dp))
                             }
                             Text(
-                                text = if (alreadyExists) "Active" else "Use",
+                                text = when {
+                                    isZoneEnabled -> "Active"
+                                    alreadyExists -> "Off"
+                                    else -> "Use"
+                                },
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (alreadyExists) colorScheme.tertiary else colorScheme.primary
+                                color = when {
+                                    isZoneEnabled -> colorScheme.tertiary
+                                    alreadyExists -> colorScheme.onSurfaceVariant
+                                    else -> colorScheme.primary
+                                }
                             )
                         }
                     }

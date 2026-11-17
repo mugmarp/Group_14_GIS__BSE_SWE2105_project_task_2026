@@ -15,7 +15,7 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
 
     companion object {
         const val DATABASE_NAME = "gis_tracker.db"
-        const val DATABASE_VERSION = 5
+        const val DATABASE_VERSION = 6
 
         const val TABLE_POINTS = "location_points"
         const val TABLE_SESSIONS = "tracking_sessions"
@@ -105,7 +105,8 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
                 alert_on_entry INTEGER NOT NULL DEFAULT 1,
                 alert_on_exit INTEGER NOT NULL DEFAULT 1,
                 is_inside INTEGER NOT NULL DEFAULT 0,
-                last_transition INTEGER
+                last_transition INTEGER,
+                is_enabled INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent()
         )
@@ -222,6 +223,10 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
             )
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_offline_places_name ON $TABLE_OFFLINE_PLACES(name)")
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_offline_places_region ON $TABLE_OFFLINE_PLACES(region_id)")
+        }
+        if (oldVersion < 6) {
+            db.execSQL("ALTER TABLE $TABLE_GEOFENCES ADD COLUMN is_enabled INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("UPDATE $TABLE_GEOFENCES SET is_inside = 0")
         }
     }
 }

@@ -95,7 +95,7 @@ class GeofenceManager(private val context: Context) {
         val notifGranted = hasNotificationPermission()
 
         val activeZones = zones
-            .filter { it.alertOnEntry || it.alertOnExit }
+            .filter { it.isEnabled && (it.alertOnEntry || it.alertOnExit) }
             .take(100) // Play Services maximum geofences per app is 100
 
         val academicCount = activeZones.count { it.category.isAcademicZone }
@@ -116,6 +116,7 @@ class GeofenceManager(private val context: Context) {
 
         if (activeZones.isEmpty()) {
             geofencingClient.removeGeofences(geofencePendingIntent)
+            val anyEnabled = zones.any { it.isEnabled }
             _apiStatus.value = GeofenceApiStatus(
                 isEnabled = true,
                 isRegisteredWithPlayServices = false,
@@ -123,7 +124,11 @@ class GeofenceManager(private val context: Context) {
                 academicZoneCount = 0,
                 needsBackgroundPermission = !bgGranted,
                 needsNotificationPermission = !notifGranted,
-                statusMessage = "Enabled, but no geofence zones have entry/exit alerts selected.",
+                statusMessage = if (!anyEnabled) {
+                    "Alerts armed, but all geofence zones are currently turned off."
+                } else {
+                    "Enabled, but no active geofence zones have entry/exit alerts selected."
+                },
                 errorMessage = null
             )
             return

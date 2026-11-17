@@ -120,6 +120,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         val colorHex: String,
         val alertOnEntry: Boolean,
         val alertOnExit: Boolean,
+        val isEnabled: Boolean = false,
         val latitude: Double,
         val longitude: Double
     )
@@ -866,7 +867,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         category: GeofenceCategory,
         colorHex: String,
         alertOnEntry: Boolean = true,
-        alertOnExit: Boolean = true
+        alertOnExit: Boolean = true,
+        isEnabled: Boolean = false
     ) {
         viewModelScope.launch {
             val zone = GeofenceZone(
@@ -878,7 +880,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 category = category,
                 colorHex = colorHex,
                 alertOnEntry = alertOnEntry,
-                alertOnExit = alertOnExit
+                alertOnExit = alertOnExit,
+                isEnabled = isEnabled
             )
             repository.addGeofence(zone)
             syncGeofencesIfEnabled()
@@ -888,6 +891,13 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun updateGeofence(zone: GeofenceZone) {
         viewModelScope.launch {
             repository.updateGeofence(zone)
+            syncGeofencesIfEnabled()
+        }
+    }
+
+    fun toggleGeofenceEnabled(id: String, enabled: Boolean) {
+        viewModelScope.launch {
+            repository.setGeofenceEnabled(id, enabled)
             syncGeofencesIfEnabled()
         }
     }
@@ -1225,7 +1235,9 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     fun sendTestAcademicNotification(): Boolean {
         if (!_settings.value.geofenceNotificationEnabled) return false
-        val academicZone = geofenceZones.value.firstOrNull { it.category.isAcademicZone }
+        val academicZone = geofenceZones.value.firstOrNull { it.isEnabled && it.category.isAcademicZone }
+            ?: geofenceZones.value.firstOrNull { it.isEnabled }
+            ?: geofenceZones.value.firstOrNull { it.category.isAcademicZone }
             ?: geofenceZones.value.firstOrNull()
         val zoneName = academicZone?.name ?: "MUST Kihumuro Campus (FAST)"
         val emoji = academicZone?.category?.iconEmoji ?: "🎓"
@@ -1285,7 +1297,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     SearchPlaceResult(
                         id = "zone_${z.id}",
                         name = z.name,
-                        subtitle = "${z.category.label} • ${z.radiusMeters.toInt()}m radius",
+                        subtitle = "${z.category.label} • ${z.radiusMeters.toInt()}m radius${if (!z.isEnabled) " (Off)" else ""}",
                         latitude = z.latitude,
                         longitude = z.longitude,
                         source = SearchResultSource.SAFE_ZONE

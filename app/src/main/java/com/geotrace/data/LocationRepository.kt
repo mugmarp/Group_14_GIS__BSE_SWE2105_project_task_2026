@@ -1001,6 +1001,9 @@ class LocationRepository(private val context: Context) {
                 } catch (e: Exception) {
                     GeofenceCategory.SAFE_ZONE
                 }
+                val isEnabledCol = c.getColumnIndex("is_enabled")
+                val isEnabled = if (isEnabledCol >= 0) c.getInt(isEnabledCol) == 1 else false
+                val rawIsInside = c.getInt(c.getColumnIndexOrThrow("is_inside")) == 1
                 list.add(
                     GeofenceZone(
                         id = c.getString(c.getColumnIndexOrThrow("id")),
@@ -1012,8 +1015,9 @@ class LocationRepository(private val context: Context) {
                         colorHex = c.getString(c.getColumnIndexOrThrow("color_hex")),
                         alertOnEntry = c.getInt(c.getColumnIndexOrThrow("alert_on_entry")) == 1,
                         alertOnExit = c.getInt(c.getColumnIndexOrThrow("alert_on_exit")) == 1,
-                        isInside = c.getInt(c.getColumnIndexOrThrow("is_inside")) == 1,
-                        lastTransitionTime = if (c.isNull(c.getColumnIndexOrThrow("last_transition"))) null else c.getLong(c.getColumnIndexOrThrow("last_transition"))
+                        isInside = if (isEnabled) rawIsInside else false,
+                        lastTransitionTime = if (c.isNull(c.getColumnIndexOrThrow("last_transition"))) null else c.getLong(c.getColumnIndexOrThrow("last_transition")),
+                        isEnabled = isEnabled
                     )
                 )
             }
@@ -1033,6 +1037,7 @@ class LocationRepository(private val context: Context) {
                     put("alert_on_entry", if (z.alertOnEntry) 1 else 0)
                     put("alert_on_exit", if (z.alertOnExit) 1 else 0)
                     put("is_inside", 0)
+                    put("is_enabled", if (z.isEnabled) 1 else 0)
                 }
                 writeDb.insertWithOnConflict(LocationDbHelper.TABLE_GEOFENCES, null, cv, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -1178,6 +1183,7 @@ class LocationRepository(private val context: Context) {
                     put("alert_on_entry", if (z.alertOnEntry) 1 else 0)
                     put("alert_on_exit", if (z.alertOnExit) 1 else 0)
                     put("is_inside", 0)
+                    put("is_enabled", if (z.isEnabled) 1 else 0)
                 }
                 writeDb.insertWithOnConflict(LocationDbHelper.TABLE_GEOFENCES, null, cv, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
             }
@@ -1198,8 +1204,9 @@ class LocationRepository(private val context: Context) {
                 put("color_hex", zone.colorHex)
                 put("alert_on_entry", if (zone.alertOnEntry) 1 else 0)
                 put("alert_on_exit", if (zone.alertOnExit) 1 else 0)
-                put("is_inside", if (zone.isInside) 1 else 0)
+                put("is_inside", if (zone.isEnabled && zone.isInside) 1 else 0)
                 put("last_transition", zone.lastTransitionTime)
+                put("is_enabled", if (zone.isEnabled) 1 else 0)
             }
             db.insertWithOnConflict(LocationDbHelper.TABLE_GEOFENCES, null, cv, android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE)
             loadGeofences()
@@ -1218,8 +1225,26 @@ class LocationRepository(private val context: Context) {
                 put("color_hex", zone.colorHex)
                 put("alert_on_entry", if (zone.alertOnEntry) 1 else 0)
                 put("alert_on_exit", if (zone.alertOnExit) 1 else 0)
+                put("is_enabled", if (zone.isEnabled) 1 else 0)
+                if (!zone.isEnabled) {
+                    put("is_inside", 0)
+                }
             }
             db.update(LocationDbHelper.TABLE_GEOFENCES, cv, "id = ?", arrayOf(zone.id))
+            loadGeofences()
+        }
+    }
+
+    suspend fun setGeofenceEnabled(id: String, enabled: Boolean) = withContext(Dispatchers.IO) {
+        geofenceMutex.withLock {
+            val db = dbHelper.writableDatabase
+            val cv = ContentValues().apply {
+                put("is_enabled", if (enabled) 1 else 0)
+                if (!enabled) {
+                    put("is_inside", 0)
+                }
+            }
+            db.update(LocationDbHelper.TABLE_GEOFENCES, cv, "id = ?", arrayOf(id))
             loadGeofences()
         }
     }
@@ -1246,6 +1271,7 @@ class LocationRepository(private val context: Context) {
                 loadGeofences()
             }
             val zone = _geofenceZones.value.firstOrNull { it.id == zoneId || it.name == zoneId } ?: return@withLock
+            if (!zone.isEnabled) return@withLock
             val now = System.currentTimeMillis()
             if (shouldSuppressDuplicateTransition(zone.id, isNowInside, now)) return@withLock
 
@@ -1327,6 +1353,20 @@ class LocationRepository(private val context: Context) {
             val useAccuracyGate = geofenceAccuracyGateEnabled
 
             for (z in zones) {
+                if (!z.isEnabled) {
+                    if (z.isInside) {
+                        db.update(
+                            LocationDbHelper.TABLE_GEOFENCES,
+                            ContentValues().apply { put("is_inside", 0) },
+                            "id = ?",
+                            arrayOf(z.id)
+                        )
+                        updatedZones.add(z.copy(isInside = false))
+                    } else {
+                        updatedZones.add(z)
+                    }
+                    continue
+                }
                 if (useAccuracyGate) {
                     val maxAllowedAcc = maxOf(35.0, z.radiusMeters * 0.75)
                     if (provider == "cellular" || accuracyMeters > maxAllowedAcc) {

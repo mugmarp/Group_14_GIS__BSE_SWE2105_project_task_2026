@@ -198,7 +198,7 @@ fun MapViewComposable(
 
     val cachedGeofences = remember(geofenceZones, settings.geofenceHysteresisMeters) {
         val deltaHyst = settings.geofenceHysteresisMeters.toDouble().coerceAtLeast(0.0)
-        geofenceZones.map { zone ->
+        geofenceZones.filter { it.isEnabled }.map { zone ->
             val zoneCenter = GeoPoint(zone.latitude, zone.longitude)
             val mainPoints = computeCircleGeoPoints(zoneCenter, zone.radiusMeters.toDouble())
             val zoneColor = try {

@@ -782,10 +782,11 @@ fun MainAppScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     // Card 2: Geofencing & Safe Zones (Phase 3)
+                    val activeZonesCount = geofenceZones.count { it.isEnabled }
                     MenuNavigationCard(
                         title = "Geofencing & Safe Zones",
                         subtitle = "Perimeter surveillance, safety radii & transition alerts",
-                        badgeText = "${geofenceZones.size} zones",
+                        badgeText = if (activeZonesCount == 0) "Off (${geofenceZones.size})" else "$activeZonesCount/${geofenceZones.size} on",
                         badgeColor = colorScheme.tertiary,
                         icon = { Icon(Icons.Default.NotificationsActive, contentDescription = null, tint = colorScheme.tertiary, modifier = Modifier.size(22.dp)) },
                         onClick = {
