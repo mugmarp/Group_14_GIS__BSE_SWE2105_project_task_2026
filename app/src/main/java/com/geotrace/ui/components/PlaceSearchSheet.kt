@@ -270,7 +270,7 @@ fun PlaceSearchDialog(
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
                                 text = when {
-                                    query.isBlank() -> "Type any place name, address, Safe Zone, or paste coordinates (e.g. -0.6163, 30.6568)."
+                                    query.isBlank() -> "Type any place name, address, Safe Zone, or paste coordinates (e.g. -0.6155, 30.6564)."
                                     isSearchingOnline -> "Searching OpenStreetMap & local cache..."
                                     !isNetworkOnline && offlineRegionsCount == 0 -> "No local match offline. Download an Offline Map Region while online to pre-cache POIs, or enter DD/DMS coordinates."
                                     !isNetworkOnline -> "No match in Safe Zones or $offlinePlacesCount cached POIs. Connect to search wider OpenStreetMap."

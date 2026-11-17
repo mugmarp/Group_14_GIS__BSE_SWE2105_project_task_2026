@@ -1038,7 +1038,47 @@ class LocationRepository(private val context: Context) {
             }
             _geofenceZones.value = defaultZones
         } else {
-            _geofenceZones.value = list
+            val migratedList = migrateLegacySampleCoordinatesIfUntouched(list)
+            _geofenceZones.value = migratedList
+        }
+    }
+
+    private fun migrateLegacySampleCoordinatesIfUntouched(loaded: List<GeofenceZone>): List<GeofenceZone> {
+        val legacyCoordsById = mapOf(
+            "must_kihumuro_campus" to (-0.5982 to 30.6178),
+            "must_kihumuro_library" to (-0.5976 to 30.6185),
+            "must_kihumuro_hostels" to (-0.5995 to 30.6155),
+            "must_main_town" to (-0.6163 to 30.6568),
+            "must_town_library" to (-0.6158 to 30.6575),
+            "wandegeya_boda" to (0.3308 to 32.5705)
+        )
+        val updatedDefaults = buildDefaultSampleZones().associateBy { it.id }
+        var writeDb: android.database.sqlite.SQLiteDatabase? = null
+
+        return loaded.map { zone ->
+            val legacy = legacyCoordsById[zone.id]
+            val target = updatedDefaults[zone.id]
+            val isUntouchedLegacy = legacy != null &&
+                target != null &&
+                kotlin.math.abs(zone.latitude - legacy.first) < 0.0001 &&
+                kotlin.math.abs(zone.longitude - legacy.second) < 0.0001
+
+            if (isUntouchedLegacy && target != null) {
+                val db = writeDb ?: dbHelper.writableDatabase.also { writeDb = it }
+                val cv = ContentValues().apply {
+                    put("latitude", target.latitude)
+                    put("longitude", target.longitude)
+                }
+                db.update(
+                    LocationDbHelper.TABLE_GEOFENCES,
+                    cv,
+                    "id = ?",
+                    arrayOf(zone.id)
+                )
+                zone.copy(latitude = target.latitude, longitude = target.longitude)
+            } else {
+                zone
+            }
         }
     }
 
@@ -1046,8 +1086,8 @@ class LocationRepository(private val context: Context) {
         GeofenceZone(
             id = "must_kihumuro_campus",
             name = "MUST Kihumuro Campus (FAST)",
-            latitude = -0.5982,
-            longitude = 30.6178,
+            latitude = -0.5947,
+            longitude = 30.5998,
             radiusMeters = 350f,
             category = GeofenceCategory.CAMPUS,
             colorHex = "#006948",
@@ -1057,8 +1097,8 @@ class LocationRepository(private val context: Context) {
         GeofenceZone(
             id = "must_kihumuro_library",
             name = "MUST Kihumuro Main Library",
-            latitude = -0.5976,
-            longitude = 30.6185,
+            latitude = -0.5945,
+            longitude = 30.6002,
             radiusMeters = 100f,
             category = GeofenceCategory.LIBRARY,
             colorHex = "#0051D5",
@@ -1068,8 +1108,8 @@ class LocationRepository(private val context: Context) {
         GeofenceZone(
             id = "must_kihumuro_hostels",
             name = "MUST Kihumuro Hostels Zone",
-            latitude = -0.5995,
-            longitude = 30.6155,
+            latitude = -0.5955,
+            longitude = 30.5980,
             radiusMeters = 250f,
             category = GeofenceCategory.HOSTEL,
             colorHex = "#7C3AED",
@@ -1079,8 +1119,8 @@ class LocationRepository(private val context: Context) {
         GeofenceZone(
             id = "must_main_town",
             name = "MUST Main Town Campus",
-            latitude = -0.6163,
-            longitude = 30.6568,
+            latitude = -0.6155,
+            longitude = 30.6564,
             radiusMeters = 300f,
             category = GeofenceCategory.CAMPUS,
             colorHex = "#006948",
@@ -1090,8 +1130,8 @@ class LocationRepository(private val context: Context) {
         GeofenceZone(
             id = "must_town_library",
             name = "MUST Town Campus Library",
-            latitude = -0.6158,
-            longitude = 30.6575,
+            latitude = -0.6152,
+            longitude = 30.6572,
             radiusMeters = 90f,
             category = GeofenceCategory.LIBRARY,
             colorHex = "#0051D5",
@@ -1112,8 +1152,8 @@ class LocationRepository(private val context: Context) {
         GeofenceZone(
             id = "wandegeya_boda",
             name = "Wandegeya Boda Boda Stage",
-            latitude = 0.3308,
-            longitude = 32.5705,
+            latitude = 0.3311,
+            longitude = 32.5736,
             radiusMeters = 160f,
             category = GeofenceCategory.BODA_HOTSPOT,
             colorHex = "#D97706",
