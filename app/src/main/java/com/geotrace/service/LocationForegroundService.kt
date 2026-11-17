@@ -144,7 +144,11 @@ class LocationForegroundService : Service() {
                 action = ACTION_UPDATE_MODE
                 putExtra(EXTRA_MODE, mode.name)
             }
-            safeStartForegroundService(context, intent)
+            try {
+                context.startService(intent)
+            } catch (_: Exception) {
+                safeStartForegroundService(context, intent)
+            }
         }
 
         fun stopTrackingOrDowngrade(context: Context) {
@@ -256,6 +260,8 @@ class LocationForegroundService : Service() {
     private var networkLocationListener: LocationListener? = null
     private lateinit var cellManager: CellularDiagnosticManager
     private var locationCallback: LocationCallback? = null
+    private var quickFixCancellation: com.google.android.gms.tasks.CancellationTokenSource? = null
+    private var osQuickFixCancellation: android.os.CancellationSignal? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var cellDiagnosticsJob: Job? = null
     private var protectionHeartbeatJob: Job? = null
@@ -268,6 +274,8 @@ class LocationForegroundService : Service() {
     private var lastCloudSyncMs: Long = 0L
     @Volatile
     private var lastModeSwitchMs: Long = 0L
+    @Volatile
+    private var lastModeSwitchElapsedNs: Long = 0L
     private var lastBgCellularFallbackKey: String? = null
     private var lastBgCellularFallbackMs: Long = 0L
 
@@ -297,6 +305,7 @@ class LocationForegroundService : Service() {
                 val mode = parseMode(modeStr)
                 currentMode = mode
                 lastModeSwitchMs = System.currentTimeMillis()
+                lastModeSwitchElapsedNs = android.os.SystemClock.elapsedRealtimeNanos()
                 isRecordingSession = true
                 isProtectionActive = groupRepo.isBackgroundProtectionActiveAndSignedIn()
                 startForegroundTracking(mode)
@@ -322,21 +331,27 @@ class LocationForegroundService : Service() {
                 val mode = parseMode(modeStr)
                 currentMode = mode
                 lastModeSwitchMs = System.currentTimeMillis()
+                lastModeSwitchElapsedNs = android.os.SystemClock.elapsedRealtimeNanos()
                 val isSessionPaused = repo.activeSession.value?.isPaused == true
                 if (isRecordingSession || repo.activeSession.value != null) {
                     ensureForeground(buildStatusNotification(mode))
                     if (!isSessionPaused) {
-                        requestLocationUpdates(mode)
-                        startPeriodicCellDiagnostics()
+                        requestLocationUpdates(mode, forceImmediateFix = true)
+                        startPeriodicCellDiagnostics(restart = true)
                     } else if (isProtectionActive && !isProtectionPaused && hasLocationPermission(this)) {
-                        requestProtectionLocationUpdates()
+                        requestProtectionLocationUpdates(modeChanged = true)
                     }
+                    syncCurrentModeTelemetry(mode)
                 } else if (isProtectionActive || (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this))) {
                     isProtectionActive = true
                     ensureForeground(buildStatusNotification(mode))
                     if (!isProtectionPaused) {
-                        requestProtectionLocationUpdates()
+                        requestProtectionLocationUpdates(modeChanged = true)
+                    } else {
+                        stopCellDiagnostics()
+                        stopLocationUpdatesOnly()
                     }
+                    syncCurrentModeTelemetry(mode)
                 } else {
                     if (startedAsForeground && !isForegroundStarted && hasLocationPermission(this)) {
                         ensureForeground(buildStatusNotification(mode))
@@ -472,6 +487,7 @@ class LocationForegroundService : Service() {
                         isRecordingSession = true
                         currentMode = repo.trackingMode.value
                         lastModeSwitchMs = System.currentTimeMillis()
+                        lastModeSwitchElapsedNs = android.os.SystemClock.elapsedRealtimeNanos()
                         startForegroundTracking(currentMode)
                     } else if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this@LocationForegroundService)) {
                         isRecordingSession = false
@@ -678,22 +694,39 @@ class LocationForegroundService : Service() {
             }
         }
 
+        val modeTag = when (mode) {
+            TrackingMode.HIGH_ACCURACY -> "GNSS 1s"
+            TrackingMode.BALANCED -> "Fused 5s"
+            TrackingMode.POWER_SAVER -> "Cell Only"
+        }
         val callsign = groupRepo.offlineCallsign.value
         if (isProtectionPaused) {
             return buildNotification(
                 title = "24/7 Protection Paused • $callsign",
-                content = "Background location sync & remote ring paused • Tap Resume",
+                content = "$modeTag • Background sync & remote ring paused • Tap Resume",
                 isRecordingUi = false,
                 isPausedUi = true
             )
         }
-        val privacyTag = if (groupRepo.isGhostMode.value) "Ghost Mode (My Devices only)" else "Fleet & Remote Ring ready"
+        val privacyTag = if (groupRepo.isGhostMode.value) "Ghost Mode (My Devices)" else "Fleet & Remote Ring ready"
         return buildNotification(
-            title = "GeoTrace 24/7 Protection • $callsign",
+            title = "GeoTrace 24/7 ($modeTag) • $callsign",
             content = "$privacyTag • Locatable even when closed",
             isRecordingUi = false,
             isPausedUi = false
         )
+    }
+
+    private fun syncCurrentModeTelemetry(mode: TrackingMode) {
+        val app = application as LocationTrackerApp
+        val repo = app.repository
+        val groupRepo = app.groupRepository
+        if (groupRepo.getCurrentUserId() == null) return
+        val point = repo.currentLocation.value ?: return
+        serviceScope.launch {
+            lastCloudSyncMs = System.currentTimeMillis()
+            groupRepo.syncDeviceAndGroupTelemetry(point, mode.name)
+        }
     }
 
     private fun acquireWakeLock() {
@@ -722,8 +755,128 @@ class LocationForegroundService : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun requestLocationUpdates(mode: TrackingMode) {
+    private fun requestImmediateServiceFix(
+        mode: TrackingMode,
+        allowBalancedFallback: Boolean = true
+    ) {
+        if (!hasLocationPermission(this)) return
+        val repo = (application as LocationTrackerApp).repository
+        if (mode == TrackingMode.POWER_SAVER) {
+            val cur = repo.currentLocation.value
+            if (cur != null && cur.provider == "cellular" && (System.currentTimeMillis() - cur.timestamp) < 25_000L) {
+                return
+            }
+            val lm = systemLocationManager
+            val networkEnabled = try {
+                lm?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true
+            } catch (_: Exception) {
+                false
+            }
+            if (networkEnabled && lm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                try {
+                    quickFixCancellation?.cancel()
+                    quickFixCancellation = null
+                    osQuickFixCancellation?.cancel()
+                    val osCancel = android.os.CancellationSignal()
+                    osQuickFixCancellation = osCancel
+                    lm.getCurrentLocation(
+                        LocationManager.NETWORK_PROVIDER,
+                        osCancel,
+                        mainExecutor
+                    ) { netLoc ->
+                        if (repo.trackingMode.value != TrackingMode.POWER_SAVER) return@getCurrentLocation
+                        if (netLoc != null) {
+                            onNewLocationReceived(netLoc, bypassStaleModeCheck = true)
+                        } else {
+                            requestNetworkLastKnownServiceFallback(mode)
+                        }
+                    }
+                    return
+                } catch (_: SecurityException) {
+                } catch (_: Exception) {
+                }
+            }
+        }
+
+        val priority = when {
+            mode == TrackingMode.HIGH_ACCURACY && allowBalancedFallback -> Priority.PRIORITY_HIGH_ACCURACY
+            mode == TrackingMode.HIGH_ACCURACY -> Priority.PRIORITY_BALANCED_POWER_ACCURACY
+            mode == TrackingMode.BALANCED -> Priority.PRIORITY_BALANCED_POWER_ACCURACY
+            else -> Priority.PRIORITY_LOW_POWER
+        }
+        try {
+            quickFixCancellation?.cancel()
+            osQuickFixCancellation?.cancel()
+            osQuickFixCancellation = null
+            val cancellation = com.google.android.gms.tasks.CancellationTokenSource()
+            quickFixCancellation = cancellation
+            val currentRequest = com.google.android.gms.location.CurrentLocationRequest.Builder()
+                .setPriority(priority)
+                .setMaxUpdateAgeMillis(0L)
+                .setDurationMillis(if (mode == TrackingMode.HIGH_ACCURACY) 6_000L else 8_000L)
+                .build()
+            fusedLocationClient.getCurrentLocation(currentRequest, cancellation.token)
+                .addOnSuccessListener { loc ->
+                    if (repo.trackingMode.value != mode) return@addOnSuccessListener
+                    if (loc == null) {
+                        if (mode == TrackingMode.HIGH_ACCURACY && allowBalancedFallback) {
+                            requestImmediateServiceFix(
+                                mode = TrackingMode.HIGH_ACCURACY,
+                                allowBalancedFallback = false
+                            )
+                        } else {
+                            requestNetworkLastKnownServiceFallback(mode)
+                        }
+                        return@addOnSuccessListener
+                    }
+                    if (mode == TrackingMode.BALANCED && loc.provider == LocationManager.GPS_PROVIDER) {
+                        requestNetworkLastKnownServiceFallback(mode)
+                        return@addOnSuccessListener
+                    }
+                    if (mode == TrackingMode.POWER_SAVER && loc.provider == LocationManager.GPS_PROVIDER) {
+                        requestNetworkLastKnownServiceFallback(mode)
+                        return@addOnSuccessListener
+                    }
+                    onNewLocationReceived(loc, bypassStaleModeCheck = true)
+                }
+                .addOnFailureListener {
+                    if (repo.trackingMode.value == mode) {
+                        requestNetworkLastKnownServiceFallback(mode)
+                    }
+                }
+        } catch (_: SecurityException) {
+        } catch (_: Exception) {
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestNetworkLastKnownServiceFallback(mode: TrackingMode) {
+        if (!hasLocationPermission(this)) return
+        val repo = (application as LocationTrackerApp).repository
+        if (repo.trackingMode.value != mode) return
+        if (mode == TrackingMode.POWER_SAVER) {
+            val cur = repo.currentLocation.value
+            if (cur != null && cur.provider == "cellular" && (System.currentTimeMillis() - cur.timestamp) < 25_000L) {
+                return
+            }
+        }
+        try {
+            val netLoc = systemLocationManager?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            if (netLoc != null && repo.trackingMode.value == mode) {
+                onNewLocationReceived(netLoc, bypassStaleModeCheck = true)
+            }
+        } catch (_: SecurityException) {
+        } catch (_: Exception) {
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestLocationUpdates(mode: TrackingMode, forceImmediateFix: Boolean = false) {
         stopLocationUpdatesOnly()
+
+        if (forceImmediateFix) {
+            requestImmediateServiceFix(mode)
+        }
 
         when (mode) {
             TrackingMode.HIGH_ACCURACY -> {
@@ -843,14 +996,18 @@ class LocationForegroundService : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun requestProtectionLocationUpdates() {
+    private fun requestProtectionLocationUpdates(modeChanged: Boolean = false) {
         stopLocationUpdatesOnly()
         val repo = (application as LocationTrackerApp).repository
         val activeMode = repo.trackingMode.value
 
         if (activeMode == TrackingMode.POWER_SAVER) {
+            if (modeChanged) {
+                lastBgCellularFallbackKey = null
+                lastBgCellularFallbackMs = 0L
+            }
             // In Cell-Only standby, let cell diagnostics drive updates; register low-power coarse listener only as fallback
-            startPeriodicCellDiagnostics()
+            startPeriodicCellDiagnostics(restart = modeChanged)
             val request = LocationRequest.Builder(Priority.PRIORITY_LOW_POWER, 60_000L)
                 .setMinUpdateDistanceMeters(50f)
                 .setMinUpdateIntervalMillis(60_000L)
@@ -866,6 +1023,12 @@ class LocationForegroundService : Service() {
             } catch (_: SecurityException) {
             }
             return
+        }
+
+        // Stop background cell diagnostics loop outside POWER_SAVER protection so ViewModel polling is never starved
+        stopCellDiagnostics()
+        if (modeChanged && repo.currentLocation.value?.provider == "cellular") {
+            requestImmediateServiceFix(activeMode)
         }
 
         val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, 60_000L)
@@ -886,7 +1049,7 @@ class LocationForegroundService : Service() {
         }
     }
 
-    private fun onNewLocationReceived(loc: Location) {
+    private fun onNewLocationReceived(loc: Location, bypassStaleModeCheck: Boolean = false) {
         val app = application as LocationTrackerApp
         val repo = app.repository
         val groupRepo = app.groupRepository
@@ -894,9 +1057,16 @@ class LocationForegroundService : Service() {
         val effectiveMode = repo.trackingMode.value
         val latest = repo.currentLocation.value
 
-        // Ignore stale cached locations captured before the most recent mode switch
-        if (lastModeSwitchMs > 0L && loc.time > 0L && loc.time < lastModeSwitchMs - 2_000L) {
-            return
+        // Ignore stale cached locations captured before the most recent mode switch using monotonic clock first
+        val switchElapsedNs = maxOf(lastModeSwitchElapsedNs, repo.lastModeSwitchElapsedNs)
+        if (!bypassStaleModeCheck && switchElapsedNs > 0L) {
+            if (loc.elapsedRealtimeNanos > 0L) {
+                if (loc.elapsedRealtimeNanos < switchElapsedNs - 2_000_000_000L) {
+                    return
+                }
+            } else if (lastModeSwitchMs > 0L && loc.time > 0L && loc.time < lastModeSwitchMs - 2_000L) {
+                return
+            }
         }
 
         // In Balanced mode, suppress raw hardware GPS provider overrides
@@ -904,9 +1074,9 @@ class LocationForegroundService : Service() {
             return
         }
 
-        // In Cell-Only mode, never allow GPS or high-precision GNSS/Wi-Fi fixes to leak in
+        // In Cell-Only mode, never allow hardware GPS leaks, and defer to fresh OpenCellID mast coordinates when available
         if (effectiveMode == TrackingMode.POWER_SAVER) {
-            if (loc.provider == LocationManager.GPS_PROVIDER || loc.accuracy < 35f) {
+            if (loc.provider == LocationManager.GPS_PROVIDER) {
                 return
             }
             if (latest != null && latest.provider == "cellular" && (System.currentTimeMillis() - latest.timestamp) < 35_000L) {
@@ -952,57 +1122,76 @@ class LocationForegroundService : Service() {
         cellDiagnosticsJob = null
     }
 
-    private fun startPeriodicCellDiagnostics() {
-        if (cellDiagnosticsJob?.isActive == true) return
+    private fun startPeriodicCellDiagnostics(restart: Boolean = false) {
+        if (restart) {
+            stopCellDiagnostics()
+        } else if (cellDiagnosticsJob?.isActive == true) {
+            return
+        }
         isCellDiagnosticsActive = true
         cellDiagnosticsJob = serviceScope.launch {
             val app = application as LocationTrackerApp
             val repo = app.repository
             val groupRepo = app.groupRepository
+            var forceFreshRead = restart
+            var fallbackNeededOnMiss = restart
             while (isActive) {
-                val towers = cellManager.readCurrentCellTowers()
+                val modeNow = repo.trackingMode.value
+                val towers = if (forceFreshRead || modeNow == TrackingMode.POWER_SAVER) {
+                    forceFreshRead = false
+                    cellManager.requestFreshCellTowers()
+                } else {
+                    cellManager.readCurrentCellTowers()
+                }
                 repo.updateCellTowers(towers)
 
-                val modeNow = repo.trackingMode.value
                 // Resolve serving mast in background too so POWER_SAVER stays strictly cellular even with UI closed
                 if (modeNow == TrackingMode.POWER_SAVER) {
                     val serving = towers.firstOrNull { it.isRegistered } ?: towers.firstOrNull()
-                    if (serving != null) {
-                        val towerLoc = OpenCellIdClient.resolveCellLocation(
+                    val towerLoc = if (serving != null) {
+                        OpenCellIdClient.resolveCellLocation(
                             cellInfo = serving,
                             apiKey = repo.getSavedOpenCellIdApiKey()
                         )
-                        if (towerLoc != null) {
-                            val now = System.currentTimeMillis()
-                            val towerKey = "${towerLoc.cellId}_${towerLoc.lac}"
-                            val cur = repo.currentLocation.value
-                            val shouldEmit = cur == null || cur.provider != "cellular" ||
-                                (now - cur.timestamp > 25_000L) ||
-                                (towerKey != lastBgCellularFallbackKey && (now - lastBgCellularFallbackMs >= 10_000L))
-                            if (shouldEmit) {
-                                lastBgCellularFallbackKey = towerKey
-                                lastBgCellularFallbackMs = now
-                                val cellPoint = LocationPoint(
-                                    latitude = towerLoc.latitude,
-                                    longitude = towerLoc.longitude,
-                                    accuracy = towerLoc.rangeMeters.toFloat(),
-                                    speed = 0f,
-                                    altitude = 0.0,
-                                    bearing = 0f,
-                                    provider = "cellular",
-                                    timestamp = now,
-                                    sessionId = repo.activeSession.value?.id ?: if (isRecordingSession) "foreground" else "protection"
-                                )
-                                repo.recordLocation(cellPoint)
-                                if (groupRepo.getCurrentUserId() != null) {
-                                    val throttleMs = if (isRecordingSession || repo.activeSession.value != null) 15_000L else 45_000L
-                                    val latestSync = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
-                                    if (now - latestSync >= throttleMs) {
-                                        lastCloudSyncMs = now
-                                        groupRepo.syncDeviceAndGroupTelemetry(cellPoint, modeNow.name)
-                                    }
+                    } else {
+                        null
+                    }
+                    if (towerLoc != null) {
+                        fallbackNeededOnMiss = false
+                        val now = System.currentTimeMillis()
+                        val towerKey = "${towerLoc.cellId}_${towerLoc.lac}"
+                        val cur = repo.currentLocation.value
+                        val shouldEmit = cur == null || cur.provider != "cellular" ||
+                            (now - cur.timestamp > 25_000L) ||
+                            (towerKey != lastBgCellularFallbackKey && (now - lastBgCellularFallbackMs >= 10_000L))
+                        if (shouldEmit) {
+                            lastBgCellularFallbackKey = towerKey
+                            lastBgCellularFallbackMs = now
+                            val cellPoint = LocationPoint(
+                                latitude = towerLoc.latitude,
+                                longitude = towerLoc.longitude,
+                                accuracy = towerLoc.rangeMeters.toFloat(),
+                                speed = 0f,
+                                altitude = 0.0,
+                                bearing = 0f,
+                                provider = "cellular",
+                                timestamp = now,
+                                sessionId = repo.activeSession.value?.id ?: if (isRecordingSession) "foreground" else "protection"
+                            )
+                            repo.recordLocation(cellPoint)
+                            if (groupRepo.getCurrentUserId() != null) {
+                                val throttleMs = if (isRecordingSession || repo.activeSession.value != null) 15_000L else 45_000L
+                                val latestSync = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
+                                if (now - latestSync >= throttleMs) {
+                                    lastCloudSyncMs = now
+                                    groupRepo.syncDeviceAndGroupTelemetry(cellPoint, modeNow.name)
                                 }
                             }
+                        }
+                    } else if (fallbackNeededOnMiss) {
+                        fallbackNeededOnMiss = false
+                        if (!isProtectionPaused || isRecordingSession) {
+                            requestImmediateServiceFix(TrackingMode.POWER_SAVER)
                         }
                     }
                 }
@@ -1174,6 +1363,10 @@ class LocationForegroundService : Service() {
     }
 
     private fun stopLocationUpdatesOnly() {
+        quickFixCancellation?.cancel()
+        quickFixCancellation = null
+        osQuickFixCancellation?.cancel()
+        osQuickFixCancellation = null
         locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
         locationCallback = null
         networkLocationListener?.let { listener ->

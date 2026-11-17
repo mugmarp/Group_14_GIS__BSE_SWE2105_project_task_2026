@@ -48,6 +48,8 @@ import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.outlined.Group as OutlinedGroup
+import androidx.compose.material.icons.outlined.Map as OutlinedMap
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -267,14 +269,14 @@ fun MainAppScreen(
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
-        // Streamlined Compact 2-Pillar Bottom Bar (Map & Devices)
+        // Streamlined Option A Compact 48.dp Bottom Bar (Map & Devices)
         bottomBar = {
             if (currentScreen == Screen.MAP || currentScreen == Screen.GROUPS) {
                 Surface(
-                    shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+                    shape = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp),
                     color = colorScheme.surface,
                     shadowElevation = 6.dp,
-                    border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                    border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.55f)),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("bottom_nav_bar")
@@ -283,44 +285,59 @@ fun MainAppScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .navigationBarsPadding()
-                            .padding(horizontal = 12.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            .padding(horizontal = 8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         val navTabs = listOf(
-                            Triple(Screen.MAP, "Map", Icons.Default.Map),
-                            Triple(Screen.GROUPS, "Devices", Icons.Default.Group)
+                            Triple(Screen.MAP, "Map", Icons.Default.Map to Icons.Outlined.OutlinedMap),
+                            Triple(Screen.GROUPS, "Devices", Icons.Default.Group to Icons.Outlined.OutlinedGroup)
                         )
-                        navTabs.forEach { (screen, label, icon) ->
+                        navTabs.forEach { (screen, label, icons) ->
                             val selected = currentScreen == screen
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = if (selected) colorScheme.primary else Color.Transparent,
+                            val (filledIcon, outlinedIcon) = icons
+                            val contentTint = if (selected) {
+                                colorScheme.primary
+                            } else {
+                                colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
+                            }
+                            Box(
                                 modifier = Modifier
                                     .weight(1f)
                                     .heightIn(min = 48.dp)
-                                    .clip(RoundedCornerShape(12.dp))
+                                    .clip(RoundedCornerShape(10.dp))
                                     .clickable { currentScreen = screen }
                                     .testTag(if (screen == Screen.MAP) "nav_bottom_map" else "nav_bottom_groups")
                             ) {
+                                if (selected) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopCenter)
+                                            .width(36.dp)
+                                            .height(3.dp)
+                                            .clip(RoundedCornerShape(bottomStart = 3.dp, bottomEnd = 3.dp))
+                                            .background(colorScheme.primary)
+                                    )
+                                }
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    modifier = Modifier
+                                        .align(Alignment.Center)
+                                        .padding(horizontal = 10.dp),
                                     horizontalArrangement = Arrangement.Center,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
-                                        imageVector = icon,
+                                        imageVector = if (selected) filledIcon else outlinedIcon,
                                         contentDescription = if (screen == Screen.MAP) "Map" else "Devices and Tracking Groups",
-                                        tint = if (selected) colorScheme.onPrimary else colorScheme.onSurfaceVariant,
+                                        tint = contentTint,
                                         modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
                                         text = label,
                                         fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                                         letterSpacing = 0.02.sp,
-                                        color = if (selected) colorScheme.onPrimary else colorScheme.onSurfaceVariant,
+                                        color = contentTint,
                                         maxLines = 1
                                     )
                                 }

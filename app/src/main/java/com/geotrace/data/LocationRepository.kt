@@ -201,6 +201,13 @@ class LocationRepository(private val context: Context) {
     @Volatile
     private var resetAnchorOnNextFix: Boolean = false
 
+    @Volatile
+    private var resetAnchorOnModeSwitch: Boolean = false
+
+    @Volatile
+    var lastModeSwitchElapsedNs: Long = 0L
+        private set
+
     private val initialRestoreDeferred = kotlinx.coroutines.CompletableDeferred<Unit>()
 
     private val transitionCooldownLock = Any()
@@ -311,18 +318,34 @@ class LocationRepository(private val context: Context) {
         db.update(LocationDbHelper.TABLE_SESSIONS, cv, "id = ?", arrayOf(session.id))
     }
 
-    suspend fun setTrackingMode(mode: TrackingMode) = withContext(Dispatchers.IO) {
+    fun setTrackingModeSync(mode: TrackingMode) {
+        if (_trackingMode.value != mode) {
+            resetAnchorOnModeSwitch = true
+            lastModeSwitchElapsedNs = android.os.SystemClock.elapsedRealtimeNanos()
+        }
         _trackingMode.value = mode
         prefs.edit().putString("selected_tracking_mode", mode.name).apply()
-        val session = _activeSession.value
-        if (session != null && session.isRecording) {
-            val updated = session.copy(trackingMode = mode)
-            _activeSession.value = updated
-            val cv = ContentValues().apply {
-                put("tracking_mode", mode.name)
+        val current = _activeSession.value
+        if (current != null && current.isRecording && current.trackingMode != mode) {
+            _activeSession.value = current.copy(trackingMode = mode)
+        }
+    }
+
+    suspend fun setTrackingMode(mode: TrackingMode) {
+        setTrackingModeSync(mode)
+        withContext(Dispatchers.IO) {
+            recordingMutex.withLock {
+                val session = _activeSession.value
+                if (session != null && session.isRecording) {
+                    val updated = if (session.trackingMode == mode) session else session.copy(trackingMode = mode)
+                    _activeSession.value = updated
+                    val cv = ContentValues().apply {
+                        put("tracking_mode", mode.name)
+                    }
+                    dbHelper.writableDatabase.update(LocationDbHelper.TABLE_SESSIONS, cv, "id = ?", arrayOf(session.id))
+                    loadSessionsInternal()
+                }
             }
-            dbHelper.writableDatabase.update(LocationDbHelper.TABLE_SESSIONS, cv, "id = ?", arrayOf(session.id))
-            loadSessions()
         }
     }
 
@@ -564,6 +587,7 @@ class LocationRepository(private val context: Context) {
             if (isActivelyRecording && resetAnchorOnNextFix) {
                 // First fix after resuming from pause: re-anchor without bridging distance moved while paused
                 resetAnchorOnNextFix = false
+                resetAnchorOnModeSwitch = false
                 forcePostResumePersist = true
                 additionalDistance = 0.0
                 stationaryAnchorPoint = safePoint
@@ -571,9 +595,13 @@ class LocationRepository(private val context: Context) {
                 candidateSpeed = if (candidateSpeed >= 0.45f) candidateSpeed.coerceIn(0f, 55f) else 0f
                 smoothedSpeedMps = candidateSpeed
             } else if (prevPoint != null) {
-                isProviderSwitch = (prevPoint.provider == "cellular") != (safePoint.provider == "cellular")
+                val consumedModeSwitch = resetAnchorOnModeSwitch
+                resetAnchorOnModeSwitch = false
+                isProviderSwitch = consumedModeSwitch ||
+                    (prevPoint.provider == "cellular") != (safePoint.provider == "cellular") ||
+                    prevPoint.provider != safePoint.provider
                 if (isProviderSwitch) {
-                    // Switching between Cell Tower mast coords and GNSS/Fused coords must not inflate distance or speed
+                    // Switching providers or positioning modes must not inflate distance/speed or trigger false teleport rejection
                     additionalDistance = 0.0
                     stationaryAnchorPoint = safePoint
                     consecutiveSlowSamples = 0
