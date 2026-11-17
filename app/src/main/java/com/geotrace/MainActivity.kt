@@ -56,9 +56,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -270,56 +267,65 @@ fun MainAppScreen(
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
-        // Streamlined 2-Pillar Bottom Bar (Map & Devices)
+        // Streamlined Compact 2-Pillar Bottom Bar (Map & Devices)
         bottomBar = {
             if (currentScreen == Screen.MAP || currentScreen == Screen.GROUPS) {
                 Surface(
-                    shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+                    shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
                     color = colorScheme.surface,
-                    shadowElevation = 8.dp,
+                    shadowElevation = 6.dp,
                     border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("bottom_nav_bar")
                 ) {
-                    NavigationBar(
-                        containerColor = androidx.compose.ui.graphics.Color.Transparent,
-                        tonalElevation = 0.dp,
-                        windowInsets = WindowInsets(0, 0, 0, 0),
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .navigationBarsPadding()
-                            .heightIn(min = 66.dp)
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        NavigationBarItem(
-                            selected = currentScreen == Screen.MAP,
-                            onClick = { currentScreen = Screen.MAP },
-                            icon = { Icon(Icons.Default.Map, contentDescription = "Map", modifier = Modifier.size(20.dp)) },
-                            label = { Text("Map", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.02.sp) },
-                            modifier = Modifier.testTag("nav_bottom_map"),
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = colorScheme.onPrimary,
-                                selectedTextColor = colorScheme.primary,
-                                indicatorColor = colorScheme.primary,
-                                unselectedIconColor = colorScheme.onSurfaceVariant,
-                                unselectedTextColor = colorScheme.onSurfaceVariant
-                            )
+                        val navTabs = listOf(
+                            Triple(Screen.MAP, "Map", Icons.Default.Map),
+                            Triple(Screen.GROUPS, "Devices", Icons.Default.Group)
                         )
-
-                        NavigationBarItem(
-                            selected = currentScreen == Screen.GROUPS,
-                            onClick = { currentScreen = Screen.GROUPS },
-                            icon = { Icon(Icons.Default.Group, contentDescription = "Devices and Tracking Groups", modifier = Modifier.size(20.dp)) },
-                            label = { Text("Devices", fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.02.sp) },
-                            modifier = Modifier.testTag("nav_bottom_groups"),
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = colorScheme.onPrimary,
-                                selectedTextColor = colorScheme.primary,
-                                indicatorColor = colorScheme.primary,
-                                unselectedIconColor = colorScheme.onSurfaceVariant,
-                                unselectedTextColor = colorScheme.onSurfaceVariant
-                            )
-                        )
+                        navTabs.forEach { (screen, label, icon) ->
+                            val selected = currentScreen == screen
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = if (selected) colorScheme.primary else Color.Transparent,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable { currentScreen = screen }
+                                    .testTag(if (screen == Screen.MAP) "nav_bottom_map" else "nav_bottom_groups")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = if (screen == Screen.MAP) "Map" else "Devices and Tracking Groups",
+                                        tint = if (selected) colorScheme.onPrimary else colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = label,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 0.02.sp,
+                                        color = if (selected) colorScheme.onPrimary else colorScheme.onSurfaceVariant,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
