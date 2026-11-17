@@ -133,13 +133,13 @@ jobs:
             VERSION="1.0.${{ github.run_number }}"
           fi
 
-          # echo "VERSION_NAME=$VERSION" >> $GITHUB_OUTPUT
-          
-          
-          # Trim any whitespace
-          VERSION=$(echo "$VERSION" | xargs) echo "VERSION_NAME=$VERSION" >> $GITHUB_OUTPUT
+          # Remove any leading/trailing whitespace (critical for valid tags)
+          VERSION=$(echo -n "$VERSION" | xargs)
+
+          echo "VERSION_NAME=$VERSION" >> $GITHUB_OUTPUT
+          echo "Cleaned VERSION_NAME=[$VERSION]"
+
           # Compute integer version code: MAJOR * 10000 + MINOR * 100 + PATCH
-          # Fallback to run number if not semver
           if [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
             MAJOR="${BASH_REMATCH[1]}"
             MINOR="${BASH_REMATCH[2]}"
