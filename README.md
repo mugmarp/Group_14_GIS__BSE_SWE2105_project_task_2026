@@ -3,7 +3,7 @@
 **Project Title:** GeoTrace — Real-Time GNSS & Cellular Base Station Telemetry Tracker  
 **Course:** BSE SWE2105 (Geographic Information Systems)  
 **Academic Year:** 2026  
-**Institution:** Faculty of Applied Sciences and Technology (FAST), Mbarara University of Science and Technology (MUST)  
+**Institution:** Faculty of Computing and informatics (FCI), Mbarara University of Science and Technology (MUST)  
 **Project:** Mobile Phone Tracking via GPS & Cellular Triangulation  
 **Package Namespace:** `com.geotrace`  
 **GitHub Organization / Repository:** `https://github.com/mugmarp/Group_14_GIS__BSE_SWE2105_project_task_2026`  
