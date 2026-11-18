@@ -188,11 +188,13 @@ The compiled APK files will be located at:
 
 ## 6. Group Members & Academic Contribution
 
-| Name | Registration Number | GitHub Handle | Role / Core Contribution |
-| :--- | :--- | :--- | :--- |
-| **MUGENDAWALA MARK PAUL** | 2025/BSE/108/PS | [`@mugmarp`](https://github.com/mugmarp) | Architecture, Telemetry Engine, CI/CD Pipeline |
-| *[Group Member 2]* | — | — | Mobile UI, Map Overlays & Geofencing |
-| *[Group Member 3]* | — | — | OpenCellID Integration & Telephony Diagnostics |
-| *[Group Member 4]* | — | — | Field Testing, Data Analysis & Academic Protocol |
+
+| Name | Registration Number |
+| :--- | :--- |
+| **MUGENDAWALA MARK PAUL** | 2025/BSE/108/PS |
+| *[Group Member 2]* | — |
+| *[Group Member 3]* | — |
+| *[Group Member 4]* | — |
+| *[Group Member 5]* | — |
 
 **Repository URL:** `https://github.com/mugmarp/Group_14_GIS__BSE_SWE2105_project_task_2026`
