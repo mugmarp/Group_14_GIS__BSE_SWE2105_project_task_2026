@@ -192,7 +192,7 @@ The compiled APK files will be located at:
 | Name | Registration Number |
 | :--- | :--- |
 | **MUGENDAWALA MARK PAUL** | 2025/BSE/108/PS |
-| *[Group Member 2]* | — |
+| **ATAHO APRINAL**         | 2025/BSE/O46/PS|
 | *[Group Member 3]* | — |
 | *[Group Member 4]* | — |
 | *[Group Member 5]* | — |
