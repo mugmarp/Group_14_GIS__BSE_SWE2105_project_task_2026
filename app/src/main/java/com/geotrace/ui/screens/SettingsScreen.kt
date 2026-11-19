@@ -200,9 +200,9 @@ fun SettingsScreen(
                     else -> "${settings.stationaryJitterThresholdMeters}m"
                 }
                 val cellKeyBadge = when {
-                    settings.openCellIdApiKey.isNotBlank() -> "Custom Key"
-                    BuildConfig.OPENCELLID_API_KEY.isNotBlank() -> "CI Key"
-                    else -> "No Key"
+                    settings.openCellIdApiKey.isNotBlank() -> "Override"
+                    BuildConfig.OPENCELLID_API_KEY.isNotBlank() -> "Secret Active"
+                    else -> "Fallback"
                 }
                 val protectionBadge = when {
                     !isProtectionEnabled -> "OFF"

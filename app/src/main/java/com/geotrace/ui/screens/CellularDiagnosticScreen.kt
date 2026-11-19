@@ -454,8 +454,14 @@ private fun OpenCellIdStatusCard(
             customColors.statusActiveBorder,
             customColors.statusActiveText
         )
-        OpenCellIdLookupState.NO_API_KEY, OpenCellIdLookupState.AUTH_ERROR -> listOf(
-            "API KEY NEEDED",
+        OpenCellIdLookupState.NO_API_KEY -> listOf(
+            "LOCAL FALLBACK",
+            customColors.surfaceContainerHigh,
+            colorScheme.outlineVariant,
+            colorScheme.onSurfaceVariant
+        )
+        OpenCellIdLookupState.AUTH_ERROR -> listOf(
+            "API AUTH ERROR",
             colorScheme.errorContainer.copy(alpha = 0.55f),
             colorScheme.error.copy(alpha = 0.45f),
             colorScheme.error
@@ -570,7 +576,7 @@ private fun OpenCellIdStatusCard(
                 ) {
                     Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Configure OpenCellID API Key in Settings", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Open Cellular Engine Settings (Override)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
         }

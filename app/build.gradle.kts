@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -18,7 +20,24 @@ android {
         versionCode = versionCodeOverride ?: 1
         versionName = versionNameOverride ?: "1.0.0"
 
-        val openCellIdKey = System.getenv("OPENCELLID_API_KEY") ?: ""
+        val envFile = rootProject.file(".env")
+        val envProps = Properties()
+        if (envFile.exists()) {
+            envFile.inputStream().use { stream -> envProps.load(stream) }
+        }
+        val rawEnvFileKey = envProps.getProperty("OPENCELLID_API_KEY")
+            ?.trim()
+            ?.removeSurrounding("\"")
+            ?.removeSurrounding("'")
+        val rawSysEnvKey = System.getenv("OPENCELLID_API_KEY")
+            ?.trim()
+            ?.removeSurrounding("\"")
+            ?.removeSurrounding("'")
+        val openCellIdKey = (rawEnvFileKey?.takeIf { it.isNotBlank() }
+            ?: rawSysEnvKey?.takeIf { it.isNotBlank() }
+            ?: "")
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
         buildConfigField("String", "OPENCELLID_API_KEY", "\"$openCellIdKey\"")
     }
 

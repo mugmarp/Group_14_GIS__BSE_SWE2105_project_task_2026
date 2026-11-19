@@ -116,7 +116,7 @@ object OpenCellIdClient {
             if (updateStatus) {
                 _lookupStatus.value = OpenCellIdStatus(
                     state = OpenCellIdLookupState.NO_API_KEY,
-                    message = "OpenCellID API key not configured in Settings",
+                    message = "Local fallback (no CI key in preview build; override in Settings)",
                     updatedAtMs = System.currentTimeMillis()
                 )
             }
@@ -234,7 +234,7 @@ object OpenCellIdClient {
         if (effectiveKey.isBlank()) {
             _lookupStatus.value = OpenCellIdStatus(
                 state = OpenCellIdLookupState.NO_API_KEY,
-                message = "OpenCellID API key not configured in Settings",
+                message = "Local fallback (no CI key in preview build; override in Settings)",
                 updatedAtMs = System.currentTimeMillis()
             )
             return@withContext emptyList()

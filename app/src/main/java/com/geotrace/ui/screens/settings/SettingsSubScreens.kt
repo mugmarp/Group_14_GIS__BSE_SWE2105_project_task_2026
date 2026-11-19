@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -25,6 +26,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -539,8 +542,13 @@ internal fun CellularEngineSettingsPage(
     val context = LocalContext.current
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
+    val hasDefaultSecret = BuildConfig.OPENCELLID_API_KEY.isNotBlank()
+    val hasCustomOverride = settings.openCellIdApiKey.isNotBlank()
     var apiKeyInput by remember(settings.openCellIdApiKey) {
         mutableStateOf(settings.openCellIdApiKey)
+    }
+    var overrideExpanded by remember(hasCustomOverride) {
+        mutableStateOf(hasCustomOverride)
     }
 
     LazyColumn(
@@ -577,81 +585,199 @@ internal fun CellularEngineSettingsPage(
                     modifier = Modifier.padding(vertical = 10.dp)
                 )
 
-                Text(
-                    text = "OpenCellID API Token (MCC / MNC / LAC / CID Lookup)",
-                    color = colorScheme.onSurface,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-
-                OutlinedTextField(
-                    value = apiKeyInput,
-                    onValueChange = { apiKeyInput = it },
-                    label = { Text("Paste OpenCellID key") },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("opencellid_api_key_input")
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            viewModel.updateOpenCellIdApiKey(apiKeyInput)
-                            Toast.makeText(context, "OpenCellID API key saved & refreshing", Toast.LENGTH_SHORT).show()
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 48.dp)
-                            .testTag("save_opencellid_key_btn")
-                    ) {
-                        Text("Save Key", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
-
-                    OutlinedButton(
-                        onClick = {
-                            apiKeyInput = ""
-                            viewModel.updateOpenCellIdApiKey("")
-                            Toast.makeText(context, "Cleared OpenCellID key", Toast.LENGTH_SHORT).show()
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .testTag("clear_opencellid_key_btn")
-                    ) {
-                        Text("Clear", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    }
+                val statusTitle = when {
+                    hasCustomOverride -> "Custom Key Override Active"
+                    hasDefaultSecret -> "GitHub CI Secret Active"
+                    else -> "On-Device Fallback Mode"
                 }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                val statusLabel = when {
-                    settings.openCellIdApiKey.isNotBlank() ->
-                        "Active source: Custom OpenCellID Key (${settings.openCellIdApiKey.take(6)}…)"
-                    BuildConfig.OPENCELLID_API_KEY.isNotBlank() ->
-                        "Active source: Build CI Key configured (local TelephonyManager fallback enabled)"
+                val statusBadge = when {
+                    hasCustomOverride -> "OVERRIDE"
+                    hasDefaultSecret -> "CI SECRET SET"
+                    else -> "LOCAL FALLBACK"
+                }
+                val statusColor = when {
+                    hasCustomOverride -> colorScheme.secondary
+                    hasDefaultSecret -> colorScheme.tertiary
+                    else -> colorScheme.onSurfaceVariant
+                }
+                val statusDescription = when {
+                    hasCustomOverride ->
+                        "Temporarily overriding default with custom token (${settings.openCellIdApiKey.take(6)}…). Clearing this override restores ${if (hasDefaultSecret) "your GitHub CI secret default." else "on-device fallback."}"
+                    hasDefaultSecret ->
+                        "OpenCellID token is bundled automatically from your GitHub CI build secret. No manual entry required."
                     else ->
-                        "No OpenCellID key set — using on-device TelephonyManager tower IDs & local trilateration fallback."
+                        "This preview/local build has no injected CI secret — using on-device TelephonyManager tower IDs & local trilateration. GitHub Actions CI builds include your OPENCELLID_API_KEY secret automatically, or you can set a temporary override below."
                 }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
-                        .padding(10.dp)
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = customColors.surfaceContainerLow,
+                    border = BorderStroke(1.dp, statusColor.copy(alpha = 0.3f)),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = statusLabel,
-                        color = colorScheme.onSurfaceVariant,
-                        fontSize = 11.sp,
-                        lineHeight = 15.sp
-                    )
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = statusTitle,
+                                color = colorScheme.onSurface,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = statusColor.copy(alpha = 0.14f)
+                            ) {
+                                Text(
+                                    text = statusBadge,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = statusColor,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Text(
+                            text = statusDescription,
+                            color = colorScheme.onSurfaceVariant,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
+                        )
+                    }
+                }
+            }
+        }
+
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                border = BorderStroke(1.dp, colorScheme.outlineVariant)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { overrideExpanded = !overrideExpanded }
+                            .padding(horizontal = 4.dp, vertical = 6.dp)
+                            .testTag("toggle_opencellid_override_btn"),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Custom API Key Override (Optional)",
+                                color = colorScheme.onSurface,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                text = when {
+                                    hasCustomOverride -> "Override active — tap to edit or revert to default"
+                                    hasDefaultSecret -> "Leave collapsed to keep using your GitHub CI secret"
+                                    else -> "Optional temporary token override for preview testing"
+                                },
+                                color = colorScheme.onSurfaceVariant,
+                                fontSize = 11.sp,
+                                lineHeight = 14.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Icon(
+                            imageVector = if (overrideExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (overrideExpanded) "Collapse override" else "Expand override",
+                            tint = colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    AnimatedVisibility(visible = overrideExpanded) {
+                        Column(modifier = Modifier.padding(top = 10.dp)) {
+                            OutlinedTextField(
+                                value = apiKeyInput,
+                                onValueChange = { apiKeyInput = it },
+                                label = { Text("Custom Override Key (Optional)") },
+                                placeholder = { Text("Enter temporary OpenCellID key") },
+                                singleLine = true,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("opencellid_api_key_input")
+                            )
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Text(
+                                text = if (hasDefaultSecret) {
+                                    "Only overrides your GitHub CI secret on this device. Clearing removes only this override and leaves the CI secret default active."
+                                } else {
+                                    "Stored locally as a temporary override. Clearing removes the override and returns to on-device fallback."
+                                },
+                                color = colorScheme.onSurfaceVariant,
+                                fontSize = 10.sp,
+                                lineHeight = 14.sp
+                            )
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Button(
+                                    enabled = apiKeyInput.trim().isNotBlank(),
+                                    onClick = {
+                                        viewModel.updateOpenCellIdApiKey(apiKeyInput)
+                                        Toast.makeText(
+                                            context,
+                                            "OpenCellID override saved & refreshing",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 48.dp)
+                                        .testTag("save_opencellid_key_btn")
+                                ) {
+                                    Text("Save Override", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                OutlinedButton(
+                                    enabled = hasCustomOverride || apiKeyInput.isNotBlank(),
+                                    onClick = {
+                                        apiKeyInput = ""
+                                        viewModel.updateOpenCellIdApiKey("")
+                                        Toast.makeText(
+                                            context,
+                                            if (hasDefaultSecret) "Override cleared — using GitHub CI secret default"
+                                            else "Override cleared",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .testTag("clear_opencellid_key_btn")
+                                ) {
+                                    Text(
+                                        text = if (hasDefaultSecret) "Use Default" else "Clear Override",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
