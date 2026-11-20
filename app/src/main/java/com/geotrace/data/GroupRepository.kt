@@ -1274,10 +1274,8 @@ class GroupRepository(
     private fun mapNearbyError(phase: String, ex: Exception): String {
         if (ex is ApiException) {
             return when (ex.statusCode) {
-                ConnectionsStatusCodes.STATUS_BLUETOOTH_ERROR ->
-                    "Bluetooth is disabled or unavailable. Enable Bluetooth for off-grid P2P discovery."
                 ConnectionsStatusCodes.STATUS_RADIO_ERROR ->
-                    "Device wireless radios (Bluetooth/Wi-Fi) are off or in Airplane Mode."
+                    "Bluetooth or Wi-Fi radio is disabled or unavailable. Enable Bluetooth/Wi-Fi for off-grid P2P discovery."
                 ConnectionsStatusCodes.MISSING_PERMISSION_BLUETOOTH_SCAN,
                 ConnectionsStatusCodes.MISSING_PERMISSION_BLUETOOTH_ADVERTISE,
                 ConnectionsStatusCodes.MISSING_PERMISSION_BLUETOOTH_CONNECT,
