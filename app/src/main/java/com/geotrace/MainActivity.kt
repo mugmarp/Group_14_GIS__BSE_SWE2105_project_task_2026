@@ -18,6 +18,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -74,17 +75,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.compose.material.icons.filled.NotificationsActive
+import com.geotrace.model.AppThemeMode
 import com.geotrace.ui.screens.CellularDiagnosticScreen
 import com.geotrace.ui.screens.GeofenceScreen
 import com.geotrace.ui.screens.GroupScreen
@@ -93,6 +95,7 @@ import com.geotrace.ui.screens.MapScreen
 import com.geotrace.ui.screens.ResearchAnalysisScreen
 import com.geotrace.ui.screens.SettingsScreen
 import com.geotrace.ui.theme.GISTrackerTheme
+import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.GroupViewModel
 import com.geotrace.viewmodel.TrackerViewModel
@@ -138,7 +141,28 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
-            GISTrackerTheme {
+            val themeSettings by viewModel.settings.collectAsState()
+            val systemDark = isSystemInDarkTheme()
+            val useDarkTheme = when (themeSettings.themeMode) {
+                AppThemeMode.LIGHT -> false
+                AppThemeMode.DARK -> true
+                AppThemeMode.SYSTEM -> systemDark
+            }
+            LaunchedEffect(useDarkTheme) {
+                val barStyle = if (useDarkTheme) {
+                    SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+                } else {
+                    SystemBarStyle.light(
+                        android.graphics.Color.TRANSPARENT,
+                        android.graphics.Color.TRANSPARENT
+                    )
+                }
+                enableEdgeToEdge(
+                    statusBarStyle = barStyle,
+                    navigationBarStyle = barStyle
+                )
+            }
+            GISTrackerTheme(darkTheme = useDarkTheme) {
                 MainAppScreen(viewModel = viewModel, groupViewModel = groupViewModel)
             }
         }
@@ -280,77 +304,78 @@ fun MainAppScreen(
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
-        // Streamlined Option A Compact 48.dp Bottom Bar (Map & Devices)
+        // Compact 48dp Bottom Bar (Map & Devices) — height strictly preserved, flush top hairline & inner capsule pill
         bottomBar = {
             if (currentScreen == Screen.MAP || currentScreen == Screen.GROUPS) {
                 Surface(
-                    shape = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp),
+                    shape = RectangleShape,
                     color = colorScheme.surface,
-                    shadowElevation = 6.dp,
-                    border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.55f)),
+                    shadowElevation = 4.dp,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("bottom_nav_bar")
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        val navTabs = listOf(
-                            Triple(Screen.MAP, "Map", Icons.Default.Map to Icons.Outlined.OutlinedMap),
-                            Triple(Screen.GROUPS, "Devices", Icons.Default.Group to Icons.Outlined.OutlinedGroup)
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        HorizontalDivider(
+                            thickness = 1.dp,
+                            color = colorScheme.outlineVariant.copy(alpha = 0.55f)
                         )
-                        navTabs.forEach { (screen, label, icons) ->
-                            val selected = currentScreen == screen
-                            val (filledIcon, outlinedIcon) = icons
-                            val contentTint = if (selected) {
-                                colorScheme.primary
-                            } else {
-                                colorScheme.onSurfaceVariant.copy(alpha = 0.78f)
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .heightIn(min = 48.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { currentScreen = screen }
-                                    .testTag(if (screen == Screen.MAP) "nav_bottom_map" else "nav_bottom_groups")
-                            ) {
-                                if (selected) {
-                                    Box(
-                                        modifier = Modifier
-                                            .align(Alignment.TopCenter)
-                                            .width(36.dp)
-                                            .height(3.dp)
-                                            .clip(RoundedCornerShape(bottomStart = 3.dp, bottomEnd = 3.dp))
-                                            .background(colorScheme.primary)
-                                    )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding()
+                                .padding(horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val navTabs = listOf(
+                                Triple(Screen.MAP, "Map", Icons.Default.Map to Icons.Outlined.OutlinedMap),
+                                Triple(Screen.GROUPS, "Devices", Icons.Default.Group to Icons.Outlined.OutlinedGroup)
+                            )
+                            navTabs.forEach { (screen, label, icons) ->
+                                val selected = currentScreen == screen
+                                val (filledIcon, outlinedIcon) = icons
+                                val contentTint = if (selected) {
+                                    colorScheme.primary
+                                } else {
+                                    colorScheme.onSurfaceVariant.copy(alpha = 0.82f)
                                 }
-                                Row(
+                                Box(
                                     modifier = Modifier
-                                        .align(Alignment.Center)
-                                        .padding(horizontal = 10.dp),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .weight(1f)
+                                        .heightIn(min = 48.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable { currentScreen = screen }
+                                        .testTag(if (screen == Screen.MAP) "nav_bottom_map" else "nav_bottom_groups"),
+                                    contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(
-                                        imageVector = if (selected) filledIcon else outlinedIcon,
-                                        contentDescription = if (screen == Screen.MAP) "Map" else "Devices and Tracking Groups",
-                                        tint = contentTint,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = label,
-                                        fontSize = 12.sp,
-                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                        letterSpacing = 0.02.sp,
-                                        color = contentTint,
-                                        maxLines = 1
-                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .height(34.dp)
+                                            .clip(RoundedCornerShape(17.dp))
+                                            .background(
+                                                if (selected) colorScheme.primary.copy(alpha = 0.12f)
+                                                else Color.Transparent
+                                            )
+                                            .padding(horizontal = 18.dp),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = if (selected) filledIcon else outlinedIcon,
+                                            contentDescription = if (screen == Screen.MAP) "Map" else "Devices and Tracking Groups",
+                                            tint = contentTint,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = label,
+                                            fontSize = 12.sp,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                            letterSpacing = 0.02.sp,
+                                            color = contentTint,
+                                            maxLines = 1
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -708,7 +733,7 @@ fun MainAppScreen(
                                     Text(
                                         text = "$coordText • ${String.format(java.util.Locale.US, "%.1f", convertedSpeed)} ${settings.speedUnit.label} ($gait)",
                                         fontSize = 10.sp,
-                                        fontFamily = FontFamily.Monospace,
+                                        fontFamily = JetBrainsMonoFontFamily,
                                         color = colorScheme.onSurfaceVariant,
                                         maxLines = 2
                                     )
@@ -876,7 +901,7 @@ fun MainAppScreen(
                         Text(
                             text = "Offline + Cloud Sync",
                             fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = JetBrainsMonoFontFamily,
                             color = colorScheme.onSurfaceVariant
                         )
                     }
@@ -902,9 +927,9 @@ private fun MenuNavigationCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.8f))
     ) {

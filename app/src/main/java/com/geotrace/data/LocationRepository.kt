@@ -130,6 +130,19 @@ class LocationRepository(private val context: Context) {
         prefs.edit().putBoolean("keep_screen_on", keepOn).apply()
     }
 
+    fun getSavedThemeMode(): com.geotrace.model.AppThemeMode {
+        val raw = prefs.getString("app_theme_mode", null) ?: return com.geotrace.model.AppThemeMode.LIGHT
+        return try {
+            com.geotrace.model.AppThemeMode.valueOf(raw)
+        } catch (_: Exception) {
+            com.geotrace.model.AppThemeMode.LIGHT
+        }
+    }
+
+    fun saveThemeMode(mode: com.geotrace.model.AppThemeMode) {
+        prefs.edit().putString("app_theme_mode", mode.name).apply()
+    }
+
     fun getSavedShowCellTowerPin(): Boolean = prefs.getBoolean("show_cell_tower_pin", true)
 
     fun saveShowCellTowerPin(show: Boolean) {
@@ -174,6 +187,19 @@ class LocationRepository(private val context: Context) {
     fun saveGeofenceAccuracyGate(enabled: Boolean) {
         geofenceAccuracyGateEnabled = enabled
         prefs.edit().putBoolean("geofence_accuracy_gate", enabled).apply()
+    }
+
+    fun getSavedThemeMode(): AppThemeMode {
+        val raw = prefs.getString("app_theme_mode", null) ?: return AppThemeMode.LIGHT
+        return try {
+            AppThemeMode.valueOf(raw)
+        } catch (_: Exception) {
+            AppThemeMode.LIGHT
+        }
+    }
+
+    fun saveThemeMode(mode: AppThemeMode) {
+        prefs.edit().putString("app_theme_mode", mode.name).apply()
     }
 
     private fun loadInitialTrackingMode(): TrackingMode {

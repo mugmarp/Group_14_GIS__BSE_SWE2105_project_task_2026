@@ -46,9 +46,16 @@ data class OfflineDownloadProgress(
     val errorMessage: String? = null
 )
 
+enum class AppThemeMode(val label: String) {
+    LIGHT("Daylight"),
+    DARK("Night"),
+    SYSTEM("System")
+}
+
 data class TrackerSettings(
     val speedUnit: SpeedUnit = SpeedUnit.KMH,
     val coordinateFormat: CoordinateFormat = CoordinateFormat.DECIMAL,
+    val themeMode: AppThemeMode = AppThemeMode.LIGHT,
     val mapTileType: MapTileType = MapTileType.STANDARD,
     val showAccuracyRing: Boolean = true,
     val followUserLocation: Boolean = true,

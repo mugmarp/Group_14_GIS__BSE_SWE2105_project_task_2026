@@ -97,6 +97,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         com.geotrace.model.TrackerSettings(
             speedUnit = repository.getSavedSpeedUnit(),
             coordinateFormat = repository.getSavedCoordinateFormat(),
+            themeMode = repository.getSavedThemeMode(),
             mapTileType = repository.getSavedMapTileType(),
             showAccuracyRing = repository.getSavedShowAccuracyRing(),
             followUserLocation = repository.getSavedFollowUserLocation(),
@@ -107,7 +108,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             openCellIdApiKey = repository.getSavedOpenCellIdApiKey(),
             geofenceNotificationEnabled = repository.geofenceNotificationsEnabled,
             geofenceHysteresisMeters = repository.getSavedGeofenceHysteresis(),
-            geofenceAccuracyGateEnabled = repository.getSavedGeofenceAccuracyGate()
+            geofenceAccuracyGateEnabled = repository.getSavedGeofenceAccuracyGate(),
+            themeMode = repository.getSavedThemeMode()
         )
     )
     val settings: StateFlow<com.geotrace.model.TrackerSettings> = _settings.asStateFlow()
@@ -1227,9 +1229,19 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         _settings.value = _settings.value.copy(keepScreenOn = keepOn)
     }
 
+    fun updateThemeMode(mode: com.geotrace.model.AppThemeMode) {
+        repository.saveThemeMode(mode)
+        _settings.value = _settings.value.copy(themeMode = mode)
+    }
+
     fun toggleCellTowerPin(show: Boolean) {
         repository.saveShowCellTowerPin(show)
         _settings.value = _settings.value.copy(showCellTowerPin = show)
+    }
+
+    fun updateThemeMode(mode: com.geotrace.model.AppThemeMode) {
+        repository.saveThemeMode(mode)
+        _settings.value = _settings.value.copy(themeMode = mode)
     }
 
     fun updateOpenCellIdApiKey(apiKey: String) {
