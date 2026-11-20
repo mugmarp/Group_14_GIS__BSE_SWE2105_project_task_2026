@@ -462,14 +462,18 @@ fun P2PPeerCard(
     val customColors = LocalCustomColors.current
     val successColor = colorScheme.tertiary
 
-    val distanceText = formatDistanceBearing(
-        userLocation = userLocation,
-        targetLat = peer.latitude,
-        targetLng = peer.longitude,
-        distanceMeters = if (userLocation != null) peer.distanceToMeters(userLocation.latitude, userLocation.longitude) else 0f,
-        bearingDeg = if (userLocation != null) peer.bearingFrom(userLocation.latitude, userLocation.longitude) else 0f,
-        fallbackText = "GPS pending"
-    )
+    val distanceText = if (peer.hasValidCoordinates) {
+        formatDistanceBearing(
+            userLocation = userLocation,
+            targetLat = peer.latitude,
+            targetLng = peer.longitude,
+            distanceMeters = if (userLocation != null) peer.distanceToMeters(userLocation.latitude, userLocation.longitude) else 0f,
+            bearingDeg = if (userLocation != null) peer.bearingFrom(userLocation.latitude, userLocation.longitude) else 0f,
+            fallbackText = "GPS pending"
+        )
+    } else {
+        "GPS pending"
+    }
 
     val (ageText, isStale) = formatFreshness(peer.lastSeenTimestamp, nowMs, staleAfterMs = 30_000L)
     val isRingCoolingDown = lastRingSentAtMs > 0L && (nowMs - lastRingSentAtMs) in 0L..8_000L
@@ -510,7 +514,11 @@ fun P2PPeerCard(
                         color = colorScheme.onSurface
                     )
                     Text(
-                        text = "$distanceText • ${String.format(Locale.US, "%.1f", peer.speed * speedUnit.multiplier)} ${speedUnit.label}",
+                        text = if (peer.hasValidCoordinates) {
+                            "$distanceText • ${String.format(Locale.US, "%.1f", peer.speed * speedUnit.multiplier)} ${speedUnit.label}"
+                        } else {
+                            "Connected • GPS pending"
+                        },
                         fontSize = 11.sp,
                         color = colorScheme.onSurfaceVariant
                     )
@@ -532,7 +540,7 @@ fun P2PPeerCard(
             ) {
                 OutlinedButton(
                     onClick = onLocatePeer,
-                    enabled = peer.latitude != 0.0 || peer.longitude != 0.0,
+                    enabled = peer.hasValidCoordinates,
                     shape = RoundedCornerShape(10.dp),
                     modifier = Modifier
                         .weight(1f)

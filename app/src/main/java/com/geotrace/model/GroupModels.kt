@@ -142,6 +142,9 @@ data class P2PPeer(
     val bearingDegrees: Float = 0f,
     val lastSeenTimestamp: Long = System.currentTimeMillis()
 ) {
+    val hasValidCoordinates: Boolean
+        get() = latitude.isFinite() && longitude.isFinite() && (latitude != 0.0 || longitude != 0.0)
+
     fun distanceToMeters(userLat: Double, userLng: Double): Float {
         val results = FloatArray(1)
         android.location.Location.distanceBetween(

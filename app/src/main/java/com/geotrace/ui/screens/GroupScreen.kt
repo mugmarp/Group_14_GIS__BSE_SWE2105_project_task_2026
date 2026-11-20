@@ -1,6 +1,7 @@
 package com.geotrace.ui.screens
 
 import android.Manifest
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -8,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
+import androidx.core.app.ActivityCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -29,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.GroupAdd
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -37,6 +40,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -83,8 +87,13 @@ import com.geotrace.ui.screens.devices.RenameDeviceDialog
 import com.geotrace.ui.screens.devices.SignOutConfirmDialog
 import com.geotrace.ui.screens.devices.ThisDeviceCompactCard
 import com.geotrace.ui.screens.devices.hasBackgroundLocationPermission
+import com.geotrace.ui.screens.devices.isDeviceBluetoothEnabled
+import com.geotrace.ui.screens.devices.isDeviceLocationEnabled
+import com.geotrace.ui.screens.devices.missingP2PRadioPermissions
 import com.geotrace.ui.screens.devices.openAppLocationSettings
 import com.geotrace.ui.screens.devices.openAppNotificationSettings
+import com.geotrace.ui.screens.devices.openBluetoothSettings
+import com.geotrace.ui.screens.devices.openLocationSourceSettings
 import com.geotrace.ui.screens.devices.performGoogleSignIn
 import com.geotrace.ui.screens.devices.performSignOut
 import com.geotrace.ui.screens.devices.sortGroupMembers
@@ -130,6 +139,7 @@ fun GroupScreen(
     var showCallsignDialog by remember { mutableStateOf(false) }
     var showSignOutConfirmDialog by remember { mutableStateOf(false) }
     var showBgSettingsDialog by remember { mutableStateOf(false) }
+    var showP2PPermissionSettingsDialog by remember { mutableStateOf(false) }
     var groupPendingDelete by remember { mutableStateOf<Group?>(null) }
     var groupPendingLeave by remember { mutableStateOf<Group?>(null) }
     var devicePendingRemoval by remember { mutableStateOf<PersonalDevice?>(null) }
@@ -190,40 +200,30 @@ fun GroupScreen(
     val radioPermissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
-        if (grants.values.all { it }) {
+        permissionRefreshTick++
+        val stillMissing = missingP2PRadioPermissions(context)
+        if (stillMissing.isEmpty() || grants.values.all { it }) {
             groupViewModel.toggleP2PMesh()
         } else {
-            Toast.makeText(
-                context,
-                "Location & Bluetooth permissions are required for the Off-Grid P2P Device Finder.",
-                Toast.LENGTH_LONG
-            ).show()
+            val activity = context as? Activity
+            val permanentlyDenied = activity != null && stillMissing.any { perm ->
+                !ActivityCompat.shouldShowRequestPermissionRationale(activity, perm)
+            }
+            if (permanentlyDenied) {
+                showP2PPermissionSettingsDialog = true
+            } else {
+                Toast.makeText(
+                    context,
+                    "Location & Nearby/Bluetooth permissions are required for Off-Grid P2P.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         }
     }
 
     val requestP2PMeshWithPermissions = {
         if (!isP2PEnabled) {
-            val missing = buildList {
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                    add(Manifest.permission.ACCESS_FINE_LOCATION)
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-                        add(Manifest.permission.BLUETOOTH_SCAN)
-                    }
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) {
-                        add(Manifest.permission.BLUETOOTH_ADVERTISE)
-                    }
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-                        add(Manifest.permission.BLUETOOTH_CONNECT)
-                    }
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
-                        add(Manifest.permission.NEARBY_WIFI_DEVICES)
-                    }
-                }
-            }
+            val missing = missingP2PRadioPermissions(context)
             if (missing.isNotEmpty()) {
                 radioPermissionsLauncher.launch(missing.toTypedArray())
             } else {
@@ -234,9 +234,10 @@ fun GroupScreen(
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(isP2PEnabled) {
+        val intervalMs = if (isP2PEnabled) 2_000L else 4_000L
         while (true) {
-            delay(4_000L)
+            delay(intervalMs)
             nowMs = System.currentTimeMillis()
         }
     }
@@ -281,6 +282,15 @@ fun GroupScreen(
     }
     val hasNotifPermission = remember(permissionRefreshTick, nowMs) {
         com.geotrace.service.LocationForegroundService.hasNotificationPermission(context)
+    }
+    val isBluetoothEnabled = remember(permissionRefreshTick, nowMs) {
+        isDeviceBluetoothEnabled(context)
+    }
+    val isLocationEnabled = remember(permissionRefreshTick, nowMs) {
+        isDeviceLocationEnabled(context)
+    }
+    val hasMissingP2PPermissions = remember(permissionRefreshTick, nowMs) {
+        missingP2PRadioPermissions(context).isNotEmpty()
     }
 
     LazyColumn(
@@ -668,10 +678,17 @@ fun GroupScreen(
                 item {
                     P2PRadarControlCard(
                         isP2PEnabled = isP2PEnabled,
+                        isGhostMode = isGhostMode,
+                        isBluetoothEnabled = isBluetoothEnabled,
+                        isLocationEnabled = isLocationEnabled,
+                        hasMissingPermissions = hasMissingP2PPermissions,
                         p2pMeshState = p2pMeshState,
                         nearbyPeerCount = nearbyPeers.size,
                         onToggleP2P = requestP2PMeshWithPermissions,
-                        onRescanP2P = { groupViewModel.rescanP2PMesh() }
+                        onRescanP2P = { groupViewModel.rescanP2PMesh() },
+                        onOpenBluetoothSettings = { openBluetoothSettings(context) },
+                        onOpenLocationSettings = { openLocationSourceSettings(context) },
+                        onOpenAppSettings = { openAppLocationSettings(context) }
                     )
                 }
 
@@ -695,10 +712,15 @@ fun GroupScreen(
                                 border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                val hintText = if (p2pMeshState.discoveredCount > 0) {
-                                    "Detected ${p2pMeshState.discoveredNames.joinToString(", ")}. Handshaking Nearby P2P channel to exchange GPS coordinates..."
-                                } else {
-                                    "Scanning for nearby devices with GeoTrace P2P Finder ON (50-200m). Both phones need Bluetooth + Location enabled."
+                                val hintText = when {
+                                    p2pMeshState.connectedCount > 0 && isGhostMode ->
+                                        "Connected to ${p2pMeshState.connectedCount} peer link(s). Waiting for their coordinates (your Ghost Mode is hiding your location)."
+                                    p2pMeshState.discoveredCount > 0 ->
+                                        "Detected ${p2pMeshState.discoveredNames.joinToString(", ")}. Handshaking Nearby P2P channel..."
+                                    !isBluetoothEnabled || !isLocationEnabled ->
+                                        "Enable Bluetooth and Device Location above so Nearby Connections can discover nearby peers."
+                                    else ->
+                                        "Scanning for nearby devices with GeoTrace P2P Finder ON (50-200m). Both phones need Bluetooth + Location enabled."
                                 }
                                 Text(
                                     text = hintText,
@@ -846,6 +868,36 @@ fun GroupScreen(
                 openAppLocationSettings(context)
             },
             onDismiss = { showBgSettingsDialog = false }
+        )
+    }
+
+    if (showP2PPermissionSettingsDialog) {
+        AlertDialog(
+            onDismissRequest = { showP2PPermissionSettingsDialog = false },
+            title = {
+                Text("Permissions Required", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(
+                    "Off-Grid P2P Radar needs Location, Bluetooth, and Nearby Wi-Fi permissions. Open App Settings to allow them.",
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showP2PPermissionSettingsDialog = false
+                        openAppLocationSettings(context)
+                    }
+                ) {
+                    Text("Open App Settings", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showP2PPermissionSettingsDialog = false }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 }

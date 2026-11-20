@@ -53,6 +53,16 @@ private const val NEARBY_SERVICE_ID = "com.geotrace.p2p.mesh"
 private const val P2P_PAYLOAD_VERSION_V2: Byte = 2
 private const val P2P_PAYLOAD_VERSION_V3: Byte = 3
 private const val P2P_CMD_RING: Byte = 10
+private const val P2P_CMD_GHOST_HIDE: Byte = 11
+private const val P2P_CMD_PRESENCE_NO_FIX: Byte = 12
+private const val P2P_MAX_CONNECT_RETRIES = 2
+
+enum class P2PRingSendResult {
+    SENT,
+    COOLDOWN_ACTIVE,
+    NOT_CONNECTED,
+    FAILED
+}
 
 class GroupRepository(
     private val context: Context,
@@ -153,13 +163,18 @@ class GroupRepository(
     }
 
     private fun isValidCoordinate(lat: Double, lng: Double): Boolean {
-        return lat.isFinite() && lng.isFinite() && lat in -90.0..90.0 && lng in -180.0..180.0
+        return lat.isFinite() && lng.isFinite() &&
+            lat in -90.0..90.0 && lng in -180.0..180.0 &&
+            (lat != 0.0 || lng != 0.0)
     }
 
     private val discoveredEndpoints = ConcurrentHashMap<String, String>()
     private val pendingConnections = ConcurrentHashMap.newKeySet<String>()
+    private val incomingEndpoints = ConcurrentHashMap.newKeySet<String>()
     private val connectedEndpoints = ConcurrentHashMap<String, String>()
     private val activePeers = ConcurrentHashMap<String, P2PPeer>()
+    private val connectionRetryCounts = ConcurrentHashMap<String, Int>()
+    private val retryJobs = ConcurrentHashMap<String, Job>()
     private var p2pRestartJob: Job? = null
 
     @Volatile
@@ -239,12 +254,7 @@ class GroupRepository(
             prefs.edit().putString("offline_p2p_callsign", cleaned).apply()
             _offlineCallsign.value = cleaned
             if (isP2PMeshRequested) {
-                p2pRestartJob?.cancel()
-                stopP2PMesh()
-                p2pRestartJob = p2pScope.launch {
-                    delay(350L)
-                    startP2PMesh(cleaned)
-                }
+                restartP2PMeshAsync(cleaned)
             }
         }
     }
@@ -702,6 +712,11 @@ class GroupRepository(
         val displayName = getCurrentUserDisplayName()
         var anySucceeded = false
 
+        // Broadcast over off-grid P2P first so lack of internet never blocks Nearby updates
+        if (!_isGhostMode.value && (isP2PMeshRequested || isP2PAdvertising || isP2PDiscovering || connectedEndpoints.isNotEmpty())) {
+            broadcastP2PLocation(location, displayName, batteryPercent)
+        }
+
         val fleetRes = publishPersonalDevice(
             location = location,
             batteryPercent = batteryPercent,
@@ -923,23 +938,80 @@ class GroupRepository(
 
     fun startP2PMesh(displayName: String) {
         val myName = displayName.ifBlank { getCurrentUserDisplayName() }
+        p2pRestartJob?.cancel()
+        p2pRestartJob = null
+        cancelAllRetryJobs()
         isP2PMeshRequested = true
         lastP2PError = null
         updateMeshState()
-        startAdvertising(myName)
-        startDiscovery(myName)
+        startRadiosInternal(myName)
     }
 
     fun rescanP2PMesh(displayName: String) {
+        restartP2PMeshAsync(displayName)
+    }
+
+    private fun restartP2PMeshAsync(displayName: String) {
         val myName = displayName.ifBlank { getCurrentUserDisplayName() }
-        stopP2PMesh()
-        startP2PMesh(myName)
+        p2pRestartJob?.cancel()
+        cancelAllRetryJobs()
+        stopNearbyRadiosOnly()
+        isP2PMeshRequested = true
+        lastP2PError = null
+        updateMeshState()
+        p2pRestartJob = p2pScope.launch {
+            delay(350L)
+            p2pRestartJob = null
+            if (!isP2PMeshRequested) return@launch
+            startRadiosInternal(myName)
+        }
+    }
+
+    private fun startRadiosInternal(myName: String) {
+        if (!isP2PMeshRequested) return
+        if (!_isGhostMode.value) {
+            startAdvertising(myName)
+        } else {
+            isP2PAdvertising = false
+            updateMeshState()
+        }
+        startDiscovery(myName)
+    }
+
+    fun onP2PGhostModeChanged(ghostEnabled: Boolean) {
+        if (!isP2PMeshRequested) return
+        if (ghostEnabled) {
+            sendGhostHideCommand(connectedEndpoints.keys.toList())
+            try {
+                connectionsClient.stopAdvertising()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error pausing P2P advertising in Ghost Mode: ${e.message}")
+            }
+            isP2PAdvertising = false
+            updateMeshState()
+        } else {
+            startAdvertising(getCurrentUserDisplayName())
+            updateMeshState()
+        }
     }
 
     fun stopP2PMesh() {
         p2pRestartJob?.cancel()
         p2pRestartJob = null
         isP2PMeshRequested = false
+        cancelAllRetryJobs()
+        stopNearbyRadiosOnly()
+        lastP2PError = null
+        updateMeshState()
+    }
+
+    private fun cancelAllRetryJobs() {
+        retryJobs.values.forEach { it.cancel() }
+        retryJobs.clear()
+        connectionRetryCounts.clear()
+    }
+
+    private fun stopNearbyRadiosOnly() {
         try {
             connectionsClient.stopAdvertising()
             connectionsClient.stopDiscovery()
@@ -949,13 +1021,12 @@ class GroupRepository(
         } finally {
             isP2PAdvertising = false
             isP2PDiscovering = false
-            lastP2PError = null
             discoveredEndpoints.clear()
             pendingConnections.clear()
+            incomingEndpoints.clear()
             connectedEndpoints.clear()
             activePeers.clear()
             _nearbyPeers.value = emptyList()
-            updateMeshState()
         }
     }
 
@@ -963,13 +1034,17 @@ class GroupRepository(
         val discCount = discoveredEndpoints.size
         val connCount = connectedEndpoints.size
         val peerCount = activePeers.size
+        val isGhost = _isGhostMode.value
 
         val statusMsg = when {
             !isP2PMeshRequested -> "Off-grid P2P scanner idle"
             lastP2PError != null -> lastP2PError!!
+            peerCount > 0 && isGhost -> "Ghost Mode: receiving $peerCount offline peer(s) • You are hidden"
             peerCount > 0 -> "Receiving live telemetry from $peerCount offline peer(s)"
-            connCount > 0 -> "Connected to $connCount peer(s); exchanging coordinates..."
+            connCount > 0 && isGhost -> "Ghost Mode: $connCount link(s) active • Waiting for peer telemetry"
+            connCount > 0 -> "Connected to $connCount peer(s); exchanging telemetry..."
             discCount > 0 -> "Found $discCount device(s) nearby; establishing encrypted P2P link..."
+            isGhost && isP2PDiscovering -> "Ghost Mode: scanning nearby only (hidden from peers)"
             isP2PAdvertising && isP2PDiscovering -> "Broadcasting & scanning via BLE / Wi-Fi Direct (50-200m)"
             isP2PAdvertising || isP2PDiscovering -> "Initializing Nearby radios..."
             else -> "Starting Nearby Connections radios..."
@@ -988,6 +1063,7 @@ class GroupRepository(
     }
 
     private fun startAdvertising(displayName: String) {
+        if (!isP2PMeshRequested || _isGhostMode.value) return
         val advertisingOptions = AdvertisingOptions.Builder()
             .setStrategy(Strategy.P2P_CLUSTER)
             .build()
@@ -998,6 +1074,14 @@ class GroupRepository(
             createLifecycleCallback(),
             advertisingOptions
         ).addOnSuccessListener {
+            if (!isP2PMeshRequested || _isGhostMode.value) {
+                try {
+                    connectionsClient.stopAdvertising()
+                } catch (_: Exception) {}
+                isP2PAdvertising = false
+                updateMeshState()
+                return@addOnSuccessListener
+            }
             isP2PAdvertising = true
             lastP2PError = null
             updateMeshState()
@@ -1005,7 +1089,7 @@ class GroupRepository(
         }.addOnFailureListener { ex ->
             val code = (ex as? ApiException)?.statusCode
             if (code == ConnectionsStatusCodes.STATUS_ALREADY_ADVERTISING) {
-                isP2PAdvertising = true
+                isP2PAdvertising = !_isGhostMode.value && isP2PMeshRequested
                 lastP2PError = null
             } else {
                 isP2PAdvertising = false
@@ -1017,6 +1101,7 @@ class GroupRepository(
     }
 
     private fun startDiscovery(myDisplayName: String) {
+        if (!isP2PMeshRequested) return
         val discoveryOptions = DiscoveryOptions.Builder()
             .setStrategy(Strategy.P2P_CLUSTER)
             .build()
@@ -1030,31 +1115,37 @@ class GroupRepository(
                     discoveredEndpoints[endpointId] = remoteName
                     updateMeshState()
 
-                    if (connectedEndpoints.containsKey(endpointId) || !pendingConnections.add(endpointId)) {
+                    if (connectedEndpoints.containsKey(endpointId) ||
+                        incomingEndpoints.contains(endpointId) ||
+                        !pendingConnections.add(endpointId)
+                    ) {
                         return
                     }
 
-                    val delayMs = if (myDisplayName <= remoteName) 60L else 1100L
+                    val delayMs = when {
+                        myDisplayName < remoteName -> 60L
+                        myDisplayName > remoteName -> 1100L
+                        else -> kotlin.random.Random.nextLong(250L, 1450L)
+                    }
                     p2pScope.launch {
                         delay(delayMs)
-                        if (!isP2PMeshRequested || connectedEndpoints.containsKey(endpointId)) {
+                        if (!isP2PMeshRequested ||
+                            connectedEndpoints.containsKey(endpointId) ||
+                            incomingEndpoints.contains(endpointId) ||
+                            !discoveredEndpoints.containsKey(endpointId)
+                        ) {
                             pendingConnections.remove(endpointId)
                             return@launch
                         }
-                        connectionsClient.requestConnection(
-                            myDisplayName,
-                            endpointId,
-                            createLifecycleCallback(remoteName)
-                        ).addOnFailureListener { ex ->
-                            pendingConnections.remove(endpointId)
-                            Log.w(TAG, "requestConnection to $endpointId failed: ${ex.message}")
-                        }
+                        initiateConnectionToEndpoint(endpointId, remoteName)
                     }
                 }
 
                 override fun onEndpointLost(endpointId: String) {
                     discoveredEndpoints.remove(endpointId)
                     pendingConnections.remove(endpointId)
+                    retryJobs.remove(endpointId)?.cancel()
+                    connectionRetryCounts.remove(endpointId)
                     if (!connectedEndpoints.containsKey(endpointId)) {
                         activePeers.remove(endpointId)
                         emitSortedPeers()
@@ -1064,13 +1155,21 @@ class GroupRepository(
             },
             discoveryOptions
         ).addOnSuccessListener {
+            if (!isP2PMeshRequested) {
+                try {
+                    connectionsClient.stopDiscovery()
+                } catch (_: Exception) {}
+                isP2PDiscovering = false
+                updateMeshState()
+                return@addOnSuccessListener
+            }
             isP2PDiscovering = true
             lastP2PError = null
             updateMeshState()
         }.addOnFailureListener { ex ->
             val code = (ex as? ApiException)?.statusCode
             if (code == ConnectionsStatusCodes.STATUS_ALREADY_DISCOVERING) {
-                isP2PDiscovering = true
+                isP2PDiscovering = isP2PMeshRequested
                 lastP2PError = null
             } else {
                 isP2PDiscovering = false
@@ -1078,6 +1177,84 @@ class GroupRepository(
             }
             updateMeshState()
         }
+    }
+
+    private fun initiateConnectionToEndpoint(endpointId: String, remoteName: String) {
+        if (!isP2PMeshRequested ||
+            connectedEndpoints.containsKey(endpointId) ||
+            incomingEndpoints.contains(endpointId)
+        ) {
+            pendingConnections.remove(endpointId)
+            return
+        }
+        connectionsClient.requestConnection(
+            getCurrentUserDisplayName(),
+            endpointId,
+            createLifecycleCallback(remoteName)
+        ).addOnFailureListener { ex ->
+            pendingConnections.remove(endpointId)
+            val statusCode = (ex as? ApiException)?.statusCode
+            Log.w(TAG, "requestConnection to $endpointId failed (code=$statusCode): ${ex.message}")
+            when (statusCode) {
+                ConnectionsStatusCodes.STATUS_ALREADY_CONNECTED_TO_ENDPOINT -> {
+                    connectedEndpoints.putIfAbsent(endpointId, remoteName)
+                    seedConnectedPeerIfAbsent(endpointId, remoteName)
+                    updateMeshState()
+                    if (!_isGhostMode.value) {
+                        onPeerConnectedCallback?.invoke(endpointId)
+                    }
+                }
+                ConnectionsStatusCodes.STATUS_ENDPOINT_UNKNOWN -> {
+                    discoveredEndpoints.remove(endpointId)
+                    connectionRetryCounts.remove(endpointId)
+                    updateMeshState()
+                }
+                else -> scheduleConnectionRetry(endpointId, remoteName)
+            }
+        }
+    }
+
+    private fun scheduleConnectionRetry(endpointId: String, remoteName: String) {
+        if (!isP2PMeshRequested ||
+            connectedEndpoints.containsKey(endpointId) ||
+            incomingEndpoints.contains(endpointId) ||
+            !discoveredEndpoints.containsKey(endpointId)
+        ) return
+        val attempt = (connectionRetryCounts[endpointId] ?: 0) + 1
+        if (attempt > P2P_MAX_CONNECT_RETRIES) return
+        connectionRetryCounts[endpointId] = attempt
+        val backoffMs = if (attempt == 1) 1500L else 3500L
+        retryJobs.remove(endpointId)?.cancel()
+        retryJobs[endpointId] = p2pScope.launch {
+            delay(backoffMs)
+            retryJobs.remove(endpointId)
+            if (!isP2PMeshRequested ||
+                connectedEndpoints.containsKey(endpointId) ||
+                incomingEndpoints.contains(endpointId) ||
+                !discoveredEndpoints.containsKey(endpointId)
+            ) {
+                return@launch
+            }
+            if (pendingConnections.add(endpointId)) {
+                initiateConnectionToEndpoint(endpointId, remoteName)
+            }
+        }
+    }
+
+    private fun seedConnectedPeerIfAbsent(endpointId: String, displayName: String) {
+        if (activePeers.containsKey(endpointId)) return
+        activePeers[endpointId] = P2PPeer(
+            endpointId = endpointId,
+            displayName = displayName.ifBlank { "Nearby Peer" },
+            latitude = 0.0,
+            longitude = 0.0,
+            speed = 0f,
+            bearing = 0f,
+            batteryPercent = 100,
+            bleTag = "",
+            lastSeenTimestamp = System.currentTimeMillis()
+        )
+        emitSortedPeers()
     }
 
     private fun emitSortedPeers() {
@@ -1090,27 +1267,57 @@ class GroupRepository(
             private var endpointDisplayName: String = knownName ?: "GeoPeer"
 
             override fun onConnectionInitiated(endpointId: String, connectionInfo: ConnectionInfo) {
+                if (!isP2PMeshRequested) {
+                    connectionsClient.rejectConnection(endpointId)
+                    return
+                }
                 endpointDisplayName = connectionInfo.endpointName.ifBlank { endpointDisplayName }
                 discoveredEndpoints[endpointId] = endpointDisplayName
+                incomingEndpoints.add(endpointId)
+                retryJobs.remove(endpointId)?.cancel()
                 connectionsClient.acceptConnection(endpointId, payloadCallback)
+                    .addOnFailureListener { ex ->
+                        Log.w(TAG, "acceptConnection to $endpointId failed: ${ex.message}")
+                        incomingEndpoints.remove(endpointId)
+                        pendingConnections.remove(endpointId)
+                    }
                 updateMeshState()
             }
 
             override fun onConnectionResult(endpointId: String, result: ConnectionResolution) {
                 pendingConnections.remove(endpointId)
+                incomingEndpoints.remove(endpointId)
                 val statusCode = result.status.statusCode
                 if (result.status.isSuccess || statusCode == ConnectionsStatusCodes.STATUS_ALREADY_CONNECTED_TO_ENDPOINT) {
-                    connectedEndpoints[endpointId] = discoveredEndpoints[endpointId] ?: endpointDisplayName
+                    retryJobs.remove(endpointId)?.cancel()
+                    connectionRetryCounts.remove(endpointId)
+                    val resolvedName = discoveredEndpoints[endpointId] ?: endpointDisplayName
+                    connectedEndpoints[endpointId] = resolvedName
+                    seedConnectedPeerIfAbsent(endpointId, resolvedName)
                     lastP2PError = null
                     updateMeshState()
-                    onPeerConnectedCallback?.invoke(endpointId)
+                    if (_isGhostMode.value) {
+                        sendGhostHideCommand(listOf(endpointId))
+                    } else {
+                        onPeerConnectedCallback?.invoke(endpointId)
+                    }
                 } else {
+                    Log.w(TAG, "onConnectionResult failure for $endpointId: code=$statusCode")
+                    if (statusCode == ConnectionsStatusCodes.STATUS_ENDPOINT_UNKNOWN) {
+                        discoveredEndpoints.remove(endpointId)
+                        connectionRetryCounts.remove(endpointId)
+                    } else if (statusCode != ConnectionsStatusCodes.STATUS_CONNECTION_REJECTED) {
+                        scheduleConnectionRetry(endpointId, endpointDisplayName)
+                    }
                     updateMeshState()
                 }
             }
 
             override fun onDisconnected(endpointId: String) {
                 pendingConnections.remove(endpointId)
+                incomingEndpoints.remove(endpointId)
+                retryJobs.remove(endpointId)?.cancel()
+                connectionRetryCounts.remove(endpointId)
                 connectedEndpoints.remove(endpointId)
                 activePeers.remove(endpointId)
                 emitSortedPeers()
@@ -1135,6 +1342,48 @@ class GroupRepository(
                         connectedEndpoints[endpointId] ?: "Nearby GeoTrace Device"
                     }
                     FindDeviceAlarmManager.startRinging(context, caller)
+                    return
+                }
+
+                if (bytes[0] == P2P_CMD_GHOST_HIDE) {
+                    if (activePeers.remove(endpointId) != null) {
+                        emitSortedPeers()
+                        updateMeshState()
+                    }
+                    return
+                }
+
+                if (bytes[0] == P2P_CMD_PRESENCE_NO_FIX) {
+                    val buffer = ByteBuffer.wrap(bytes)
+                    if (buffer.remaining() >= 6) {
+                        buffer.get() // cmd
+                        val battery = buffer.int.coerceIn(0, 100)
+                        val tagLen = (buffer.get().toInt() and 0xFF).coerceAtMost(buffer.remaining())
+                        val tagBytes = ByteArray(tagLen)
+                        buffer.get(tagBytes)
+                        val peerTag = String(tagBytes, StandardCharsets.US_ASCII)
+                        val nameBytes = ByteArray(buffer.remaining())
+                        buffer.get(nameBytes)
+                        val name = String(nameBytes, StandardCharsets.UTF_8)
+                            .ifBlank { connectedEndpoints[endpointId] ?: "Nearby Peer" }
+                        val prev = activePeers[endpointId]
+                        val lat = if (prev != null && prev.hasValidCoordinates) prev.latitude else 0.0
+                        val lng = if (prev != null && prev.hasValidCoordinates) prev.longitude else 0.0
+                        connectedEndpoints[endpointId] = name
+                        activePeers[endpointId] = P2PPeer(
+                            endpointId = endpointId,
+                            displayName = name,
+                            latitude = lat,
+                            longitude = lng,
+                            speed = prev?.speed ?: 0f,
+                            bearing = prev?.bearing ?: 0f,
+                            batteryPercent = battery,
+                            bleTag = peerTag.ifBlank { prev?.bleTag ?: "" },
+                            lastSeenTimestamp = System.currentTimeMillis()
+                        )
+                        emitSortedPeers()
+                        updateMeshState()
+                    }
                     return
                 }
 
@@ -1212,7 +1461,7 @@ class GroupRepository(
                 }
 
                 if (peer != null && isValidCoordinate(peer.latitude, peer.longitude)) {
-                    connectedEndpoints.putIfAbsent(endpointId, peer.displayName)
+                    connectedEndpoints[endpointId] = peer.displayName
                     activePeers[endpointId] = peer
                     emitSortedPeers()
                     updateMeshState()
@@ -1225,21 +1474,58 @@ class GroupRepository(
         override fun onPayloadTransferUpdate(endpointId: String, update: PayloadTransferUpdate) {}
     }
 
-    fun sendP2PRingCommand(endpointId: String): Boolean {
+    fun sendP2PRingCommand(endpointId: String): P2PRingSendResult {
+        if (!connectedEndpoints.containsKey(endpointId)) {
+            return P2PRingSendResult.NOT_CONNECTED
+        }
         val now = System.currentTimeMillis()
         val lastSent = _p2pRingCooldownsMs.value[endpointId] ?: 0L
-        if (now - lastSent < 8_000L) return false
+        if (now - lastSent < 8_000L) return P2PRingSendResult.COOLDOWN_ACTIVE
         return try {
             val callerBytes = _offlineCallsign.value.toByteArray(StandardCharsets.UTF_8)
             val buffer = ByteBuffer.allocate(1 + callerBytes.size)
             buffer.put(P2P_CMD_RING)
             buffer.put(callerBytes)
-            connectionsClient.sendPayload(endpointId, Payload.fromBytes(buffer.array()))
             _p2pRingCooldownsMs.value = _p2pRingCooldownsMs.value + (endpointId to now)
-            true
+            connectionsClient.sendPayload(endpointId, Payload.fromBytes(buffer.array()))
+                .addOnFailureListener { ex ->
+                    Log.w(TAG, "Async failure sending P2P ring command to $endpointId: ${ex.message}")
+                    _p2pRingCooldownsMs.value = _p2pRingCooldownsMs.value - endpointId
+                }
+            P2PRingSendResult.SENT
         } catch (e: Exception) {
             Log.w(TAG, "Failed to send P2P ring command to $endpointId: ${e.message}")
-            false
+            _p2pRingCooldownsMs.value = _p2pRingCooldownsMs.value - endpointId
+            P2PRingSendResult.FAILED
+        }
+    }
+
+    private fun sendGhostHideCommand(targets: List<String>) {
+        if (targets.isEmpty()) return
+        try {
+            val payload = Payload.fromBytes(byteArrayOf(P2P_CMD_GHOST_HIDE))
+            connectionsClient.sendPayload(targets, payload)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to send P2P ghost hide command: ${e.message}")
+        }
+    }
+
+    fun sendP2PPresenceWithoutFix(displayName: String, batteryPercent: Int) {
+        if (_isGhostMode.value) return
+        val targets = connectedEndpoints.keys.toList()
+        if (targets.isEmpty()) return
+        try {
+            val tagBytes = bleTag.toByteArray(StandardCharsets.US_ASCII)
+            val nameBytes = displayName.toByteArray(StandardCharsets.UTF_8)
+            val buffer = ByteBuffer.allocate(1 + 4 + 1 + tagBytes.size + nameBytes.size)
+            buffer.put(P2P_CMD_PRESENCE_NO_FIX)
+            buffer.putInt(batteryPercent.coerceIn(0, 100))
+            buffer.put(tagBytes.size.toByte())
+            buffer.put(tagBytes)
+            buffer.put(nameBytes)
+            connectionsClient.sendPayload(targets, Payload.fromBytes(buffer.array()))
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to send P2P no-fix presence: ${e.message}")
         }
     }
 
@@ -1248,6 +1534,8 @@ class GroupRepository(
     }
 
     private fun broadcastP2PLocation(loc: LocationPoint, displayName: String, batteryPercent: Int) {
+        if (_isGhostMode.value) return
+        if (!isValidCoordinate(loc.latitude, loc.longitude)) return
         val targets = connectedEndpoints.keys.toList()
         if (targets.isEmpty()) return
         try {
@@ -1259,7 +1547,7 @@ class GroupRepository(
             buffer.putDouble(loc.longitude)
             buffer.putFloat(loc.speed)
             buffer.putFloat(loc.bearing)
-            buffer.putInt(batteryPercent)
+            buffer.putInt(batteryPercent.coerceIn(0, 100))
             buffer.put(tagBytes.size.toByte())
             buffer.put(tagBytes)
             buffer.put(nameBytes)

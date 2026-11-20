@@ -8,6 +8,7 @@ import android.os.BatteryManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.geotrace.LocationTrackerApp
+import com.geotrace.data.P2PRingSendResult
 import com.geotrace.model.Group
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.MapFocusTarget
@@ -185,7 +186,15 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         auth.addAuthStateListener(authListener)
         ensureProtectionStartedIfEligible(refreshNotification = false)
         repository.onPeerConnectedCallback = { _ ->
-            triggerImmediateBroadcast()
+            if (!isGhostMode.value) {
+                val loc = locationRepository.currentLocation.value
+                if (loc != null) {
+                    triggerImmediateBroadcast()
+                } else {
+                    pushP2PPresenceWithoutFix()
+                    seedLocationIfMissingAndBroadcast()
+                }
+            }
         }
         startBroadcastSyncLoop()
         observeLocationAndGroupForCloudSync()
@@ -426,10 +435,11 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     fun toggleGhostMode() {
         val newMode = !isGhostMode.value
         repository.setGhostMode(newMode)
+        repository.onP2PGhostModeChanged(newMode)
         _statusMessage.value = if (newMode) {
             "Ghost Mode ON: Hidden from groups & P2P peers"
         } else {
-            "Ghost Mode OFF: Live group sharing resumed"
+            "Ghost Mode OFF: Live sharing resumed"
         }
         if (newMode) {
             val activeIds = (userGroups.value.map { it.id } + repository.getKnownGroupIdsSnapshot() + listOfNotNull(_activeGroup.value?.id)).distinct()
@@ -440,6 +450,9 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }
+        } else if (_isP2PEnabled.value && locationRepository.currentLocation.value == null) {
+            pushP2PPresenceWithoutFix()
+            seedLocationIfMissingAndBroadcast()
         }
         ensureProtectionStartedIfEligible(refreshNotification = true)
         triggerImmediateBroadcast()
@@ -541,7 +554,13 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 "Off-Grid P2P Device Finder ON"
             }
-            triggerImmediateBroadcast()
+            if (!isGhostMode.value) {
+                if (locationRepository.currentLocation.value != null) {
+                    triggerImmediateBroadcast()
+                } else {
+                    seedLocationIfMissingAndBroadcast()
+                }
+            }
         } else {
             val focusId = _mapFocusTarget.value?.id
             if (focusId != null && nearbyPeers.value.any { it.endpointId == focusId }) {
@@ -635,11 +654,15 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun ringP2PPeer(endpointId: String, peerName: String) {
-        val sent = repository.sendP2PRingCommand(endpointId)
-        _statusMessage.value = if (sent) {
-            "Offline P2P Ring sent to $peerName!"
-        } else {
-            "Ring already sent to $peerName — please wait a few seconds."
+        when (repository.sendP2PRingCommand(endpointId)) {
+            P2PRingSendResult.SENT ->
+                _statusMessage.value = "Offline P2P Ring sent to $peerName!"
+            P2PRingSendResult.COOLDOWN_ACTIVE ->
+                _statusMessage.value = "Ring already sent to $peerName — please wait a few seconds."
+            P2PRingSendResult.NOT_CONNECTED ->
+                _errorMessage.value = "$peerName is not connected. Tap Rescan Nearby P2P Mesh."
+            P2PRingSendResult.FAILED ->
+                _errorMessage.value = "Failed to send P2P ring to $peerName."
         }
     }
 
@@ -767,12 +790,27 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun pushP2PPresenceWithoutFix() {
+        if (!_isP2PEnabled.value || isGhostMode.value) return
+        val context = getApplication<Application>()
+        val (batteryLevel, _) = getBatteryInfo(context)
+        val displayName = repository.getCurrentUserDisplayName()
+        repository.sendP2PPresenceWithoutFix(displayName, batteryLevel)
+    }
+
     private suspend fun performBroadcast(group: Group?, loc: LocationPoint): Boolean {
         val context = getApplication<Application>()
         val (batteryLevel, isCharging) = getBatteryInfo(context)
         val mode = locationRepository.trackingMode.value.name
         val displayName = repository.getCurrentUserDisplayName()
         var anySucceeded = false
+
+        // Always push over off-grid P2P first so offline Firestore awaits never delay or block nearby peers
+        if (_isP2PEnabled.value && !isGhostMode.value) {
+            repository.broadcastP2PLocationDirect(loc, displayName, batteryLevel)
+            lastP2PLocationPushMs = System.currentTimeMillis()
+            anySucceeded = true
+        }
 
         // Always update personal device fleet doc when signed in so multi-device tracking & Find works out of the box
         if (auth.currentUser != null) {
@@ -802,10 +840,6 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 if (groupRes.isSuccess) anySucceeded = true
             }
-        } else if (_isP2PEnabled.value && !isGhostMode.value) {
-            repository.broadcastP2PLocationDirect(loc, displayName, batteryLevel)
-            lastP2PLocationPushMs = System.currentTimeMillis()
-            anySucceeded = true
         }
 
         return anySucceeded

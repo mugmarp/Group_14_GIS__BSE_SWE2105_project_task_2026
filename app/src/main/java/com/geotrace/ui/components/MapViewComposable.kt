@@ -924,7 +924,7 @@ fun MapViewComposable(
 
                 // 6. Draw P2P Wilderness Peers (Phase 2 Nearby Connections)
                 for (peer in nearbyPeers) {
-                    if (!isValidCoordinate(peer.latitude, peer.longitude)) continue
+                    if (!peer.hasValidCoordinates || !isValidCoordinate(peer.latitude, peer.longitude)) continue
                     val peerGeoPoint = GeoPoint(peer.latitude, peer.longitude)
                     val peerColor = android.graphics.Color.parseColor("#059669")
                     val peerKey = "${peer.displayName.trim().take(2).uppercase()}:$peerColor"

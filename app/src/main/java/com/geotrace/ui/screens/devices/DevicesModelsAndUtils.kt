@@ -1,9 +1,11 @@
 package com.geotrace.ui.screens.devices
 
 import android.Manifest
+import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -13,6 +15,7 @@ import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationManagerCompat
 import com.geotrace.model.Group
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.MemberLocation
@@ -59,6 +62,71 @@ fun openAppNotificationSettings(context: Context) {
         ).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+    }
+    try {
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        openAppLocationSettings(context)
+    }
+}
+
+fun missingP2PRadioPermissions(context: Context): List<String> = buildList {
+    if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
+            add(Manifest.permission.BLUETOOTH_SCAN)
+        }
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) {
+            add(Manifest.permission.BLUETOOTH_ADVERTISE)
+        }
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            add(Manifest.permission.BLUETOOTH_CONNECT)
+        }
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.NEARBY_WIFI_DEVICES) != PackageManager.PERMISSION_GRANTED) {
+            add(Manifest.permission.NEARBY_WIFI_DEVICES)
+        }
+    }
+}
+
+fun isDeviceBluetoothEnabled(context: Context): Boolean {
+    return try {
+        val bm = context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter = bm?.adapter ?: return true
+        adapter.isEnabled
+    } catch (_: SecurityException) {
+        true
+    } catch (_: Exception) {
+        true
+    }
+}
+
+fun isDeviceLocationEnabled(context: Context): Boolean {
+    return try {
+        val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return true
+        LocationManagerCompat.isLocationEnabled(lm)
+    } catch (_: Exception) {
+        true
+    }
+}
+
+fun openBluetoothSettings(context: Context) {
+    val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    try {
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        openAppLocationSettings(context)
+    }
+}
+
+fun openLocationSourceSettings(context: Context) {
+    val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     try {
         context.startActivity(intent)

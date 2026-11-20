@@ -663,14 +663,30 @@ fun ActiveGroupHeroCard(
 @Composable
 fun P2PRadarControlCard(
     isP2PEnabled: Boolean,
+    isGhostMode: Boolean = false,
+    isBluetoothEnabled: Boolean = true,
+    isLocationEnabled: Boolean = true,
+    hasMissingPermissions: Boolean = false,
     p2pMeshState: P2PMeshState,
     nearbyPeerCount: Int,
     onToggleP2P: () -> Unit,
-    onRescanP2P: () -> Unit
+    onRescanP2P: () -> Unit,
+    onOpenBluetoothSettings: () -> Unit = {},
+    onOpenLocationSettings: () -> Unit = {},
+    onOpenAppSettings: () -> Unit = {}
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
     val successColor = colorScheme.tertiary
+
+    val (radioChipLabel, radioChipHealthy) = when {
+        p2pMeshState.errorText != null -> "Radio: Error" to false
+        isGhostMode && p2pMeshState.isDiscovering -> "Radio: Scan Only (Ghost)" to true
+        p2pMeshState.isAdvertising && p2pMeshState.isDiscovering -> "Radio: Adv + Scan" to true
+        p2pMeshState.isAdvertising -> "Radio: Adv Only" to true
+        p2pMeshState.isDiscovering -> "Radio: Scan Only" to true
+        else -> "Radio: Starting" to false
+    }
 
     Card(
         shape = RoundedCornerShape(18.dp),
@@ -719,7 +735,7 @@ fun P2PRadarControlCard(
                         Text(
                             text = if (isP2PEnabled) p2pMeshState.statusText else "No internet required • BLE & Wi-Fi Direct (50-200m)",
                             fontSize = 11.sp,
-                            color = if (p2pMeshState.errorText != null) colorScheme.error else colorScheme.onSurfaceVariant
+                            color = if (isP2PEnabled && p2pMeshState.errorText != null) colorScheme.error else colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -732,6 +748,83 @@ fun P2PRadarControlCard(
                 )
             }
 
+            if (!isBluetoothEnabled || !isLocationEnabled || hasMissingPermissions) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = customColors.statusWarningBg,
+                    border = BorderStroke(1.dp, customColors.statusWarningBorder),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        val blockers = buildList {
+                            if (!isBluetoothEnabled) add("Bluetooth is OFF")
+                            if (!isLocationEnabled) add("Device Location is OFF")
+                            if (hasMissingPermissions) add("Nearby/Location permissions required")
+                        }.joinToString(" • ")
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = customColors.warning,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = blockers,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = customColors.statusWarningText
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            if (!isBluetoothEnabled) {
+                                OutlinedButton(
+                                    onClick = onOpenBluetoothSettings,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("p2p_enable_bt_btn")
+                                ) {
+                                    Text("Bluetooth", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            if (!isLocationEnabled) {
+                                OutlinedButton(
+                                    onClick = onOpenLocationSettings,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("p2p_enable_loc_btn")
+                                ) {
+                                    Text("Location", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            if (hasMissingPermissions) {
+                                OutlinedButton(
+                                    onClick = onOpenAppSettings,
+                                    shape = RoundedCornerShape(8.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(48.dp)
+                                        .testTag("p2p_open_perm_settings_btn")
+                                ) {
+                                    Text("Permissions", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if (isP2PEnabled) {
                 Spacer(modifier = Modifier.height(10.dp))
                 Row(
@@ -741,14 +834,24 @@ fun P2PRadarControlCard(
                 ) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
-                        color = if (p2pMeshState.isAdvertising) successColor.copy(alpha = 0.12f) else colorScheme.surfaceVariant,
+                        color = when {
+                            p2pMeshState.errorText != null -> colorScheme.errorContainer
+                            radioChipHealthy -> successColor.copy(alpha = 0.12f)
+                            else -> colorScheme.surfaceVariant
+                        },
                         modifier = Modifier.weight(1f)
                     ) {
                         Text(
-                            text = if (p2pMeshState.isAdvertising) "Radio: Advertising" else "Radio: Starting",
+                            text = radioChipLabel,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = if (p2pMeshState.isAdvertising) successColor else colorScheme.onSurfaceVariant,
+                            color = when {
+                                p2pMeshState.errorText != null -> colorScheme.onErrorContainer
+                                radioChipHealthy -> successColor
+                                else -> colorScheme.onSurfaceVariant
+                            },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                         )
                     }
@@ -762,6 +865,8 @@ fun P2PRadarControlCard(
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                         )
                     }
