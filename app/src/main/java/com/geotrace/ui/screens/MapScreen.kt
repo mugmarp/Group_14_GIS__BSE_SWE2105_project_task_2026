@@ -395,6 +395,9 @@ fun MapScreen(
             onToggleCellTowerPin = { enabled ->
                 viewModel.toggleCellTowerPin(enabled)
             },
+            onToggleAutoRotateHeadingUp = { enabled ->
+                viewModel.toggleAutoRotateHeadingUp(enabled)
+            },
             onOpenOfflineMaps = {
                 showOfflineMapsDialog = true
             },
@@ -403,9 +406,11 @@ fun MapScreen(
             },
             initialMapCenter = viewModel.savedMapCenter,
             initialMapZoom = viewModel.savedMapZoom,
-            onSaveMapCamera = { center, zoom ->
+            initialMapOrientation = viewModel.savedMapOrientation,
+            onSaveMapCamera = { center, zoom, orientation ->
                 viewModel.savedMapCenter = center
                 viewModel.savedMapZoom = zoom
+                viewModel.savedMapOrientation = orientation
             },
             isMapPickMode = isPickingGeofenceCenter,
             onMapCoordinatePicked = { lat, lon ->

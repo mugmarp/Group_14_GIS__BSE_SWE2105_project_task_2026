@@ -52,6 +52,7 @@ data class TrackerSettings(
     val mapTileType: MapTileType = MapTileType.STANDARD,
     val showAccuracyRing: Boolean = true,
     val followUserLocation: Boolean = true,
+    val autoRotateHeadingUp: Boolean = false,
     val stationaryJitterThresholdMeters: Float = 1.5f,
     val keepScreenOn: Boolean = true,
     val showCellTowerPin: Boolean = true,

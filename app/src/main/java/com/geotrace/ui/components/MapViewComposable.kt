@@ -1,15 +1,29 @@
 package com.geotrace.ui.components
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Paint
 import android.view.MotionEvent
 import android.view.ViewConfiguration
+import android.view.animation.DecelerateInterpolator
 import java.util.Locale
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,13 +32,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -33,13 +45,13 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.GpsNotFixed
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.SatelliteAlt
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
@@ -57,17 +69,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -75,6 +90,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.geotrace.model.LocationPoint
+import com.geotrace.service.normalizeHeadingDegrees
+import com.geotrace.service.rememberCompassHeadingDegrees
+import com.geotrace.service.shortestAngleDeltaDegrees
 import com.geotrace.ui.theme.LocalCustomColors
 import androidx.compose.runtime.rememberUpdatedState
 import org.osmdroid.events.MapEventsReceiver
@@ -85,12 +103,18 @@ import org.osmdroid.tileprovider.MapTileProviderBasic
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.FolderOverlay
 import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Overlay
 import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
 import org.osmdroid.views.overlay.TilesOverlay
+import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 private data class MarkerInspectData(
@@ -100,6 +124,142 @@ private data class MarkerInspectData(
     val latitude: Double? = null,
     val longitude: Double? = null
 )
+
+private data class GeofenceLayerSig(
+    val cachedGeofences: List<CachedGeofenceVisuals>,
+    val hysteresisMeters: Float
+)
+
+private data class CellLayerSig(
+    val showCellTowerPin: Boolean,
+    val servingTower: com.geotrace.model.CellTowerLocation?,
+    val allTowers: List<com.geotrace.model.CellTowerLocation>,
+    val curLat: Double?,
+    val curLon: Double?
+)
+
+private data class TrailLayerSig(
+    val pointsSize: Int,
+    val firstLat: Double?,
+    val firstLon: Double?,
+    val lastLat: Double?,
+    val lastLon: Double?,
+    val inspectedTrailKey: String?,
+    val waypoints: List<com.geotrace.model.TrailWaypoint>,
+    val coordinateFormat: com.geotrace.model.CoordinateFormat,
+    val trailColorArgb: Int
+)
+
+private data class PeersLayerSig(
+    val members: List<com.geotrace.model.MemberLocation>,
+    val devices: List<com.geotrace.model.PersonalDevice>,
+    val peers: List<com.geotrace.model.P2PPeer>,
+    val deviceId: String,
+    val userUid: String?,
+    val speedUnit: com.geotrace.model.SpeedUnit
+)
+
+private data class UserTargetLayerSig(
+    val currentLocation: LocationPoint?,
+    val resolvedBearing: Float,
+    val showAccuracyRing: Boolean,
+    val speedUnit: com.geotrace.model.SpeedUnit,
+    val focusedTarget: com.geotrace.model.MapFocusTarget?,
+    val selectedSearchPin: com.geotrace.model.SearchPlaceResult?,
+    val droppedInspectPin: GeoPoint?,
+    val userPinColorArgb: Int
+)
+
+private fun normalizeMapOrientationSigned(degrees: Float): Float {
+    return shortestAngleDeltaDegrees(0f, degrees)
+}
+
+private class GeoTraceRotationOverlay(
+    private val onRotationGestureStarted: () -> Unit,
+    private val onOrientationChanged: (newOrientation: Float, cumulativeManualDelta: Float) -> Unit
+) : Overlay() {
+    private var activePointerId0 = MotionEvent.INVALID_POINTER_ID
+    private var activePointerId1 = MotionEvent.INVALID_POINTER_ID
+    private var lastAngleDeg = 0f
+    private var pendingTwistDeg = 0f
+    private var totalTwistInGesture = 0f
+    private var isTwisting = false
+
+    private fun pointerAngleDeg(event: MotionEvent, idx0: Int, idx1: Int): Float {
+        val dx = (event.getX(idx0) - event.getX(idx1)).toDouble()
+        val dy = (event.getY(idx0) - event.getY(idx1)).toDouble()
+        return Math.toDegrees(atan2(dy, dx)).toFloat()
+    }
+
+    override fun onTouchEvent(event: MotionEvent, mapView: MapView): Boolean {
+        if (!isEnabled) return false
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                activePointerId0 = event.getPointerId(0)
+                activePointerId1 = MotionEvent.INVALID_POINTER_ID
+                isTwisting = false
+                pendingTwistDeg = 0f
+                totalTwistInGesture = 0f
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                if (event.pointerCount == 2) {
+                    activePointerId0 = event.getPointerId(0)
+                    activePointerId1 = event.getPointerId(1)
+                    lastAngleDeg = pointerAngleDeg(event, 0, 1)
+                    pendingTwistDeg = 0f
+                    totalTwistInGesture = 0f
+                    isTwisting = false
+                }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (event.pointerCount == 2 &&
+                    activePointerId0 != MotionEvent.INVALID_POINTER_ID &&
+                    activePointerId1 != MotionEvent.INVALID_POINTER_ID
+                ) {
+                    val idx0 = event.findPointerIndex(activePointerId0)
+                    val idx1 = event.findPointerIndex(activePointerId1)
+                    if (idx0 >= 0 && idx1 >= 0) {
+                        val currentAngle = pointerAngleDeg(event, idx0, idx1)
+                        val delta = shortestAngleDeltaDegrees(lastAngleDeg, currentAngle)
+                        lastAngleDeg = currentAngle
+                        if (!isTwisting) {
+                            pendingTwistDeg += delta
+                            if (abs(pendingTwistDeg) >= 3.5f) {
+                                isTwisting = true
+                                onRotationGestureStarted()
+                                val applyDelta = pendingTwistDeg
+                                pendingTwistDeg = 0f
+                                totalTwistInGesture += abs(applyDelta)
+                                val nextOrientation = normalizeMapOrientationSigned(mapView.mapOrientation + applyDelta)
+                                mapView.setMapOrientation(nextOrientation, true)
+                                onOrientationChanged(mapView.mapOrientation, totalTwistInGesture)
+                            }
+                        } else if (abs(delta) > 0.05f) {
+                            totalTwistInGesture += abs(delta)
+                            val nextOrientation = normalizeMapOrientationSigned(mapView.mapOrientation + delta)
+                            mapView.setMapOrientation(nextOrientation, true)
+                            onOrientationChanged(mapView.mapOrientation, totalTwistInGesture)
+                        }
+                    }
+                }
+            }
+            MotionEvent.ACTION_POINTER_UP -> {
+                if (event.pointerCount <= 2) {
+                    activePointerId1 = MotionEvent.INVALID_POINTER_ID
+                    isTwisting = false
+                    pendingTwistDeg = 0f
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                activePointerId0 = MotionEvent.INVALID_POINTER_ID
+                activePointerId1 = MotionEvent.INVALID_POINTER_ID
+                isTwisting = false
+                pendingTwistDeg = 0f
+            }
+        }
+        return false
+    }
+}
 
 private data class CachedGeofenceVisuals(
     val zone: com.geotrace.model.GeofenceZone,
@@ -156,21 +316,28 @@ fun MapViewComposable(
     settings: com.geotrace.model.TrackerSettings = com.geotrace.model.TrackerSettings(),
     onSelectTileLayer: ((com.geotrace.model.MapTileType) -> Unit)? = null,
     onToggleCellTowerPin: ((Boolean) -> Unit)? = null,
+    onToggleAutoRotateHeadingUp: ((Boolean) -> Unit)? = null,
     onOpenOfflineMaps: (() -> Unit)? = null,
     onMapBoundsChanged: ((BoundingBox) -> Unit)? = null,
     initialMapCenter: GeoPoint? = null,
     initialMapZoom: Double? = null,
-    onSaveMapCamera: ((GeoPoint, Double) -> Unit)? = null,
+    initialMapOrientation: Float = 0f,
+    onSaveMapCamera: ((GeoPoint, Double, Float) -> Unit)? = null,
     isMapPickMode: Boolean = false,
     onMapCoordinatePicked: ((Double, Double) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    val density = LocalDensity.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnMapCoordinatePicked by rememberUpdatedState(onMapCoordinatePicked)
     val currentIsMapPickMode by rememberUpdatedState(isMapPickMode)
     val currentOnFollowPausedByUser by rememberUpdatedState(onFollowPausedByUser)
+    val currentOnSaveMapCamera by rememberUpdatedState(onSaveMapCamera)
+    val currentLocationState by rememberUpdatedState(currentLocation)
+    val currentCoordinateFormat by rememberUpdatedState(settings.coordinateFormat)
+    val currentAutoRotateHeadingUp by rememberUpdatedState(settings.autoRotateHeadingUp)
 
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
@@ -182,6 +349,12 @@ fun MapViewComposable(
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
     var hasCenteredOnFirstFix by remember { mutableStateOf(initialMapCenter != null) }
     var isUserInteractingWithMap by remember { mutableStateOf(false) }
+    var liveMapOrientation by remember { mutableStateOf(initialMapOrientation) }
+    var liveZoomLevel by remember { mutableStateOf(initialMapZoom ?: 16.5) }
+    var liveCenterLat by remember { mutableStateOf(initialMapCenter?.latitude ?: currentLocation?.latitude ?: 0.0) }
+    var isHeadingUpPausedByUser by remember { mutableStateOf(false) }
+    val orientationAnimatorHolder = remember { arrayOfNulls<ValueAnimator>(1) }
+    var inspectCardHeightPx by remember { mutableIntStateOf(0) }
     var showLayerMenu by remember { mutableStateOf(false) }
     var selectedMarkerInfo by remember { mutableStateOf<MarkerInspectData?>(null) }
     var droppedInspectPin by remember { mutableStateOf<GeoPoint?>(null) }
@@ -193,6 +366,89 @@ fun MapViewComposable(
         if (inspectCoordsCopied) {
             kotlinx.coroutines.delay(1600L)
             inspectCoordsCopied = false
+        }
+    }
+
+    val compassHeading by rememberCompassHeadingDegrees(enabled = true)
+    val resolvedUserBearing = remember(currentLocation?.bearing, currentLocation?.speed, compassHeading) {
+        val loc = currentLocation
+        when {
+            loc != null && loc.speed >= 1.5f && loc.bearing.isFinite() -> normalizeHeadingDegrees(loc.bearing)
+            compassHeading != null -> compassHeading!!
+            loc != null && loc.bearing.isFinite() -> normalizeHeadingDegrees(loc.bearing)
+            else -> 0f
+        }
+    }
+    val currentResolvedBearing by rememberUpdatedState(resolvedUserBearing)
+
+    fun animateMapOrientationTo(targetDeg: Float, durationMs: Long = 280L) {
+        val map = mapViewRef ?: return
+        orientationAnimatorHolder[0]?.cancel()
+        val startDeg = map.mapOrientation
+        val normalizedTarget = normalizeMapOrientationSigned(targetDeg)
+        val delta = shortestAngleDeltaDegrees(startDeg, normalizedTarget)
+        if (abs(delta) < 0.35f) {
+            val finalAngle = if (abs(normalizedTarget) < 0.35f) 0f else normalizedTarget
+            if (map.mapOrientation != finalAngle) {
+                map.setMapOrientation(finalAngle, true)
+            }
+            liveMapOrientation = map.mapOrientation
+            val c = map.mapCenter
+            currentOnSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), map.zoomLevelDouble, map.mapOrientation)
+            return
+        }
+        val animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = durationMs
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { anim ->
+                val fraction = anim.animatedValue as Float
+                val nextDeg = normalizeMapOrientationSigned(startDeg + delta * fraction)
+                map.setMapOrientation(nextDeg, true)
+                liveMapOrientation = map.mapOrientation
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    val c = map.mapCenter
+                    currentOnSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), map.zoomLevelDouble, map.mapOrientation)
+                }
+            })
+        }
+        orientationAnimatorHolder[0] = animator
+        animator.start()
+    }
+
+    LaunchedEffect(settings.autoRotateHeadingUp) {
+        if (settings.autoRotateHeadingUp) {
+            isHeadingUpPausedByUser = false
+        }
+    }
+
+    LaunchedEffect(
+        resolvedUserBearing,
+        settings.autoRotateHeadingUp,
+        settings.followUserLocation,
+        isFollowPaused,
+        isHeadingUpPausedByUser,
+        isUserInteractingWithMap,
+        focusedTarget,
+        selectedSearchPin,
+        inspectedTrailName,
+        mapViewRef
+    ) {
+        val shouldAutoRotate = settings.autoRotateHeadingUp &&
+            settings.followUserLocation &&
+            !isFollowPaused &&
+            !isHeadingUpPausedByUser &&
+            !isUserInteractingWithMap &&
+            focusedTarget == null &&
+            selectedSearchPin == null &&
+            inspectedTrailName == null
+        if (shouldAutoRotate) {
+            val map = mapViewRef ?: return@LaunchedEffect
+            val targetOrientation = normalizeMapOrientationSigned(-resolvedUserBearing)
+            if (abs(shortestAngleDeltaDegrees(map.mapOrientation, targetOrientation)) >= 2.0f) {
+                animateMapOrientationTo(targetOrientation, 260L)
+            }
         }
     }
 
@@ -384,6 +640,73 @@ fun MapViewComposable(
         onMarkSearchHandled?.invoke(place.requestedAtMs)
     }
 
+    // Persistent differential FolderOverlay layers (zero full overlay clear/recreate churn per tick)
+    val geofenceLayer = remember { FolderOverlay() }
+    val cellTowerLayer = remember { FolderOverlay() }
+    val trailLayer = remember { FolderOverlay() }
+    val peersLayer = remember { FolderOverlay() }
+    val userTargetLayer = remember { FolderOverlay() }
+
+    val lastGeofenceSigHolder = remember { arrayOfNulls<GeofenceLayerSig>(1) }
+    val lastCellSigHolder = remember { arrayOfNulls<CellLayerSig>(1) }
+    val lastTrailSigHolder = remember { arrayOfNulls<TrailLayerSig>(1) }
+    val lastPeersSigHolder = remember { arrayOfNulls<PeersLayerSig>(1) }
+    val lastUserTargetSigHolder = remember { arrayOfNulls<UserTargetLayerSig>(1) }
+    val hasAttachedBaseLayersHolder = remember { booleanArrayOf(false) }
+
+    val persistentEventsOverlay = remember {
+        MapEventsOverlay(object : MapEventsReceiver {
+            override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
+                selectedMarkerInfo = null
+                droppedInspectPin = null
+                if (currentIsMapPickMode && p != null) {
+                    currentOnMapCoordinatePicked?.invoke(p.latitude, p.longitude)
+                    return true
+                }
+                return false
+            }
+
+            override fun longPressHelper(p: GeoPoint?): Boolean {
+                if (currentIsMapPickMode || p == null) return false
+                droppedInspectPin = p
+                val distStr = currentLocationState?.let { cur ->
+                    val d = GeoPoint(cur.latitude, cur.longitude).distanceToAsDouble(p)
+                    if (d < 1000.0) " • ${d.toInt()}m away" else String.format(Locale.US, " • %.1fkm away", d / 1000.0)
+                } ?: ""
+                val coordStr = com.geotrace.ui.screens.formatCoordinates(p.latitude, p.longitude, currentCoordinateFormat)
+                selectedMarkerInfo = MarkerInspectData(
+                    title = "Dropped Pin",
+                    detail = "$coordStr$distStr",
+                    badge = "PIN",
+                    latitude = p.latitude,
+                    longitude = p.longitude
+                )
+                return true
+            }
+        })
+    }
+
+    val persistentRotationOverlay = remember {
+        GeoTraceRotationOverlay(
+            onRotationGestureStarted = {
+                orientationAnimatorHolder[0]?.cancel()
+            },
+            onOrientationChanged = { updatedOrientation, cumulativeTwist ->
+                liveMapOrientation = updatedOrientation
+                if (currentAutoRotateHeadingUp && cumulativeTwist >= 3.0f) {
+                    val expectedOrientation = normalizeMapOrientationSigned(-currentResolvedBearing)
+                    if (abs(shortestAngleDeltaDegrees(updatedOrientation, expectedOrientation)) >= 3.0f) {
+                        isHeadingUpPausedByUser = true
+                    }
+                }
+                mapViewRef?.let { m ->
+                    val c = m.mapCenter
+                    currentOnSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), m.zoomLevelDouble, updatedOrientation)
+                }
+            }
+        )
+    }
+
     // Manage MapView lifecycle
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -396,13 +719,17 @@ fun MapViewComposable(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            orientationAnimatorHolder[0]?.cancel()
+            orientationAnimatorHolder[0] = null
             mapViewRef?.let { m ->
                 val c = m.mapCenter
-                onSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), m.zoomLevelDouble)
+                currentOnSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), m.zoomLevelDouble, m.mapOrientation)
             }
             lifecycleOwner.lifecycle.removeObserver(observer)
             hybridLabelsProvider.setTileRequestCompleteHandler(null)
             hybridLabelsProvider.detach()
+            avatarDrawableCache.clear()
+            waypointDrawableCache.clear()
             mapViewRef?.onDetach()
         }
     }
@@ -428,6 +755,8 @@ fun MapViewComposable(
                     )
                     zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
                     controller.setZoom(15.0)
+                    setMapOrientation(initialMapOrientation, false)
+                    liveMapOrientation = mapOrientation
 
                     val hasUnhandledFocus = focusedTarget != null &&
                         (focusedTarget.latitude != 0.0 || focusedTarget.longitude != 0.0) &&
@@ -453,10 +782,12 @@ fun MapViewComposable(
                         controller.setZoom(3.0)
                     }
 
-                    // Detect manual pan/pinch gestures and immediately yield camera control to user
+                    // Detect manual pan vs stationary two-finger pinch/twist with clean pointer handoff
                     val touchSlop = ViewConfiguration.get(ctx).scaledTouchSlop.toFloat()
                     var downX = 0f
                     var downY = 0f
+                    var centroidDownX = 0f
+                    var centroidDownY = 0f
                     var hasTriggeredGesturePause = false
                     @SuppressLint("ClickableViewAccessibility")
                     setOnTouchListener { _, event ->
@@ -466,22 +797,43 @@ fun MapViewComposable(
                                 downY = event.y
                                 hasTriggeredGesturePause = false
                                 isUserInteractingWithMap = true
+                                orientationAnimatorHolder[0]?.cancel()
                             }
                             MotionEvent.ACTION_POINTER_DOWN -> {
                                 isUserInteractingWithMap = true
-                                if (!hasTriggeredGesturePause) {
-                                    hasTriggeredGesturePause = true
-                                    controller.stopAnimation(false)
-                                    currentOnFollowPausedByUser?.invoke()
+                                orientationAnimatorHolder[0]?.cancel()
+                                if (event.pointerCount >= 2) {
+                                    centroidDownX = (event.getX(0) + event.getX(1)) * 0.5f
+                                    centroidDownY = (event.getY(0) + event.getY(1)) * 0.5f
                                 }
                             }
                             MotionEvent.ACTION_MOVE -> {
-                                val dx = kotlin.math.abs(event.x - downX)
-                                val dy = kotlin.math.abs(event.y - downY)
-                                if (!hasTriggeredGesturePause && (dx > touchSlop || dy > touchSlop || event.pointerCount >= 2)) {
-                                    hasTriggeredGesturePause = true
-                                    controller.stopAnimation(false)
-                                    currentOnFollowPausedByUser?.invoke()
+                                if (!hasTriggeredGesturePause) {
+                                    if (event.pointerCount == 1) {
+                                        val moved = hypot(event.x - downX, event.y - downY)
+                                        if (moved > touchSlop) {
+                                            hasTriggeredGesturePause = true
+                                            controller.stopAnimation(false)
+                                            currentOnFollowPausedByUser?.invoke()
+                                        }
+                                    } else if (event.pointerCount >= 2) {
+                                        val cx = (event.getX(0) + event.getX(1)) * 0.5f
+                                        val cy = (event.getY(0) + event.getY(1)) * 0.5f
+                                        val centroidShift = hypot(cx - centroidDownX, cy - centroidDownY)
+                                        if (centroidShift > touchSlop * 2.5f) {
+                                            hasTriggeredGesturePause = true
+                                            controller.stopAnimation(false)
+                                            currentOnFollowPausedByUser?.invoke()
+                                        }
+                                    }
+                                }
+                            }
+                            MotionEvent.ACTION_POINTER_UP -> {
+                                if (event.pointerCount == 2) {
+                                    val liftedIdx = event.actionIndex
+                                    val remainingIdx = if (liftedIdx == 0) 1 else 0
+                                    downX = event.getX(remainingIdx)
+                                    downY = event.getY(remainingIdx)
                                 }
                             }
                             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -496,18 +848,24 @@ fun MapViewComposable(
                         override fun onScroll(event: ScrollEvent?): Boolean {
                             onMapBoundsChanged?.invoke(boundingBox)
                             val c = mapCenter
-                            onSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), zoomLevelDouble)
+                            liveCenterLat = c.latitude
+                            liveZoomLevel = zoomLevelDouble
+                            currentOnSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), zoomLevelDouble, mapOrientation)
                             return false
                         }
 
                         override fun onZoom(event: ZoomEvent?): Boolean {
                             onMapBoundsChanged?.invoke(boundingBox)
                             val c = mapCenter
-                            onSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), zoomLevelDouble)
+                            liveCenterLat = c.latitude
+                            liveZoomLevel = zoomLevelDouble
+                            currentOnSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), zoomLevelDouble, mapOrientation)
                             return false
                         }
                     })
                     post {
+                        liveZoomLevel = zoomLevelDouble
+                        liveCenterLat = mapCenter.latitude
                         onMapBoundsChanged?.invoke(boundingBox)
                     }
                     hybridLabelsProvider.setTileRequestCompleteHandler(tileRequestCompleteHandler)
@@ -515,509 +873,565 @@ fun MapViewComposable(
                 }
             },
             update = { map ->
-                map.overlays.clear()
-
-                // 0. Hybrid street & place labels overlay on top of Esri Satellite imagery
-                if (settings.mapTileType == com.geotrace.model.MapTileType.HYBRID) {
-                    map.overlays.add(hybridLabelsOverlay)
+                if (!hasAttachedBaseLayersHolder[0]) {
+                    map.overlays.clear()
+                    map.overlays.add(geofenceLayer)
+                    map.overlays.add(cellTowerLayer)
+                    map.overlays.add(trailLayer)
+                    map.overlays.add(peersLayer)
+                    map.overlays.add(userTargetLayer)
+                    map.overlays.add(persistentEventsOverlay)
+                    map.overlays.add(persistentRotationOverlay)
+                    hasAttachedBaseLayersHolder[0] = true
                 }
 
-                // 1. Draw Real GPS Trail (segmented to prevent teleportation jumps)
-                if (trailPoints.size >= 2) {
-                    val currentSegment = mutableListOf<GeoPoint>()
-                    for (i in trailPoints.indices) {
-                        val pt = trailPoints[i]
-                        val geoPt = GeoPoint(pt.latitude, pt.longitude)
-                        if (currentSegment.isEmpty()) {
-                            currentSegment.add(geoPt)
-                        } else {
-                            val lastGeo = currentSegment.last()
-                            val distM = lastGeo.distanceToAsDouble(geoPt)
-                            if (distM > 5000.0) {
-                                if (currentSegment.size >= 2) {
-                                    val polyline = Polyline(map).apply {
-                                        outlinePaint.color = trailColor.toArgb()
-                                        outlinePaint.strokeWidth = 9f
-                                        outlinePaint.strokeCap = Paint.Cap.ROUND
-                                        outlinePaint.strokeJoin = Paint.Join.ROUND
-                                        setPoints(currentSegment.toList())
+                // 0. Hybrid street & place labels overlay toggled cleanly without resetting other layers
+                val shouldShowHybrid = settings.mapTileType == com.geotrace.model.MapTileType.HYBRID
+                val hasHybrid = map.overlays.firstOrNull() === hybridLabelsOverlay
+                if (shouldShowHybrid && !hasHybrid) {
+                    map.overlays.add(0, hybridLabelsOverlay)
+                } else if (!shouldShowHybrid && hasHybrid) {
+                    map.overlays.removeAt(0)
+                }
+
+                var anyLayerChanged = false
+
+                // 1. Differential Trail & Waypoint Layer
+                val trailSig = TrailLayerSig(
+                    pointsSize = trailPoints.size,
+                    firstLat = trailPoints.firstOrNull()?.latitude,
+                    firstLon = trailPoints.firstOrNull()?.longitude,
+                    lastLat = trailPoints.lastOrNull()?.latitude,
+                    lastLon = trailPoints.lastOrNull()?.longitude,
+                    inspectedTrailKey = inspectedTrailKey,
+                    waypoints = trailWaypoints,
+                    coordinateFormat = settings.coordinateFormat,
+                    trailColorArgb = trailColor.toArgb()
+                )
+                if (lastTrailSigHolder[0] != trailSig) {
+                    lastTrailSigHolder[0] = trailSig
+                    anyLayerChanged = true
+                    trailLayer.items.clear()
+
+                    if (trailPoints.size >= 2) {
+                        val currentSegment = mutableListOf<GeoPoint>()
+                        for (i in trailPoints.indices) {
+                            val pt = trailPoints[i]
+                            val geoPt = GeoPoint(pt.latitude, pt.longitude)
+                            if (currentSegment.isEmpty()) {
+                                currentSegment.add(geoPt)
+                            } else {
+                                val lastGeo = currentSegment.last()
+                                val distM = lastGeo.distanceToAsDouble(geoPt)
+                                if (distM > 5000.0) {
+                                    if (currentSegment.size >= 2) {
+                                        val polyline = Polyline(map).apply {
+                                            outlinePaint.color = trailColor.toArgb()
+                                            outlinePaint.strokeWidth = 9f
+                                            outlinePaint.strokeCap = Paint.Cap.ROUND
+                                            outlinePaint.strokeJoin = Paint.Join.ROUND
+                                            setPoints(currentSegment.toList())
+                                        }
+                                        trailLayer.add(polyline)
                                     }
-                                    map.overlays.add(polyline)
+                                    currentSegment.clear()
                                 }
-                                currentSegment.clear()
+                                currentSegment.add(geoPt)
                             }
-                            currentSegment.add(geoPt)
                         }
-                    }
-                    if (currentSegment.size >= 2) {
-                        val polyline = Polyline(map).apply {
-                            outlinePaint.color = trailColor.toArgb()
-                            outlinePaint.strokeWidth = 9f
-                            outlinePaint.strokeCap = Paint.Cap.ROUND
-                            outlinePaint.strokeJoin = Paint.Join.ROUND
-                            setPoints(currentSegment)
+                        if (currentSegment.size >= 2) {
+                            val polyline = Polyline(map).apply {
+                                outlinePaint.color = trailColor.toArgb()
+                                outlinePaint.strokeWidth = 9f
+                                outlinePaint.strokeCap = Paint.Cap.ROUND
+                                outlinePaint.strokeJoin = Paint.Join.ROUND
+                                setPoints(currentSegment)
+                            }
+                            trailLayer.add(polyline)
                         }
-                        map.overlays.add(polyline)
-                    }
 
-                    // Trail Start & Latest End Badges
-                    val startPt = trailPoints.first()
-                    val endPt = trailPoints.last()
-                    val startMarker = Marker(map).apply {
-                        position = GeoPoint(startPt.latitude, startPt.longitude)
-                        title = "Trail Start"
-                        snippet = "First logged coordinate"
-                        infoWindow = null
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                        icon = trailStartDrawable
-                        setOnMarkerClickListener { m, _ ->
-                            selectedMarkerInfo = MarkerInspectData(
-                                title = m.title ?: "Trail Start",
-                                detail = m.snippet ?: "",
-                                badge = "START",
-                                latitude = startPt.latitude,
-                                longitude = startPt.longitude
-                            )
-                            true
-                        }
-                    }
-                    map.overlays.add(startMarker)
-
-                    val endMarker = Marker(map).apply {
-                        position = GeoPoint(endPt.latitude, endPt.longitude)
-                        title = "Trail End"
-                        snippet = "Latest logged waypoint"
-                        infoWindow = null
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                        icon = trailEndDrawable
-                        setOnMarkerClickListener { m, _ ->
-                            selectedMarkerInfo = MarkerInspectData(
-                                title = m.title ?: "Trail End",
-                                detail = m.snippet ?: "",
-                                badge = "END",
-                                latitude = endPt.latitude,
-                                longitude = endPt.longitude
-                            )
-                            true
-                        }
-                    }
-                    map.overlays.add(endMarker)
-                }
-
-                // 1b. Draw Manual Waypoints (<wpt> field POIs distinct from automated trackpoints)
-                val wpOrange = android.graphics.Color.parseColor("#EA580C")
-                trailWaypoints.forEachIndexed { index, wp ->
-                    if (isValidCoordinate(wp.latitude, wp.longitude)) {
-                        val iconBadge = waypointDrawableCache.getOrPut(index + 1) {
-                            createPinBadgeDrawable(context, "W${index + 1}", wpOrange)
-                        }
-                        val wpMarker = Marker(map).apply {
-                            position = GeoPoint(wp.latitude, wp.longitude)
-                            title = wp.name
-                            val notePrefix = if (wp.note.isNotBlank()) "${wp.note} • " else ""
-                            val coordStr = com.geotrace.ui.screens.formatCoordinates(wp.latitude, wp.longitude, settings.coordinateFormat)
-                            snippet = "${notePrefix}Acc ±${wp.accuracy.toInt()}m • $coordStr"
+                        val startPt = trailPoints.first()
+                        val endPt = trailPoints.last()
+                        trailLayer.add(Marker(map).apply {
+                            position = GeoPoint(startPt.latitude, startPt.longitude)
+                            title = "Trail Start"
+                            snippet = "First logged coordinate"
                             infoWindow = null
                             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                            icon = iconBadge
+                            icon = trailStartDrawable
                             setOnMarkerClickListener { m, _ ->
                                 selectedMarkerInfo = MarkerInspectData(
-                                    title = m.title ?: wp.name,
+                                    title = m.title ?: "Trail Start",
                                     detail = m.snippet ?: "",
-                                    badge = "WAYPOINT",
-                                    latitude = wp.latitude,
-                                    longitude = wp.longitude
+                                    badge = "START",
+                                    latitude = startPt.latitude,
+                                    longitude = startPt.longitude
                                 )
                                 true
                             }
-                        }
-                        map.overlays.add(wpMarker)
-                    }
-                }
+                        })
 
-                // 2. Draw Current User Location Marker & Accuracy Circle
-                if (currentLocation != null) {
-                    // Accuracy Circle with Calibrated Precision (if enabled in Settings)
-                    if (settings.showAccuracyRing) {
-                        val accuracyPoints = computeCircleGeoPoints(
-                            GeoPoint(currentLocation.latitude, currentLocation.longitude),
-                            currentLocation.accuracy.toDouble().coerceAtLeast(6.0)
-                        )
-                        val accuracyPolygon = Polygon(map).apply {
-                            points = accuracyPoints
+                        trailLayer.add(Marker(map).apply {
+                            position = GeoPoint(endPt.latitude, endPt.longitude)
+                            title = "Trail End"
+                            snippet = "Latest logged waypoint"
                             infoWindow = null
-                            fillPaint.color = userPinColor.copy(alpha = 0.14f).toArgb()
-                            outlinePaint.color = userPinColor.copy(alpha = 0.70f).toArgb()
-                            outlinePaint.strokeWidth = 2f
-                        }
-                        map.overlays.add(accuracyPolygon)
-                    }
-
-                    // Custom Rotated Directional Chevron (Cyan = GNSS/Fused, Amber = Cellular fallback)
-                    val isCellularFix = currentLocation.provider == "cellular"
-                    val userMarker = Marker(map).apply {
-                        position = GeoPoint(currentLocation.latitude, currentLocation.longitude)
-                        rotation = currentLocation.bearing
-                        title = if (isCellularFix) "This Device (Cellular Fix)" else "This Device (GNSS)"
-                        val convertedSpeed = currentLocation.speed * settings.speedUnit.multiplier
-                        snippet = "Speed: ${String.format(Locale.US, "%.1f", convertedSpeed)} ${settings.speedUnit.label} (${currentLocation.gaitLabel}) • Acc ±${currentLocation.accuracy.toInt()}m"
-                        infoWindow = null
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                        icon = if (isCellularFix) cellChevronDrawable else gpsChevronDrawable
-                        setOnMarkerClickListener { m, _ ->
-                            selectedMarkerInfo = MarkerInspectData(
-                                title = m.title ?: "This Device",
-                                detail = m.snippet ?: "",
-                                badge = if (isCellularFix) "CELL" else "GNSS",
-                                latitude = currentLocation.latitude,
-                                longitude = currentLocation.longitude
-                            )
-                            true
-                        }
-                    }
-                    map.overlays.add(userMarker)
-                }
-
-                // 3. Draw Geofence Circular Zones (Nominal perimeter + Dual-Radius Hysteresis Band, cached per zone/hysteresis)
-                val deltaHyst = settings.geofenceHysteresisMeters.toDouble().coerceAtLeast(0.0)
-                for (cached in cachedGeofences) {
-                    val zone = cached.zone
-                    cached.outerExitPoints?.let { exitPts ->
-                        val outerExitRing = Polygon(map).apply {
-                            points = exitPts
-                            infoWindow = null
-                            fillPaint.color = android.graphics.Color.TRANSPARENT
-                            outlinePaint.color = cached.hystColor
-                            outlinePaint.strokeWidth = 1.5f
-                            outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(10f, 8f), 0f)
-                        }
-                        map.overlays.add(outerExitRing)
-                    }
-                    cached.innerEntryPoints?.let { entryPts ->
-                        val innerEntryRing = Polygon(map).apply {
-                            points = entryPts
-                            infoWindow = null
-                            fillPaint.color = android.graphics.Color.TRANSPARENT
-                            outlinePaint.color = cached.hystColor
-                            outlinePaint.strokeWidth = 1.5f
-                            outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f, 6f), 0f)
-                        }
-                        map.overlays.add(innerEntryRing)
-                    }
-
-                    val zonePolygon = Polygon(map).apply {
-                        points = cached.mainPoints
-                        infoWindow = null
-                        fillPaint.color = cached.fillColor
-                        outlinePaint.color = cached.outlineColor
-                        outlinePaint.strokeWidth = 3f
-                        title = "${zone.name} (${zone.radiusMeters.toInt()}m)"
-                        snippet = if (deltaHyst > 0.0) {
-                            "${zone.category.label} • ${if (zone.isInside) "Inside" else "Outside"} • Entry ≤${cached.entryR.toInt()}m, Exit >${cached.exitR.toInt()}m"
-                        } else {
-                            "${zone.category.label} • ${if (zone.isInside) "Inside Safe Zone" else "Outside"}"
-                        }
-                    }
-                    map.overlays.add(zonePolygon)
-                }
-
-                // 4. Draw Cell Towers (Option 2 requirement: Distinguish Active Serving Mast vs Neighbor/Idle Masts)
-                if (settings.showCellTowerPin) {
-                    val towersToDraw = if (allCellTowers.isNotEmpty()) allCellTowers else listOfNotNull(cellTowerLocation)
-                    val servingTower = cellTowerLocation ?: towersToDraw.firstOrNull { it.isServing }
-
-                    // First pass: Draw Neighbor / Standby Towers (Muted Gray, Not in Use)
-                    for (tower in towersToDraw) {
-                        if (tower.cellId != servingTower?.cellId) {
-                            val neighborGeoPoint = GeoPoint(tower.latitude, tower.longitude)
-
-                            // Subtle dashed outline for neighbor footprint
-                            val neighborCirclePoints = computeCircleGeoPoints(neighborGeoPoint, tower.rangeMeters)
-                            val neighborPolygon = Polygon(map).apply {
-                                points = neighborCirclePoints
-                                infoWindow = null
-                                fillPaint.color = android.graphics.Color.argb(12, 100, 116, 139) // Slate gray faint
-                                outlinePaint.color = android.graphics.Color.argb(120, 148, 163, 184)
-                                outlinePaint.strokeWidth = 1.5f
-                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(8f, 8f), 0f)
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            icon = trailEndDrawable
+                            setOnMarkerClickListener { m, _ ->
+                                selectedMarkerInfo = MarkerInspectData(
+                                    title = m.title ?: "Trail End",
+                                    detail = m.snippet ?: "",
+                                    badge = "END",
+                                    latitude = endPt.latitude,
+                                    longitude = endPt.longitude
+                                )
+                                true
                             }
-                            map.overlays.add(neighborPolygon)
+                        })
+                    }
 
-                            // Muted neighbor marker
-                            val neighborMarker = Marker(map).apply {
-                                position = neighborGeoPoint
-                                title = "Neighbor Mast: ${tower.operatorName}"
-                                snippet = "CID: ${tower.cellId} • Standby Sector"
+                    val wpOrange = android.graphics.Color.parseColor("#EA580C")
+                    trailWaypoints.forEachIndexed { index, wp ->
+                        if (isValidCoordinate(wp.latitude, wp.longitude)) {
+                            val iconBadge = waypointDrawableCache.getOrPut(index + 1) {
+                                createPinBadgeDrawable(context, "W${index + 1}", wpOrange)
+                            }
+                            trailLayer.add(Marker(map).apply {
+                                position = GeoPoint(wp.latitude, wp.longitude)
+                                title = wp.name
+                                val notePrefix = if (wp.note.isNotBlank()) "${wp.note} • " else ""
+                                val coordStr = com.geotrace.ui.screens.formatCoordinates(wp.latitude, wp.longitude, settings.coordinateFormat)
+                                snippet = "${notePrefix}Acc ±${wp.accuracy.toInt()}m • $coordStr"
                                 infoWindow = null
                                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                                icon = neighborTowerDrawable
+                                icon = iconBadge
                                 setOnMarkerClickListener { m, _ ->
                                     selectedMarkerInfo = MarkerInspectData(
-                                        title = m.title ?: "Neighbor Mast",
+                                        title = m.title ?: wp.name,
                                         detail = m.snippet ?: "",
-                                        badge = "RF",
-                                        latitude = tower.latitude,
-                                        longitude = tower.longitude
+                                        badge = "WAYPOINT",
+                                        latitude = wp.latitude,
+                                        longitude = wp.longitude
                                     )
                                     true
                                 }
-                            }
-                            map.overlays.add(neighborMarker)
+                            })
                         }
                     }
+                }
 
-                    // Second pass: Draw Active Serving Tower (Signal-strength coded ray + Gold Mast Icon)
-                    if (servingTower != null) {
-                        val towerGeoPoint = GeoPoint(servingTower.latitude, servingTower.longitude)
-                        val dbm = servingTower.signalDbm
-                        val signalColor = when {
-                            dbm == null -> android.graphics.Color.rgb(217, 119, 6) // Amber default
-                            dbm >= -85 -> android.graphics.Color.rgb(5, 150, 105)  // Strong Emerald
-                            dbm >= -102 -> android.graphics.Color.rgb(217, 119, 6) // Moderate Amber
-                            else -> android.graphics.Color.rgb(220, 38, 38)        // Weak Red
-                        }
-                        val signalLabel = when {
-                            dbm == null -> "Signal N/A"
-                            dbm >= -85 -> "$dbm dBm (Strong)"
-                            dbm >= -102 -> "$dbm dBm (Moderate)"
-                            else -> "$dbm dBm (Weak)"
-                        }
-
-                        // Serving Cell Tower Coverage / Uncertainty Radius Circle
-                        val towerCirclePoints = computeCircleGeoPoints(towerGeoPoint, servingTower.rangeMeters)
-                        val towerCoveragePolygon = Polygon(map).apply {
-                            points = towerCirclePoints
-                            infoWindow = null
-                            fillPaint.color = android.graphics.Color.argb(38, android.graphics.Color.red(signalColor), android.graphics.Color.green(signalColor), android.graphics.Color.blue(signalColor))
-                            outlinePaint.color = android.graphics.Color.argb(220, android.graphics.Color.red(signalColor), android.graphics.Color.green(signalColor), android.graphics.Color.blue(signalColor))
-                            outlinePaint.strokeWidth = 2.8f
-                            outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(12f, 10f), 0f)
-                        }
-                        map.overlays.add(towerCoveragePolygon)
-
-                        // Connecting Vector Ray (color-coded by live dBm RF signal strength)
-                        if (currentLocation != null) {
-                            val vectorRay = Polyline(map).apply {
+                // 2. Differential Geofence Circular Zones Layer
+                val geofenceSig = GeofenceLayerSig(cachedGeofences, settings.geofenceHysteresisMeters)
+                if (lastGeofenceSigHolder[0] != geofenceSig) {
+                    lastGeofenceSigHolder[0] = geofenceSig
+                    anyLayerChanged = true
+                    geofenceLayer.items.clear()
+                    val deltaHyst = settings.geofenceHysteresisMeters.toDouble().coerceAtLeast(0.0)
+                    for (cached in cachedGeofences) {
+                        val zone = cached.zone
+                        cached.outerExitPoints?.let { exitPts ->
+                            geofenceLayer.add(Polygon(map).apply {
+                                points = exitPts
                                 infoWindow = null
-                                outlinePaint.color = android.graphics.Color.argb(235, android.graphics.Color.red(signalColor), android.graphics.Color.green(signalColor), android.graphics.Color.blue(signalColor))
-                                outlinePaint.strokeWidth = 4.0f
-                                outlinePaint.strokeCap = Paint.Cap.ROUND
-                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 10f), 0f)
-                                setPoints(listOf(
-                                    GeoPoint(currentLocation.latitude, currentLocation.longitude),
-                                    towerGeoPoint
-                                ))
+                                fillPaint.color = android.graphics.Color.TRANSPARENT
+                                outlinePaint.color = cached.hystColor
+                                outlinePaint.strokeWidth = 1.5f
+                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(10f, 8f), 0f)
+                            })
+                        }
+                        cached.innerEntryPoints?.let { entryPts ->
+                            geofenceLayer.add(Polygon(map).apply {
+                                points = entryPts
+                                infoWindow = null
+                                fillPaint.color = android.graphics.Color.TRANSPARENT
+                                outlinePaint.color = cached.hystColor
+                                outlinePaint.strokeWidth = 1.5f
+                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f, 6f), 0f)
+                            })
+                        }
+                        geofenceLayer.add(Polygon(map).apply {
+                            points = cached.mainPoints
+                            infoWindow = null
+                            fillPaint.color = cached.fillColor
+                            outlinePaint.color = cached.outlineColor
+                            outlinePaint.strokeWidth = 3f
+                            title = "${zone.name} (${zone.radiusMeters.toInt()}m)"
+                            snippet = if (deltaHyst > 0.0) {
+                                "${zone.category.label} • ${if (zone.isInside) "Inside" else "Outside"} • Entry ≤${cached.entryR.toInt()}m, Exit >${cached.exitR.toInt()}m"
+                            } else {
+                                "${zone.category.label} • ${if (zone.isInside) "Inside Safe Zone" else "Outside"}"
                             }
-                            map.overlays.add(vectorRay)
+                        })
+                    }
+                }
+
+                // 3. Differential Cell Towers Layer
+                val towersToDraw = if (settings.showCellTowerPin) {
+                    if (allCellTowers.isNotEmpty()) allCellTowers else listOfNotNull(cellTowerLocation)
+                } else emptyList()
+                val servingTower = if (settings.showCellTowerPin) {
+                    cellTowerLocation ?: towersToDraw.firstOrNull { it.isServing }
+                } else null
+                val cellSig = CellLayerSig(
+                    showCellTowerPin = settings.showCellTowerPin,
+                    servingTower = servingTower,
+                    allTowers = towersToDraw,
+                    curLat = if (servingTower != null) currentLocation?.latitude else null,
+                    curLon = if (servingTower != null) currentLocation?.longitude else null
+                )
+                if (lastCellSigHolder[0] != cellSig) {
+                    lastCellSigHolder[0] = cellSig
+                    anyLayerChanged = true
+                    cellTowerLayer.items.clear()
+                    if (settings.showCellTowerPin) {
+                        for (tower in towersToDraw) {
+                            if (tower.cellId != servingTower?.cellId) {
+                                val neighborGeoPoint = GeoPoint(tower.latitude, tower.longitude)
+                                val neighborCirclePoints = computeCircleGeoPoints(neighborGeoPoint, tower.rangeMeters)
+                                cellTowerLayer.add(Polygon(map).apply {
+                                    points = neighborCirclePoints
+                                    infoWindow = null
+                                    fillPaint.color = android.graphics.Color.argb(12, 100, 116, 139)
+                                    outlinePaint.color = android.graphics.Color.argb(120, 148, 163, 184)
+                                    outlinePaint.strokeWidth = 1.5f
+                                    outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(8f, 8f), 0f)
+                                })
+                                cellTowerLayer.add(Marker(map).apply {
+                                    position = neighborGeoPoint
+                                    title = "Neighbor Mast: ${tower.operatorName}"
+                                    snippet = "CID: ${tower.cellId} • Standby Sector"
+                                    infoWindow = null
+                                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                    icon = neighborTowerDrawable
+                                    setOnMarkerClickListener { m, _ ->
+                                        selectedMarkerInfo = MarkerInspectData(
+                                            title = m.title ?: "Neighbor Mast",
+                                            detail = m.snippet ?: "",
+                                            badge = "RF",
+                                            latitude = tower.latitude,
+                                            longitude = tower.longitude
+                                        )
+                                        true
+                                    }
+                                })
+                            }
                         }
 
-                        // Serving Cell Tower Marker
-                        val towerMarker = Marker(map).apply {
-                            position = towerGeoPoint
-                            title = "Serving Mast: ${servingTower.operatorName}"
-                            snippet = "CID: ${servingTower.cellId} • $signalLabel • ±${servingTower.rangeMeters.toInt()}m"
+                        if (servingTower != null) {
+                            val towerGeoPoint = GeoPoint(servingTower.latitude, servingTower.longitude)
+                            val dbm = servingTower.signalDbm
+                            val signalColor = when {
+                                dbm == null -> android.graphics.Color.rgb(217, 119, 6)
+                                dbm >= -85 -> android.graphics.Color.rgb(5, 150, 105)
+                                dbm >= -102 -> android.graphics.Color.rgb(217, 119, 6)
+                                else -> android.graphics.Color.rgb(220, 38, 38)
+                            }
+                            val signalLabel = when {
+                                dbm == null -> "Signal N/A"
+                                dbm >= -85 -> "$dbm dBm (Strong)"
+                                dbm >= -102 -> "$dbm dBm (Moderate)"
+                                else -> "$dbm dBm (Weak)"
+                            }
+
+                            val towerCirclePoints = computeCircleGeoPoints(towerGeoPoint, servingTower.rangeMeters)
+                            cellTowerLayer.add(Polygon(map).apply {
+                                points = towerCirclePoints
+                                infoWindow = null
+                                fillPaint.color = android.graphics.Color.argb(38, android.graphics.Color.red(signalColor), android.graphics.Color.green(signalColor), android.graphics.Color.blue(signalColor))
+                                outlinePaint.color = android.graphics.Color.argb(220, android.graphics.Color.red(signalColor), android.graphics.Color.green(signalColor), android.graphics.Color.blue(signalColor))
+                                outlinePaint.strokeWidth = 2.8f
+                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(12f, 10f), 0f)
+                            })
+
+                            if (currentLocation != null) {
+                                cellTowerLayer.add(Polyline(map).apply {
+                                    infoWindow = null
+                                    outlinePaint.color = android.graphics.Color.argb(235, android.graphics.Color.red(signalColor), android.graphics.Color.green(signalColor), android.graphics.Color.blue(signalColor))
+                                    outlinePaint.strokeWidth = 4.0f
+                                    outlinePaint.strokeCap = Paint.Cap.ROUND
+                                    outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 10f), 0f)
+                                    setPoints(listOf(
+                                        GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                                        towerGeoPoint
+                                    ))
+                                })
+                            }
+
+                            cellTowerLayer.add(Marker(map).apply {
+                                position = towerGeoPoint
+                                title = "Serving Mast: ${servingTower.operatorName}"
+                                snippet = "CID: ${servingTower.cellId} • $signalLabel • ±${servingTower.rangeMeters.toInt()}m"
+                                infoWindow = null
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = servingTowerDrawable
+                                setOnMarkerClickListener { m, _ ->
+                                    selectedMarkerInfo = MarkerInspectData(
+                                        title = m.title ?: "Serving Mast",
+                                        detail = m.snippet ?: "",
+                                        badge = "TOWER",
+                                        latitude = servingTower.latitude,
+                                        longitude = servingTower.longitude
+                                    )
+                                    true
+                                }
+                            })
+                        }
+                    }
+                }
+
+                // 4. Differential Group, Personal Fleet & P2P Peers Layer
+                val peersSig = PeersLayerSig(
+                    members = groupMembers,
+                    devices = personalDevices,
+                    peers = nearbyPeers,
+                    deviceId = currentDeviceId,
+                    userUid = currentUserUid,
+                    speedUnit = settings.speedUnit
+                )
+                if (lastPeersSigHolder[0] != peersSig) {
+                    lastPeersSigHolder[0] = peersSig
+                    anyLayerChanged = true
+                    peersLayer.items.clear()
+
+                    val groupDeviceIds = groupMembers.map { it.deviceId }.filter { it.isNotBlank() }.toSet()
+                    for (member in groupMembers) {
+                        val isSelf = (currentDeviceId.isNotBlank() && member.deviceId == currentDeviceId) ||
+                            (currentUserUid != null && member.userId == currentUserUid && member.deviceId.isBlank())
+                        if (isSelf) continue
+                        if (!isValidCoordinate(member.latitude, member.longitude)) continue
+                        val memberGeoPoint = GeoPoint(member.latitude, member.longitude)
+                        val memberColor = try {
+                            android.graphics.Color.parseColor(member.avatarColor)
+                        } catch (_: Exception) {
+                            android.graphics.Color.parseColor("#2563EB")
+                        }
+
+                        if (member.accuracy > 0f) {
+                            val memberAccCircle = computeCircleGeoPoints(memberGeoPoint, member.accuracy.toDouble())
+                            peersLayer.add(Polygon(map).apply {
+                                points = memberAccCircle
+                                infoWindow = null
+                                fillPaint.color = android.graphics.Color.argb(25, android.graphics.Color.red(memberColor), android.graphics.Color.green(memberColor), android.graphics.Color.blue(memberColor))
+                                outlinePaint.color = android.graphics.Color.argb(160, android.graphics.Color.red(memberColor), android.graphics.Color.green(memberColor), android.graphics.Color.blue(memberColor))
+                                outlinePaint.strokeWidth = 1.5f
+                            })
+                        }
+
+                        val memberKey = "${member.displayName.trim().take(2).uppercase()}:$memberColor"
+                        val memberIcon = avatarDrawableCache.getOrPut(memberKey) {
+                            createMemberAvatarDrawable(context, member.displayName, memberColor)
+                        }
+                        peersLayer.add(Marker(map).apply {
+                            position = memberGeoPoint
+                            title = "${member.displayName} (${member.gait})"
+                            val memberSpeed = member.speed * settings.speedUnit.multiplier
+                            val modeLabel = formatMarkerMode(member.trackingMode)
+                            snippet = "${String.format(Locale.US, "%.1f", memberSpeed)} ${settings.speedUnit.label} • Battery ${member.batteryPercent}% • $modeLabel"
                             infoWindow = null
-                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                            icon = servingTowerDrawable
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            icon = memberIcon
                             setOnMarkerClickListener { m, _ ->
                                 selectedMarkerInfo = MarkerInspectData(
-                                    title = m.title ?: "Serving Mast",
+                                    title = m.title ?: member.displayName,
                                     detail = m.snippet ?: "",
-                                    badge = "TOWER",
-                                    latitude = servingTower.latitude,
-                                    longitude = servingTower.longitude
+                                    badge = "GROUP",
+                                    latitude = member.latitude,
+                                    longitude = member.longitude
                                 )
                                 true
                             }
+                        })
+                    }
+
+                    val violetColor = android.graphics.Color.parseColor("#7C3AED")
+                    for (device in personalDevices) {
+                        if (device.deviceId == currentDeviceId || device.id == currentDeviceId) continue
+                        if (device.deviceId in groupDeviceIds) continue
+                        if (!isValidCoordinate(device.latitude, device.longitude)) continue
+                        if (device.latitude == 0.0 && device.longitude == 0.0) continue
+                        val devPoint = GeoPoint(device.latitude, device.longitude)
+                        val devKey = "${device.deviceName.trim().take(2).uppercase()}:$violetColor"
+                        val devIcon = avatarDrawableCache.getOrPut(devKey) {
+                            createMemberAvatarDrawable(context, device.deviceName, violetColor)
                         }
-                        map.overlays.add(towerMarker)
-                    }
-                }
-
-                // 5. Draw Tracking Group Devices (excluding self device to avoid overlapping User pin)
-                val groupDeviceIds = groupMembers.map { it.deviceId }.filter { it.isNotBlank() }.toSet()
-                for (member in groupMembers) {
-                    val isSelf = (currentDeviceId.isNotBlank() && member.deviceId == currentDeviceId) ||
-                        (currentUserUid != null && member.userId == currentUserUid && member.deviceId.isBlank())
-                    if (isSelf) continue
-                    if (!isValidCoordinate(member.latitude, member.longitude)) continue
-                    val memberGeoPoint = GeoPoint(member.latitude, member.longitude)
-                    val memberColor = try {
-                        android.graphics.Color.parseColor(member.avatarColor)
-                    } catch (e: Exception) {
-                        android.graphics.Color.parseColor("#2563EB")
-                    }
-
-                    // Accuracy Circle for member
-                    if (member.accuracy > 0f) {
-                        val memberAccCircle = computeCircleGeoPoints(memberGeoPoint, member.accuracy.toDouble())
-                        val memberPolygon = Polygon(map).apply {
-                            points = memberAccCircle
+                        peersLayer.add(Marker(map).apply {
+                            position = devPoint
+                            title = device.deviceName
+                            snippet = "${device.deviceModel} • Battery ${device.batteryPercent}% • ${formatMarkerMode(device.trackingMode)}"
                             infoWindow = null
-                            fillPaint.color = android.graphics.Color.argb(25, android.graphics.Color.red(memberColor), android.graphics.Color.green(memberColor), android.graphics.Color.blue(memberColor))
-                            outlinePaint.color = android.graphics.Color.argb(160, android.graphics.Color.red(memberColor), android.graphics.Color.green(memberColor), android.graphics.Color.blue(memberColor))
-                            outlinePaint.strokeWidth = 1.5f
-                        }
-                        map.overlays.add(memberPolygon)
-                    }
-
-                    // Custom avatar pin (cached)
-                    val memberKey = "${member.displayName.trim().take(2).uppercase()}:$memberColor"
-                    val memberIcon = avatarDrawableCache.getOrPut(memberKey) {
-                        createMemberAvatarDrawable(context, member.displayName, memberColor)
-                    }
-                    val memberMarker = Marker(map).apply {
-                        position = memberGeoPoint
-                        title = "${member.displayName} (${member.gait})"
-                        val memberSpeed = member.speed * settings.speedUnit.multiplier
-                        val modeLabel = formatMarkerMode(member.trackingMode)
-                        snippet = "${String.format(Locale.US, "%.1f", memberSpeed)} ${settings.speedUnit.label} • Battery ${member.batteryPercent}% • $modeLabel"
-                        infoWindow = null
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        icon = memberIcon
-                        setOnMarkerClickListener { m, _ ->
-                            selectedMarkerInfo = MarkerInspectData(
-                                title = m.title ?: member.displayName,
-                                detail = m.snippet ?: "",
-                                badge = "GROUP",
-                                latitude = member.latitude,
-                                longitude = member.longitude
-                            )
-                            true
-                        }
-                    }
-                    map.overlays.add(memberMarker)
-                }
-
-                // 5b. Draw Personal Multi-Device Fleet (deduplicated against active group devices)
-                val violetColor = android.graphics.Color.parseColor("#7C3AED")
-                for (device in personalDevices) {
-                    if (device.deviceId == currentDeviceId || device.id == currentDeviceId) continue
-                    if (device.deviceId in groupDeviceIds) continue
-                    if (!isValidCoordinate(device.latitude, device.longitude)) continue
-                    if (device.latitude == 0.0 && device.longitude == 0.0) continue
-                    val devPoint = GeoPoint(device.latitude, device.longitude)
-                    val devKey = "${device.deviceName.trim().take(2).uppercase()}:$violetColor"
-                    val devIcon = avatarDrawableCache.getOrPut(devKey) {
-                        createMemberAvatarDrawable(context, device.deviceName, violetColor)
-                    }
-                    val devMarker = Marker(map).apply {
-                        position = devPoint
-                        title = device.deviceName
-                        snippet = "${device.deviceModel} • Battery ${device.batteryPercent}% • ${formatMarkerMode(device.trackingMode)}"
-                        infoWindow = null
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        icon = devIcon
-                        setOnMarkerClickListener { m, _ ->
-                            selectedMarkerInfo = MarkerInspectData(
-                                title = m.title ?: device.deviceName,
-                                detail = m.snippet ?: "",
-                                badge = "DEVICE",
-                                latitude = device.latitude,
-                                longitude = device.longitude
-                            )
-                            true
-                        }
-                    }
-                    map.overlays.add(devMarker)
-                }
-
-                // 6. Draw P2P Wilderness Peers (Phase 2 Nearby Connections)
-                for (peer in nearbyPeers) {
-                    if (!peer.hasValidCoordinates || !isValidCoordinate(peer.latitude, peer.longitude)) continue
-                    val peerGeoPoint = GeoPoint(peer.latitude, peer.longitude)
-                    val peerColor = android.graphics.Color.parseColor("#059669")
-                    val peerKey = "${peer.displayName.trim().take(2).uppercase()}:$peerColor"
-                    val peerIcon = avatarDrawableCache.getOrPut(peerKey) {
-                        createP2PPeerDrawable(context, peer.displayName)
-                    }
-                    val peerMarker = Marker(map).apply {
-                        position = peerGeoPoint
-                        title = "P2P: ${peer.displayName}"
-                        val peerSpeed = peer.speed * settings.speedUnit.multiplier
-                        snippet = "${String.format(Locale.US, "%.1f", peerSpeed)} ${settings.speedUnit.label} • Battery ${peer.batteryPercent}% • Direct BLE/Wi-Fi"
-                        infoWindow = null
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-                        icon = peerIcon
-                        setOnMarkerClickListener { m, _ ->
-                            selectedMarkerInfo = MarkerInspectData(
-                                title = m.title ?: peer.displayName,
-                                detail = m.snippet ?: "",
-                                badge = "P2P",
-                                latitude = peer.latitude,
-                                longitude = peer.longitude
-                            )
-                            true
-                        }
-                    }
-                    map.overlays.add(peerMarker)
-                }
-
-                // 6b. Render user-dropped long-press inspection pin if present
-                droppedInspectPin?.let { pinPt ->
-                    val pinMarker = Marker(map).apply {
-                        position = pinPt
-                        title = "Dropped Pin"
-                        infoWindow = null
-                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                        icon = droppedPinDrawable
-                        setOnMarkerClickListener { _, _ -> true }
-                    }
-                    map.overlays.add(pinMarker)
-                }
-
-                // 6c. Render active Search Result pin if selected
-                selectedSearchPin?.let { place ->
-                    if (isValidCoordinate(place.latitude, place.longitude)) {
-                        val searchMarker = Marker(map).apply {
-                            position = GeoPoint(place.latitude, place.longitude)
-                            title = place.name
-                            infoWindow = null
-                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                            icon = searchPinDrawable
-                            setOnMarkerClickListener { _, _ ->
-                                selectedMarkerInfo = null
-                                droppedInspectPin = null
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            icon = devIcon
+                            setOnMarkerClickListener { m, _ ->
+                                selectedMarkerInfo = MarkerInspectData(
+                                    title = m.title ?: device.deviceName,
+                                    detail = m.snippet ?: "",
+                                    badge = "DEVICE",
+                                    latitude = device.latitude,
+                                    longitude = device.longitude
+                                )
                                 true
                             }
+                        })
+                    }
+
+                    for (peer in nearbyPeers) {
+                        if (!peer.hasValidCoordinates || !isValidCoordinate(peer.latitude, peer.longitude)) continue
+                        val peerGeoPoint = GeoPoint(peer.latitude, peer.longitude)
+                        val peerColor = android.graphics.Color.parseColor("#059669")
+                        val peerKey = "${peer.displayName.trim().take(2).uppercase()}:$peerColor"
+                        val peerIcon = avatarDrawableCache.getOrPut(peerKey) {
+                            createP2PPeerDrawable(context, peer.displayName)
                         }
-                        map.overlays.add(searchMarker)
+                        peersLayer.add(Marker(map).apply {
+                            position = peerGeoPoint
+                            title = "P2P: ${peer.displayName}"
+                            val peerSpeed = peer.speed * settings.speedUnit.multiplier
+                            snippet = "${String.format(Locale.US, "%.1f", peerSpeed)} ${settings.speedUnit.label} • Battery ${peer.batteryPercent}% • Direct BLE/Wi-Fi"
+                            infoWindow = null
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                            icon = peerIcon
+                            setOnMarkerClickListener { m, _ ->
+                                selectedMarkerInfo = MarkerInspectData(
+                                    title = m.title ?: peer.displayName,
+                                    detail = m.snippet ?: "",
+                                    badge = "P2P",
+                                    latitude = peer.latitude,
+                                    longitude = peer.longitude
+                                )
+                                true
+                            }
+                        })
                     }
                 }
 
-                // 7. Interactive map tap / long-press handler (coordinate picker, dismiss, or drop inspect pin)
-                val eventsOverlay = MapEventsOverlay(object : MapEventsReceiver {
-                    override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
-                        selectedMarkerInfo = null
-                        droppedInspectPin = null
-                        if (currentIsMapPickMode && p != null) {
-                            currentOnMapCoordinatePicked?.invoke(p.latitude, p.longitude)
-                            return true
+                // 5. Differential User Self Chevron, Target Bearing Guide Vector, & Pins Layer
+                val userTargetSig = UserTargetLayerSig(
+                    currentLocation = currentLocation,
+                    resolvedBearing = resolvedUserBearing,
+                    showAccuracyRing = settings.showAccuracyRing,
+                    speedUnit = settings.speedUnit,
+                    focusedTarget = focusedTarget,
+                    selectedSearchPin = selectedSearchPin,
+                    droppedInspectPin = droppedInspectPin,
+                    userPinColorArgb = userPinColor.toArgb()
+                )
+                if (lastUserTargetSigHolder[0] != userTargetSig) {
+                    lastUserTargetSigHolder[0] = userTargetSig
+                    anyLayerChanged = true
+                    userTargetLayer.items.clear()
+
+                    // Target bearing guide ray (self -> focused target / search result / dropped pin)
+                    if (currentLocation != null && !isMapPickMode) {
+                        val selfGeo = GeoPoint(currentLocation.latitude, currentLocation.longitude)
+                        val guideTargetGeo: GeoPoint?
+                        val guideRayColor: Int
+                        when {
+                            focusedTarget != null &&
+                                isValidCoordinate(focusedTarget.latitude, focusedTarget.longitude) &&
+                                (focusedTarget.latitude != 0.0 || focusedTarget.longitude != 0.0) -> {
+                                guideTargetGeo = GeoPoint(focusedTarget.latitude, focusedTarget.longitude)
+                                guideRayColor = userPinColor.copy(alpha = 0.85f).toArgb()
+                            }
+                            selectedSearchPin != null &&
+                                isValidCoordinate(selectedSearchPin.latitude, selectedSearchPin.longitude) -> {
+                                guideTargetGeo = GeoPoint(selectedSearchPin.latitude, selectedSearchPin.longitude)
+                                guideRayColor = android.graphics.Color.argb(215, 15, 118, 110)
+                            }
+                            droppedInspectPin != null -> {
+                                guideTargetGeo = droppedInspectPin
+                                guideRayColor = android.graphics.Color.argb(215, 124, 58, 237)
+                            }
+                            else -> {
+                                guideTargetGeo = null
+                                guideRayColor = 0
+                            }
                         }
-                        return false
+                        if (guideTargetGeo != null && selfGeo.distanceToAsDouble(guideTargetGeo) > 3.0) {
+                            userTargetLayer.add(Polyline(map).apply {
+                                infoWindow = null
+                                outlinePaint.color = guideRayColor
+                                outlinePaint.strokeWidth = 4.5f
+                                outlinePaint.strokeCap = Paint.Cap.ROUND
+                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(16f, 12f), 0f)
+                                setPoints(listOf(selfGeo, guideTargetGeo))
+                            })
+                        }
                     }
 
-                    override fun longPressHelper(p: GeoPoint?): Boolean {
-                        if (currentIsMapPickMode || p == null) return false
-                        droppedInspectPin = p
-                        val distStr = currentLocation?.let { cur ->
-                            val d = GeoPoint(cur.latitude, cur.longitude).distanceToAsDouble(p)
-                            if (d < 1000.0) " • ${d.toInt()}m away" else String.format(Locale.US, " • %.1fkm away", d / 1000.0)
-                        } ?: ""
-                        val coordStr = com.geotrace.ui.screens.formatCoordinates(p.latitude, p.longitude, settings.coordinateFormat)
-                        selectedMarkerInfo = MarkerInspectData(
-                            title = "Dropped Pin",
-                            detail = "$coordStr$distStr",
-                            badge = "PIN",
-                            latitude = p.latitude,
-                            longitude = p.longitude
-                        )
-                        return true
-                    }
-                })
-                map.overlays.add(eventsOverlay)
+                    if (currentLocation != null) {
+                        if (settings.showAccuracyRing) {
+                            val accuracyPoints = computeCircleGeoPoints(
+                                GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                                currentLocation.accuracy.toDouble().coerceAtLeast(6.0)
+                            )
+                            userTargetLayer.add(Polygon(map).apply {
+                                points = accuracyPoints
+                                infoWindow = null
+                                fillPaint.color = userPinColor.copy(alpha = 0.14f).toArgb()
+                                outlinePaint.color = userPinColor.copy(alpha = 0.70f).toArgb()
+                                outlinePaint.strokeWidth = 2f
+                            })
+                        }
 
-                map.invalidate()
+                        val isCellularFix = currentLocation.provider == "cellular"
+                        userTargetLayer.add(Marker(map).apply {
+                            position = GeoPoint(currentLocation.latitude, currentLocation.longitude)
+                            // Flat marker locked to geographic bearing relative to map North;
+                            // OSMDroid subtracts mBearing in draw(), so -resolvedUserBearing rotates CW on map canvas.
+                            isFlat = true
+                            rotation = -resolvedUserBearing
+                            title = if (isCellularFix) "This Device (Cellular Fix)" else "This Device (GNSS)"
+                            val convertedSpeed = currentLocation.speed * settings.speedUnit.multiplier
+                            snippet = "Speed: ${String.format(Locale.US, "%.1f", convertedSpeed)} ${settings.speedUnit.label} (${currentLocation.gaitLabel}) • Acc ±${currentLocation.accuracy.toInt()}m"
+                            infoWindow = null
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            icon = if (isCellularFix) cellChevronDrawable else gpsChevronDrawable
+                            setOnMarkerClickListener { m, _ ->
+                                selectedMarkerInfo = MarkerInspectData(
+                                    title = m.title ?: "This Device",
+                                    detail = m.snippet ?: "",
+                                    badge = if (isCellularFix) "CELL" else "GNSS",
+                                    latitude = currentLocation.latitude,
+                                    longitude = currentLocation.longitude
+                                )
+                                true
+                            }
+                        })
+                    }
+
+                    droppedInspectPin?.let { pinPt ->
+                        userTargetLayer.add(Marker(map).apply {
+                            position = pinPt
+                            title = "Dropped Pin"
+                            infoWindow = null
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            icon = droppedPinDrawable
+                            setOnMarkerClickListener { _, _ -> true }
+                        })
+                    }
+
+                    selectedSearchPin?.let { place ->
+                        if (isValidCoordinate(place.latitude, place.longitude)) {
+                            userTargetLayer.add(Marker(map).apply {
+                                position = GeoPoint(place.latitude, place.longitude)
+                                title = place.name
+                                infoWindow = null
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = searchPinDrawable
+                                setOnMarkerClickListener { _, _ ->
+                                    selectedMarkerInfo = null
+                                    droppedInspectPin = null
+                                    true
+                                }
+                            })
+                        }
+                    }
+                }
+
+                if (anyLayerChanged) {
+                    map.invalidate()
+                }
             },
             modifier = Modifier.fillMaxSize()
         )
@@ -1060,6 +1474,7 @@ fun MapViewComposable(
                         bottom = if (isRecording) 70.dp else 16.dp
                     )
                     .widthIn(max = 310.dp)
+                    .onSizeChanged { inspectCardHeightPx = it.height }
                     .testTag(if (selectedMarkerInfo != null) "marker_inspect_card" else "map_focus_banner")
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -1270,7 +1685,32 @@ fun MapViewComposable(
             }
         }
 
+        // Calibrated Live Map Scale Bar (stacks cleanly above recording pill / inspect card)
+        val scaleBarBottomPadding = (if (isRecording) 70.dp else 16.dp) +
+            if (inspectCardTitle != null && inspectCardBadge != null && inspectCardHeightPx > 0) {
+                with(density) { inspectCardHeightPx.toDp() } + 8.dp
+            } else {
+                0.dp
+            }
+        MapScaleBarPill(
+            mapView = mapViewRef,
+            zoomLevel = liveZoomLevel,
+            centerLatitude = liveCenterLat,
+            speedUnit = settings.speedUnit,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 14.dp, bottom = scaleBarBottomPadding)
+                .testTag("map_scale_bar")
+        )
+
         // Overlay Map Controls (Level 2 Elevation - Viewport Controls anchored to Bottom-Right, Strictly 12dp corners)
+        val isActivelyFollowing = settings.followUserLocation &&
+            !isFollowPaused &&
+            focusedTarget == null &&
+            selectedSearchPin == null &&
+            inspectedTrailName == null
+        val isMapRotated = abs(shortestAngleDeltaDegrees(liveMapOrientation, 0f)) >= 1.5f
+
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -1278,32 +1718,65 @@ fun MapViewComposable(
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Compass Reset FAB (rotates live with map orientation; visible whenever rotated or Heading-Up enabled)
+            AnimatedVisibility(
+                visible = isMapRotated || settings.autoRotateHeadingUp,
+                enter = fadeIn() + scaleIn(initialScale = 0.85f),
+                exit = fadeOut() + scaleOut(targetScale = 0.85f)
+            ) {
+                FloatingActionButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        if (settings.autoRotateHeadingUp && !isHeadingUpPausedByUser) {
+                            isHeadingUpPausedByUser = true
+                        }
+                        animateMapOrientationTo(0f, 300L)
+                    },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .then(
+                            if (settings.autoRotateHeadingUp && !isHeadingUpPausedByUser && isActivelyFollowing) {
+                                Modifier.border(1.5.dp, colorScheme.primary, RoundedCornerShape(12.dp))
+                            } else Modifier
+                        )
+                        .testTag("compass_reset_btn"),
+                    shape = RoundedCornerShape(12.dp),
+                    containerColor = colorScheme.surface,
+                    contentColor = colorScheme.onSurface,
+                    elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp)
+                ) {
+                    CompassNeedleGlyph(
+                        rotationDeg = liveMapOrientation,
+                        northColor = colorScheme.error,
+                        southColor = colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                        pivotColor = colorScheme.onSurface,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+            }
+
             // Layer Switcher FAB (opens clean M3 ModalBottomSheet with zero HUD collisions)
             if (onSelectTileLayer != null) {
                 FloatingActionButton(
                     onClick = { showLayerMenu = true },
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(48.dp)
                         .testTag("layer_switcher_btn"),
                     shape = RoundedCornerShape(12.dp),
                     containerColor = if (showLayerMenu) colorScheme.primaryContainer else colorScheme.surface,
                     contentColor = if (showLayerMenu) colorScheme.primary else colorScheme.secondary,
                     elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp)
                 ) {
-                    Icon(Icons.Default.Layers, contentDescription = "Select Map Layer", modifier = Modifier.size(20.dp))
+                    Icon(Icons.Default.Layers, contentDescription = "Select Map Layer", modifier = Modifier.size(22.dp))
                 }
             }
 
             // Recenter FAB (distinct filled primary when locked-following vs outlined surface when free-roaming/paused)
-            val isActivelyFollowing = settings.followUserLocation &&
-                !isFollowPaused &&
-                focusedTarget == null &&
-                selectedSearchPin == null &&
-                inspectedTrailName == null
             FloatingActionButton(
                 onClick = {
                     selectedMarkerInfo = null
                     droppedInspectPin = null
+                    isHeadingUpPausedByUser = false
                     onRecenterSelf?.invoke()
                     if (currentLocation != null) {
                         val curZoom = mapViewRef?.zoomLevelDouble ?: 16.5
@@ -1313,6 +1786,9 @@ fun MapViewComposable(
                             targetZoom,
                             800L
                         )
+                    }
+                    if (settings.autoRotateHeadingUp) {
+                        animateMapOrientationTo(-resolvedUserBearing, 300L)
                     }
                 },
                 modifier = Modifier
@@ -1453,9 +1929,60 @@ fun MapViewComposable(
                         }
                     }
 
-                    if (onToggleCellTowerPin != null) {
+                    if (onToggleAutoRotateHeadingUp != null) {
                         Spacer(modifier = Modifier.height(4.dp))
                         HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (settings.autoRotateHeadingUp) colorScheme.primary.copy(alpha = 0.08f) else customColors.surfaceContainerLow,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onToggleAutoRotateHeadingUp(!settings.autoRotateHeadingUp) }
+                                .testTag("heading_up_layer_toggle")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Explore,
+                                        contentDescription = null,
+                                        tint = if (settings.autoRotateHeadingUp) colorScheme.primary else colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = "Heading-Up Map Rotation",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "Auto-rotate map with compass & direction of travel",
+                                            fontSize = 11.sp,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Switch(
+                                    checked = settings.autoRotateHeadingUp,
+                                    onCheckedChange = { onToggleAutoRotateHeadingUp(it) }
+                                )
+                            }
+                        }
+                    }
+
+                    if (onToggleCellTowerPin != null) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        if (onToggleAutoRotateHeadingUp == null) {
+                            HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        }
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = if (settings.showCellTowerPin) colorScheme.primary.copy(alpha = 0.08f) else customColors.surfaceContainerLow,
@@ -1550,6 +2077,176 @@ fun MapViewComposable(
 
 private fun isValidCoordinate(lat: Double, lng: Double): Boolean {
     return lat.isFinite() && lng.isFinite() && lat in -90.0..90.0 && lng in -180.0..180.0
+}
+
+@Composable
+private fun CompassNeedleGlyph(
+    rotationDeg: Float,
+    northColor: Color,
+    southColor: Color,
+    pivotColor: Color,
+    modifier: Modifier = Modifier
+) {
+    Canvas(
+        modifier = modifier.graphicsLayer {
+            rotationZ = rotationDeg
+        }
+    ) {
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+        val tipR = size.minDimension * 0.44f
+        val wingR = size.minDimension * 0.16f
+
+        val northPath = Path().apply {
+            moveTo(cx, cy - tipR)
+            lineTo(cx + wingR, cy)
+            lineTo(cx - wingR, cy)
+            close()
+        }
+        drawPath(path = northPath, color = northColor)
+
+        val southPath = Path().apply {
+            moveTo(cx, cy + tipR)
+            lineTo(cx + wingR, cy)
+            lineTo(cx - wingR, cy)
+            close()
+        }
+        drawPath(path = southPath, color = southColor)
+
+        drawCircle(color = pivotColor, radius = size.minDimension * 0.08f, center = Offset(cx, cy))
+    }
+}
+
+@Composable
+private fun MapScaleBarPill(
+    mapView: MapView?,
+    zoomLevel: Double,
+    centerLatitude: Double,
+    speedUnit: com.geotrace.model.SpeedUnit,
+    modifier: Modifier = Modifier
+) {
+    val projection = mapView?.projection ?: return
+    val density = LocalDensity.current
+    val colorScheme = MaterialTheme.colorScheme
+    val minPx = with(density) { 42.dp.toPx() }
+    val maxPx = with(density) { 104.dp.toPx() }
+    val targetPx = (minPx + maxPx) * 0.5f
+
+    val candidates = remember(speedUnit) {
+        if (speedUnit == com.geotrace.model.SpeedUnit.MPH) {
+            listOf(
+                105600f * 0.3048f to "20 mi",
+                52800f * 0.3048f to "10 mi",
+                26400f * 0.3048f to "5 mi",
+                10560f * 0.3048f to "2 mi",
+                5280f * 0.3048f to "1 mi",
+                2640f * 0.3048f to "0.5 mi",
+                1000f * 0.3048f to "1000 ft",
+                500f * 0.3048f to "500 ft",
+                200f * 0.3048f to "200 ft",
+                100f * 0.3048f to "100 ft",
+                50f * 0.3048f to "50 ft",
+                20f * 0.3048f to "20 ft"
+            )
+        } else {
+            listOf(
+                50000f to "50 km",
+                20000f to "20 km",
+                10000f to "10 km",
+                5000f to "5 km",
+                2000f to "2 km",
+                1000f to "1 km",
+                500f to "500 m",
+                200f to "200 m",
+                100f to "100 m",
+                50f to "50 m",
+                20f to "20 m",
+                10f to "10 m",
+                5f to "5 m"
+            )
+        }
+    }
+
+    val safeLat = centerLatitude.coerceIn(-85.0, 85.0)
+    var bestLabel = candidates.last().second
+    var bestPx = minPx
+    var bestDiff = Float.MAX_VALUE
+    for ((meters, label) in candidates) {
+        val px = projection.metersToPixels(meters, safeLat, zoomLevel)
+        if (px in minPx..maxPx) {
+            val diff = abs(px - targetPx)
+            if (diff < bestDiff) {
+                bestDiff = diff
+                bestPx = px
+                bestLabel = label
+            }
+        }
+    }
+    if (bestDiff == Float.MAX_VALUE) {
+        for ((meters, label) in candidates) {
+            val px = projection.metersToPixels(meters, safeLat, zoomLevel)
+            if (px > 12f) {
+                val diff = abs(px - targetPx)
+                if (diff < bestDiff) {
+                    bestDiff = diff
+                    bestPx = px.coerceIn(minPx, maxPx)
+                    bestLabel = label
+                }
+            }
+        }
+    }
+
+    val barWidthDp = with(density) { bestPx.roundToInt().toDp() }
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = colorScheme.surface.copy(alpha = 0.88f),
+        shadowElevation = 2.dp,
+        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.65f)),
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalAlignment = Alignment.Start
+        ) {
+            Text(
+                text = bestLabel,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            val tickColor = colorScheme.onSurface
+            Canvas(
+                modifier = Modifier
+                    .width(barWidthDp)
+                    .height(5.dp)
+            ) {
+                val stroke = 2.2f
+                val bottom = size.height - 1f
+                drawLine(
+                    color = tickColor,
+                    start = Offset(0f, 0f),
+                    end = Offset(0f, bottom),
+                    strokeWidth = stroke,
+                    cap = StrokeCap.Round
+                )
+                drawLine(
+                    color = tickColor,
+                    start = Offset(0f, bottom),
+                    end = Offset(size.width, bottom),
+                    strokeWidth = stroke,
+                    cap = StrokeCap.Round
+                )
+                drawLine(
+                    color = tickColor,
+                    start = Offset(size.width, 0f),
+                    end = Offset(size.width, bottom),
+                    strokeWidth = stroke,
+                    cap = StrokeCap.Round
+                )
+            }
+        }
+    }
 }
 
 private fun computeCircleGeoPoints(center: GeoPoint, radiusMeters: Double, pointsCount: Int = 36): List<GeoPoint> {

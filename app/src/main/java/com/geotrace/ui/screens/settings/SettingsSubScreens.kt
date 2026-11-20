@@ -404,6 +404,18 @@ internal fun MapLayersSettingsPage(
                     checked = settings.followUserLocation,
                     onCheckedChange = { viewModel.toggleFollowUser(it) }
                 )
+
+                HorizontalDivider(
+                    color = colorScheme.outlineVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+
+                SettingToggleRow(
+                    title = "Auto Heading-Up Map Rotation",
+                    description = "Rotates the map to match your compass or travel direction while following (two-finger twist always works)",
+                    checked = settings.autoRotateHeadingUp,
+                    onCheckedChange = { viewModel.toggleAutoRotateHeadingUp(it) }
+                )
             }
         }
     }

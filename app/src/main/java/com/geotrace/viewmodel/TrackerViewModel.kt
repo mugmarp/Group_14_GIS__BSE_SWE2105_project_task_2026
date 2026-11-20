@@ -100,6 +100,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             mapTileType = repository.getSavedMapTileType(),
             showAccuracyRing = repository.getSavedShowAccuracyRing(),
             followUserLocation = repository.getSavedFollowUserLocation(),
+            autoRotateHeadingUp = repository.getSavedAutoRotateHeadingUp(),
             stationaryJitterThresholdMeters = repository.getSavedJitterThreshold(),
             keepScreenOn = repository.getSavedKeepScreenOn(),
             showCellTowerPin = repository.getSavedShowCellTowerPin(),
@@ -172,6 +173,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     var savedMapCenter: org.osmdroid.util.GeoPoint? = null
     @Volatile
     var savedMapZoom: Double? = null
+    @Volatile
+    var savedMapOrientation: Float = 0f
 
     private val _isMapFollowPaused = MutableStateFlow(false)
     val isMapFollowPaused: StateFlow<Boolean> = _isMapFollowPaused.asStateFlow()
@@ -1176,6 +1179,11 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         if (follow) {
             _isMapFollowPaused.value = false
         }
+    }
+
+    fun toggleAutoRotateHeadingUp(enabled: Boolean) {
+        repository.saveAutoRotateHeadingUp(enabled)
+        _settings.value = _settings.value.copy(autoRotateHeadingUp = enabled)
     }
 
     fun setMapFollowPaused(paused: Boolean) {

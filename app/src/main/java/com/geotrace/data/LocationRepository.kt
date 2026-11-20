@@ -118,6 +118,12 @@ class LocationRepository(private val context: Context) {
         prefs.edit().putBoolean("follow_user_location", follow).apply()
     }
 
+    fun getSavedAutoRotateHeadingUp(): Boolean = prefs.getBoolean("auto_rotate_heading_up", false)
+
+    fun saveAutoRotateHeadingUp(enabled: Boolean) {
+        prefs.edit().putBoolean("auto_rotate_heading_up", enabled).apply()
+    }
+
     fun getSavedKeepScreenOn(): Boolean = prefs.getBoolean("keep_screen_on", true)
 
     fun saveKeepScreenOn(keepOn: Boolean) {
