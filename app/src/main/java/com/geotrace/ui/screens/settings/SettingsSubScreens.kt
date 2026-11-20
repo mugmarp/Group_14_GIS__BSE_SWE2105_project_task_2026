@@ -79,7 +79,9 @@ import com.geotrace.service.GeofenceApiStatus
 import com.geotrace.service.LocationForegroundService
 import com.geotrace.service.UpdateStatus
 import com.geotrace.ui.screens.devices.hasBackgroundLocationPermission
+import com.geotrace.ui.screens.devices.isIgnoringBatteryOptimizations
 import com.geotrace.ui.screens.devices.openAppNotificationSettings
+import com.geotrace.ui.screens.devices.openBatteryOptimizationSettings
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.GroupViewModel
 import com.geotrace.viewmodel.TrackerViewModel
@@ -815,6 +817,7 @@ internal fun ProtectionAlertsSettingsPage(
     val hasLocPerm = remember(permissionRefreshTick) { LocationForegroundService.hasLocationPermission(context) }
     val hasNotifPerm = remember(permissionRefreshTick) { LocationForegroundService.hasNotificationPermission(context) }
     val hasBgPerm = remember(permissionRefreshTick) { hasBackgroundLocationPermission(context) }
+    val isBatteryUnrestricted = remember(permissionRefreshTick) { isIgnoringBatteryOptimizations(context) }
 
     LazyColumn(
         modifier = Modifier
@@ -936,6 +939,58 @@ internal fun ProtectionAlertsSettingsPage(
                                 .heightIn(min = 48.dp)
                         ) {
                             Text("Grant 'Allow All The Time' Location", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    if (isProtectionEnabled) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = customColors.surfaceContainerLow,
+                            border = BorderStroke(
+                                1.dp,
+                                if (isBatteryUnrestricted) colorScheme.outlineVariant else customColors.warning.copy(alpha = 0.45f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    text = if (isBatteryUnrestricted) {
+                                        "Battery Policy: Unrestricted (Doze Exempt)"
+                                    } else {
+                                        "Battery Policy: OS Optimized (May Throttle 24/7 Sync)"
+                                    },
+                                    color = if (isBatteryUnrestricted) colorScheme.onSurface else customColors.warning,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = if (isBatteryUnrestricted) {
+                                        "Android allows background 24/7 protection heartbeats without aggressive Doze suspension."
+                                    } else {
+                                        "Some OEMs restrict background services in Doze mode. Set GeoTrace to Unrestricted in Android Battery Optimization settings for reliable 24/7 protection."
+                                    },
+                                    color = colorScheme.onSurfaceVariant,
+                                    fontSize = 10.sp,
+                                    lineHeight = 14.sp
+                                )
+                                if (!isBatteryUnrestricted) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    OutlinedButton(
+                                        onClick = { openBatteryOptimizationSettings(context) },
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = 48.dp)
+                                            .testTag("settings_battery_optimization_btn")
+                                    ) {
+                                        Icon(Icons.Default.Power, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text("Review Battery Optimization Settings", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
                         }
                     }
                 }

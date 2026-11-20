@@ -176,10 +176,10 @@ class GeofenceManager(private val context: Context) {
                     .setTransitionTypes(transitionTypes)
                     .apply {
                         if (useDwell && zone.alertOnEntry) {
-                            setLoiteringDelay(8_000)
+                            setLoiteringDelay(15_000)
                         }
                     }
-                    .setNotificationResponsiveness(5_000)
+                    .setNotificationResponsiveness(60_000)
                     .build()
             } catch (e: IllegalArgumentException) {
                 Log.w(TAG, "Skipping invalid geofence '${zone.name}': ${e.message}")

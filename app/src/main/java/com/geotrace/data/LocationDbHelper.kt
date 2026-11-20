@@ -13,6 +13,10 @@ import com.geotrace.model.TrackingSession
 
 class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
+    init {
+        setWriteAheadLoggingEnabled(true)
+    }
+
     companion object {
         const val DATABASE_NAME = "gis_tracker.db"
         const val DATABASE_VERSION = 6

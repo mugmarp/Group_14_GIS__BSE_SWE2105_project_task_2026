@@ -115,6 +115,17 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        lifecycle.addObserver(object : androidx.lifecycle.DefaultLifecycleObserver {
+            override fun onStart(owner: androidx.lifecycle.LifecycleOwner) {
+                viewModel.setUiForeground(true)
+                groupViewModel.setUiForeground(true)
+            }
+
+            override fun onStop(owner: androidx.lifecycle.LifecycleOwner) {
+                viewModel.setUiForeground(false)
+                groupViewModel.setUiForeground(false)
+            }
+        })
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.light(
                 android.graphics.Color.TRANSPARENT,

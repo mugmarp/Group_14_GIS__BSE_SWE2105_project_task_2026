@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryAlert
@@ -62,6 +63,26 @@ fun openAppNotificationSettings(context: Context) {
         ).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
+    }
+    try {
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        openAppLocationSettings(context)
+    }
+}
+
+fun isIgnoringBatteryOptimizations(context: Context): Boolean {
+    return try {
+        val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        pm?.isIgnoringBatteryOptimizations(context.packageName) ?: false
+    } catch (_: Exception) {
+        false
+    }
+}
+
+fun openBatteryOptimizationSettings(context: Context) {
+    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
     try {
         context.startActivity(intent)

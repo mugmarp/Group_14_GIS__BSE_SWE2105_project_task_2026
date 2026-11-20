@@ -35,7 +35,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -129,6 +132,23 @@ class GroupRepository(
     private val _p2pRingCooldownsMs = MutableStateFlow<Map<String, Long>>(emptyMap())
     val p2pRingCooldownsMs = _p2pRingCooldownsMs.asStateFlow()
 
+    @Volatile
+    private var lastSyncedLat: Double? = null
+    @Volatile
+    private var lastSyncedLng: Double? = null
+    @Volatile
+    private var lastSyncedBattery: Int = -1
+    @Volatile
+    private var lastSyncedCharging: Boolean? = null
+    @Volatile
+    private var lastSyncedMode: String? = null
+    @Volatile
+    private var lastSyncedGhost: Boolean? = null
+    @Volatile
+    private var lastSyncedGroupCount: Int = -1
+    @Volatile
+    private var lastFullSyncWallMs: Long = 0L
+
     fun clearFirestoreError() {
         _firestoreError.value = null
     }
@@ -136,8 +156,61 @@ class GroupRepository(
     fun clearSyncStateOnSignOut() {
         _lastSyncTimestampMs.value = null
         _lastGroupSyncTimestampMs.value = null
+        lastSyncedLat = null
+        lastSyncedLng = null
+        lastSyncedBattery = -1
+        lastSyncedCharging = null
+        lastSyncedMode = null
+        lastSyncedGhost = null
+        lastSyncedGroupCount = -1
+        lastFullSyncWallMs = 0L
         knownGroupIds.clear()
         saveSelectedGroupId(null)
+    }
+
+    fun shouldSkipRedundantCloudSync(
+        location: LocationPoint,
+        batteryPercent: Int,
+        isCharging: Boolean,
+        trackingModeName: String,
+        isGhost: Boolean,
+        groupCount: Int,
+        force: Boolean = false
+    ): Boolean {
+        if (force) return false
+        val prevLat = lastSyncedLat ?: return false
+        val prevLng = lastSyncedLng ?: return false
+        val elapsedMs = System.currentTimeMillis() - lastFullSyncWallMs
+        if (elapsedMs >= 90_000L) return false
+        if (lastSyncedCharging != isCharging ||
+            lastSyncedMode != trackingModeName ||
+            lastSyncedGhost != isGhost ||
+            lastSyncedGroupCount != groupCount ||
+            kotlin.math.abs(lastSyncedBattery - batteryPercent) >= 2
+        ) {
+            return false
+        }
+        val dist = FloatArray(1)
+        android.location.Location.distanceBetween(prevLat, prevLng, location.latitude, location.longitude, dist)
+        return dist[0] < 3.0f
+    }
+
+    fun markCloudSyncCompleted(
+        location: LocationPoint,
+        batteryPercent: Int,
+        isCharging: Boolean,
+        trackingModeName: String,
+        isGhost: Boolean,
+        groupCount: Int
+    ) {
+        lastSyncedLat = location.latitude
+        lastSyncedLng = location.longitude
+        lastSyncedBattery = batteryPercent
+        lastSyncedCharging = isCharging
+        lastSyncedMode = trackingModeName
+        lastSyncedGhost = isGhost
+        lastSyncedGroupCount = groupCount
+        lastFullSyncWallMs = System.currentTimeMillis()
     }
 
     fun getKnownGroupIdsSnapshot(): List<String> = knownGroupIds.toList()
@@ -601,10 +674,6 @@ class GroupRepository(
             _lastSyncTimestampMs.value = now
             _lastGroupSyncTimestampMs.value = now
 
-            if (isP2PAdvertising || isP2PDiscovering || connectedEndpoints.isNotEmpty()) {
-                broadcastP2PLocation(location, safeDisplayName, safeBattery)
-            }
-
             Result.success(Unit)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to publish live location to group $groupId: ${e.message}")
@@ -705,43 +774,73 @@ class GroupRepository(
     suspend fun syncDeviceAndGroupTelemetry(
         location: LocationPoint,
         trackingModeName: String,
-        explicitGroupId: String? = getSelectedGroupId()
+        explicitGroupId: String? = getSelectedGroupId(),
+        force: Boolean = false,
+        includeP2PBroadcast: Boolean = true
     ): Boolean {
         val uid = auth.currentUser?.uid ?: return false
         val (batteryPercent, isCharging) = readBatteryInfo()
         val displayName = getCurrentUserDisplayName()
+        val targetGroupIds = (listOfNotNull(explicitGroupId) + knownGroupIds.toList()).distinct()
         var anySucceeded = false
 
         // Broadcast over off-grid P2P first so lack of internet never blocks Nearby updates
-        if (!_isGhostMode.value && (isP2PMeshRequested || isP2PAdvertising || isP2PDiscovering || connectedEndpoints.isNotEmpty())) {
+        if (includeP2PBroadcast && !_isGhostMode.value && (isP2PMeshRequested || isP2PAdvertising || isP2PDiscovering || connectedEndpoints.isNotEmpty())) {
             broadcastP2PLocation(location, displayName, batteryPercent)
         }
 
-        val fleetRes = publishPersonalDevice(
-            location = location,
-            batteryPercent = batteryPercent,
-            isCharging = isCharging,
-            trackingMode = trackingModeName
-        )
-        if (fleetRes.isSuccess) anySucceeded = true
+        if (shouldSkipRedundantCloudSync(
+                location = location,
+                batteryPercent = batteryPercent,
+                isCharging = isCharging,
+                trackingModeName = trackingModeName,
+                isGhost = _isGhostMode.value,
+                groupCount = targetGroupIds.size,
+                force = force
+            )
+        ) {
+            return true
+        }
 
-        val targetGroupIds = (listOfNotNull(explicitGroupId) + knownGroupIds.toList()).distinct()
-        if (targetGroupIds.isNotEmpty()) {
-            val colorPalette = listOf("#2563EB", "#059669", "#D97706", "#DC2626", "#7C3AED", "#DB2777", "#0891B2")
-            val avatarColor = colorPalette[(uid.hashCode() and 0x7fffffff) % colorPalette.size]
-            for (groupId in targetGroupIds) {
-                val groupRes = publishLocation(
-                    groupId = groupId,
+        val fleetDeferred: kotlinx.coroutines.Deferred<Result<Unit>>
+        val groupDeferreds: List<kotlinx.coroutines.Deferred<Result<Unit>>>
+        coroutineScope {
+            fleetDeferred = async {
+                publishPersonalDevice(
                     location = location,
-                    displayName = displayName,
-                    avatarColor = avatarColor,
                     batteryPercent = batteryPercent,
                     isCharging = isCharging,
-                    trackingMode = trackingModeName,
-                    isSharingEnabled = !_isGhostMode.value
+                    trackingMode = trackingModeName
                 )
-                if (groupRes.isSuccess) anySucceeded = true
             }
+            val colorPalette = listOf("#2563EB", "#059669", "#D97706", "#DC2626", "#7C3AED", "#DB2777", "#0891B2")
+            val avatarColor = colorPalette[(uid.hashCode() and 0x7fffffff) % colorPalette.size]
+            groupDeferreds = targetGroupIds.map { groupId ->
+                async {
+                    publishLocation(
+                        groupId = groupId,
+                        location = location,
+                        displayName = displayName,
+                        avatarColor = avatarColor,
+                        batteryPercent = batteryPercent,
+                        isCharging = isCharging,
+                        trackingMode = trackingModeName,
+                        isSharingEnabled = !_isGhostMode.value
+                    )
+                }
+            }
+            if (fleetDeferred.await().isSuccess) anySucceeded = true
+            if (groupDeferreds.awaitAll().any { it.isSuccess }) anySucceeded = true
+        }
+        if (anySucceeded) {
+            markCloudSyncCompleted(
+                location = location,
+                batteryPercent = batteryPercent,
+                isCharging = isCharging,
+                trackingModeName = trackingModeName,
+                isGhost = _isGhostMode.value,
+                groupCount = targetGroupIds.size
+            )
         }
         return anySucceeded
     }
@@ -759,21 +858,14 @@ class GroupRepository(
 
     fun readBatteryInfo(): Pair<Int, Boolean> {
         return try {
-            val intentFilter = android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)
-            val batteryStatus = context.registerReceiver(null, intentFilter)
-            val level = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
-            val scale = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
-            val batteryPct = if (level >= 0 && scale > 0) {
-                (level * 100 / scale).coerceIn(0, 100)
+            val bm = context.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
+            if (bm != null) {
+                val cap = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                val batteryPct = if (cap in 0..100) cap else 100
+                Pair(batteryPct, bm.isCharging)
             } else {
-                val bm = context.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
-                val cap = bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: -1
-                if (cap in 0..100) cap else 100
+                Pair(100, false)
             }
-            val status = batteryStatus?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
-            val isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
-                status == android.os.BatteryManager.BATTERY_STATUS_FULL
-            Pair(batteryPct, isCharging)
         } catch (_: Exception) {
             Pair(100, false)
         }

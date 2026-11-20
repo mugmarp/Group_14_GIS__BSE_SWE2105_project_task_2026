@@ -369,7 +369,10 @@ fun MapViewComposable(
         }
     }
 
-    val compassHeading by rememberCompassHeadingDegrees(enabled = true)
+    val compassHeading by rememberCompassHeadingDegrees(
+        enabled = true,
+        highPrecision = settings.autoRotateHeadingUp
+    )
     val resolvedUserBearing = remember(currentLocation?.bearing, currentLocation?.speed, compassHeading) {
         val loc = currentLocation
         when {

@@ -124,7 +124,7 @@ class LocationRepository(private val context: Context) {
         prefs.edit().putBoolean("auto_rotate_heading_up", enabled).apply()
     }
 
-    fun getSavedKeepScreenOn(): Boolean = prefs.getBoolean("keep_screen_on", true)
+    fun getSavedKeepScreenOn(): Boolean = prefs.getBoolean("keep_screen_on", false)
 
     fun saveKeepScreenOn(keepOn: Boolean) {
         prefs.edit().putBoolean("keep_screen_on", keepOn).apply()
@@ -713,6 +713,14 @@ class LocationRepository(private val context: Context) {
 
                 if (shouldPersistTrackpoint) {
                     val db = dbHelper.writableDatabase
+                    val newDistance = session.totalDistanceMeters + additionalDistance
+                    val newPointCount = session.pointCount + 1
+                    val currentSpeedKmh = point.speedKmh.toDouble()
+                    val newMaxSpeed = if (additionalDistance > 0.0) maxOf(session.maxSpeedKmh, currentSpeedKmh) else session.maxSpeedKmh
+
+                    val elapsedSec = session.currentDurationSeconds(point.timestamp).toDouble().coerceAtLeast(1.0)
+                    val newAvgSpeed = (newDistance / elapsedSec) * 3.6
+
                     val cv = ContentValues().apply {
                         put("session_id", session.id)
                         put("latitude", point.latitude)
@@ -724,18 +732,23 @@ class LocationRepository(private val context: Context) {
                         put("provider", point.provider)
                         put("timestamp", point.timestamp)
                     }
-                    db.insert(LocationDbHelper.TABLE_POINTS, null, cv)
+                    val updateCv = ContentValues().apply {
+                        put("distance", newDistance)
+                        put("avg_speed", newAvgSpeed)
+                        put("max_speed", newMaxSpeed)
+                        put("point_count", newPointCount)
+                    }
+
+                    db.beginTransaction()
+                    try {
+                        db.insert(LocationDbHelper.TABLE_POINTS, null, cv)
+                        db.update(LocationDbHelper.TABLE_SESSIONS, updateCv, "id = ?", arrayOf(session.id))
+                        db.setTransactionSuccessful()
+                    } finally {
+                        db.endTransaction()
+                    }
 
                     _activeTrailPoints.value = _activeTrailPoints.value + point
-
-                    val newDistance = session.totalDistanceMeters + additionalDistance
-                    val newPointCount = session.pointCount + 1
-                    val currentSpeedKmh = point.speedKmh.toDouble()
-                    val newMaxSpeed = if (additionalDistance > 0.0) maxOf(session.maxSpeedKmh, currentSpeedKmh) else session.maxSpeedKmh
-
-                    val elapsedSec = session.currentDurationSeconds(point.timestamp).toDouble().coerceAtLeast(1.0)
-                    val newAvgSpeed = (newDistance / elapsedSec) * 3.6
-
                     val updatedSession = session.copy(
                         totalDistanceMeters = newDistance,
                         pointCount = newPointCount,
@@ -743,14 +756,6 @@ class LocationRepository(private val context: Context) {
                         avgSpeedKmh = newAvgSpeed
                     )
                     _activeSession.value = updatedSession
-
-                    val updateCv = ContentValues().apply {
-                        put("distance", newDistance)
-                        put("avg_speed", newAvgSpeed)
-                        put("max_speed", newMaxSpeed)
-                        put("point_count", newPointCount)
-                    }
-                    db.update(LocationDbHelper.TABLE_SESSIONS, updateCv, "id = ?", arrayOf(session.id))
                 }
             }
             point

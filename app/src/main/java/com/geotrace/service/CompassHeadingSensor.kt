@@ -74,12 +74,15 @@ private fun remapRotationMatrix(inR: FloatArray, outR: FloatArray, displayRotati
  * Returns null if no orientation/magnetometer sensor is available or before first valid sample.
  */
 @Composable
-fun rememberCompassHeadingDegrees(enabled: Boolean = true): State<Float?> {
+fun rememberCompassHeadingDegrees(
+    enabled: Boolean = true,
+    highPrecision: Boolean = true
+): State<Float?> {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val headingState = remember { mutableStateOf<Float?>(null) }
 
-    DisposableEffect(context, lifecycleOwner, enabled) {
+    DisposableEffect(context, lifecycleOwner, enabled, highPrecision) {
         if (!enabled) {
             headingState.value = null
             return@DisposableEffect onDispose {}
@@ -120,10 +123,12 @@ fun rememberCompassHeadingDegrees(enabled: Boolean = true): State<Float?> {
             }
             smoothedHeading = nextSmoothed
 
+            val minEmitIntervalMs = if (highPrecision) 50L else 200L
+            val minHeadingDeltaDeg = if (highPrecision) 1.5f else 3.0f
             val now = SystemClock.elapsedRealtime()
             val prevEmitted = lastEmittedHeading
             if (prevEmitted == null ||
-                (now - lastEmitTimeMs >= 50L && abs(shortestAngleDeltaDegrees(prevEmitted, nextSmoothed)) >= 1.5f)
+                (now - lastEmitTimeMs >= minEmitIntervalMs && abs(shortestAngleDeltaDegrees(prevEmitted, nextSmoothed)) >= minHeadingDeltaDeg)
             ) {
                 lastEmittedHeading = nextSmoothed
                 lastEmitTimeMs = now
@@ -166,13 +171,14 @@ fun rememberCompassHeadingDegrees(enabled: Boolean = true): State<Float?> {
         }
 
         var isRegistered = false
+        val sensorDelay = if (highPrecision) SensorManager.SENSOR_DELAY_UI else SensorManager.SENSOR_DELAY_NORMAL
         fun registerSensors() {
             if (isRegistered) return
             if (rotationSensor != null) {
-                isRegistered = sensorManager.registerListener(listener, rotationSensor, SensorManager.SENSOR_DELAY_UI)
+                isRegistered = sensorManager.registerListener(listener, rotationSensor, sensorDelay)
             } else if (accelSensor != null && magSensor != null) {
-                val okA = sensorManager.registerListener(listener, accelSensor, SensorManager.SENSOR_DELAY_UI)
-                val okM = sensorManager.registerListener(listener, magSensor, SensorManager.SENSOR_DELAY_UI)
+                val okA = sensorManager.registerListener(listener, accelSensor, sensorDelay)
+                val okM = sensorManager.registerListener(listener, magSensor, sensorDelay)
                 isRegistered = okA && okM
             }
         }

@@ -186,18 +186,37 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private var quickFixCancellation: com.google.android.gms.tasks.CancellationTokenSource? = null
     private var osQuickFixCancellation: android.os.CancellationSignal? = null
     private var standbyCellJob: Job? = null
+    @Volatile
     private var lastCellularFallbackKey: String? = null
+    @Volatile
     private var lastCellularFallbackTimeMs: Long = 0L
     @Volatile
     private var lastModeSwitchMs: Long = 0L
     @Volatile
     private var lastModeSwitchElapsedNs: Long = 0L
+    @Volatile
+    private var isUiForeground: Boolean = true
 
     init {
         startStandbyLocationUpdates()
         startStandbyCellPolling()
         observeCellTowerLocation()
         observeGeofencingSync()
+    }
+
+    fun setUiForeground(foreground: Boolean) {
+        if (isUiForeground == foreground) return
+        isUiForeground = foreground
+        if (!foreground) {
+            stopStandbyLocationUpdates()
+            standbyCellJob?.cancel()
+            standbyCellJob = null
+        } else {
+            startStandbyCellPolling(forceFreshOnFirstTick = (trackingMode.value == TrackingMode.POWER_SAVER))
+            if (activeSession.value == null) {
+                startStandbyLocationUpdates(forceImmediateFix = false)
+            }
+        }
     }
 
     private fun observeGeofencingSync() {
@@ -216,22 +235,26 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     private fun startStandbyCellPolling(forceFreshOnFirstTick: Boolean = false) {
         standbyCellJob?.cancel()
+        if (!isUiForeground) return
         standbyCellJob = viewModelScope.launch {
             var useFreshRead = forceFreshOnFirstTick
-            while (isActive) {
+            while (isActive && isUiForeground) {
                 val serviceActivelyDrivesCells = LocationForegroundService.isServiceActive &&
                     LocationForegroundService.isCellDiagnosticsActive &&
                     !LocationForegroundService.isProtectionPausedFlow.value
                 if (activeSession.value == null && !serviceActivelyDrivesCells) {
-                    val towers = if (useFreshRead) {
+                    var towers = if (useFreshRead) {
                         useFreshRead = false
                         cellManager.requestFreshCellTowers()
                     } else {
                         cellManager.readCurrentCellTowers()
                     }
+                    if (towers.isEmpty()) {
+                        towers = cellManager.requestFreshCellTowers()
+                    }
                     repository.updateCellTowers(towers)
                 }
-                val delayMs = if (trackingMode.value == TrackingMode.POWER_SAVER) 10_000L else 25_000L
+                val delayMs = if (trackingMode.value == TrackingMode.POWER_SAVER) 20_000L else 30_000L
                 delay(delayMs)
             }
         }
@@ -312,7 +335,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         forceImmediateFix: Boolean = false
     ) {
         stopStandbyLocationUpdates()
-        if (activeSession.value != null) return
+        if (activeSession.value != null || !isUiForeground) return
         if (!LocationForegroundService.hasLocationPermission(getApplication())) return
         if (targetMode == TrackingMode.HIGH_ACCURACY || targetMode == TrackingMode.BALANCED) {
             requestLastKnownLocation(
@@ -329,7 +352,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     targetMode.intervalMs
                 )
                     .setMinUpdateDistanceMeters(targetMode.minDistanceMeters)
-                    .setMinUpdateIntervalMillis(targetMode.intervalMs / 2)
+                    .setMinUpdateIntervalMillis(targetMode.intervalMs)
                     .build()
 
                 standbyCallback = createStandbyFusedCallback(targetMode)
@@ -352,7 +375,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     targetMode.intervalMs
                 )
                     .setMinUpdateDistanceMeters(targetMode.minDistanceMeters)
-                    .setMinUpdateIntervalMillis(targetMode.intervalMs / 2)
+                    .setMinUpdateIntervalMillis(targetMode.intervalMs)
                     .build()
                 standbyCallback = createStandbyFusedCallback(targetMode)
                 try {

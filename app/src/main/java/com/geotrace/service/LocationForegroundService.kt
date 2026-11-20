@@ -273,6 +273,8 @@ class LocationForegroundService : Service() {
     @Volatile
     private var lastCloudSyncMs: Long = 0L
     @Volatile
+    private var lastNotificationUpdateMs: Long = 0L
+    @Volatile
     private var lastModeSwitchMs: Long = 0L
     @Volatile
     private var lastModeSwitchElapsedNs: Long = 0L
@@ -561,8 +563,8 @@ class LocationForegroundService : Service() {
         if (groupRepo.getCurrentUserId() != null) {
             groupRepo.ensurePersonalDevicesListenerActive()
         }
+        releaseWakeLock()
         ensureForeground(buildStatusNotification(mode))
-        acquireWakeLock()
         requestLocationUpdates(mode)
         startPeriodicCellDiagnostics()
         stopProtectionHeartbeat()
@@ -640,6 +642,7 @@ class LocationForegroundService : Service() {
                     startForeground(NOTIFICATION_ID, notification)
                 }
                 isForegroundStarted = true
+                lastNotificationUpdateMs = System.currentTimeMillis()
                 syncProtectionRuntimeState()
             } catch (e: Exception) {
                 Log.e(TAG, "startForeground failed: ${e.message}")
@@ -654,6 +657,7 @@ class LocationForegroundService : Service() {
             try {
                 val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 nm.notify(NOTIFICATION_ID, notification)
+                lastNotificationUpdateMs = System.currentTimeMillis()
                 syncProtectionRuntimeState()
             } catch (e: Exception) {
                 Log.w(TAG, "notify failed: ${e.message}")
@@ -882,7 +886,7 @@ class LocationForegroundService : Service() {
             TrackingMode.HIGH_ACCURACY -> {
                 val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, mode.intervalMs)
                     .setMinUpdateDistanceMeters(mode.minDistanceMeters)
-                    .setMinUpdateIntervalMillis(mode.intervalMs / 2)
+                    .setMinUpdateIntervalMillis(mode.intervalMs)
                     .build()
 
                 locationCallback = object : LocationCallback() {
@@ -902,7 +906,7 @@ class LocationForegroundService : Service() {
                 // Prefer Play Services Fused Balanced (Wi-Fi/Cell/sensor fusion), falling back to NETWORK_PROVIDER
                 val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, mode.intervalMs)
                     .setMinUpdateDistanceMeters(mode.minDistanceMeters)
-                    .setMinUpdateIntervalMillis(mode.intervalMs / 2)
+                    .setMinUpdateIntervalMillis(mode.intervalMs)
                     .build()
                 val callback = object : LocationCallback() {
                     override fun onLocationResult(result: LocationResult) {
@@ -1099,17 +1103,20 @@ class LocationForegroundService : Service() {
 
         serviceScope.launch {
             repo.recordLocation(point)
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (activeSession != null && !activeSession.isPaused && isForegroundStarted) {
+            val nowMs = System.currentTimeMillis()
+            if (activeSession != null && !activeSession.isPaused && isForegroundStarted &&
+                (nowMs - lastNotificationUpdateMs >= 3_000L)
+            ) {
+                lastNotificationUpdateMs = nowMs
+                val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 nm.notify(NOTIFICATION_ID, buildStatusNotification(effectiveMode))
             }
 
             if (groupRepo.getCurrentUserId() != null) {
                 val throttleMs = if (isRecordingSession || activeSession != null) 15_000L else 45_000L
-                val now = System.currentTimeMillis()
                 val latestSync = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
-                if (now - latestSync >= throttleMs) {
-                    lastCloudSyncMs = now
+                if (nowMs - latestSync >= throttleMs) {
+                    lastCloudSyncMs = nowMs
                     groupRepo.syncDeviceAndGroupTelemetry(point, repo.trackingMode.value.name)
                 }
             }
@@ -1135,14 +1142,22 @@ class LocationForegroundService : Service() {
             val groupRepo = app.groupRepository
             var forceFreshRead = restart
             var fallbackNeededOnMiss = restart
+            var cycleIndex = 0
             while (isActive) {
                 val modeNow = repo.trackingMode.value
-                val towers = if (forceFreshRead || modeNow == TrackingMode.POWER_SAVER) {
-                    forceFreshRead = false
+                val isActivelyRecording = isRecordingSession || repo.activeSession.value != null
+                val shouldRunFreshModemScan = forceFreshRead ||
+                    (modeNow == TrackingMode.POWER_SAVER && cycleIndex % 3 == 0)
+                forceFreshRead = false
+                var towers = if (shouldRunFreshModemScan) {
                     cellManager.requestFreshCellTowers()
                 } else {
                     cellManager.readCurrentCellTowers()
                 }
+                if (towers.isEmpty() && !shouldRunFreshModemScan) {
+                    towers = cellManager.requestFreshCellTowers()
+                }
+                cycleIndex++
                 repo.updateCellTowers(towers)
 
                 // Resolve serving mast in background too so POWER_SAVER stays strictly cellular even with UI closed
@@ -1162,8 +1177,8 @@ class LocationForegroundService : Service() {
                         val towerKey = "${towerLoc.cellId}_${towerLoc.lac}"
                         val cur = repo.currentLocation.value
                         val shouldEmit = cur == null || cur.provider != "cellular" ||
-                            (now - cur.timestamp > 25_000L) ||
-                            (towerKey != lastBgCellularFallbackKey && (now - lastBgCellularFallbackMs >= 10_000L))
+                            (now - cur.timestamp > 45_000L) ||
+                            (towerKey != lastBgCellularFallbackKey && (now - lastBgCellularFallbackMs >= 15_000L))
                         if (shouldEmit) {
                             lastBgCellularFallbackKey = towerKey
                             lastBgCellularFallbackMs = now
@@ -1180,7 +1195,7 @@ class LocationForegroundService : Service() {
                             )
                             repo.recordLocation(cellPoint)
                             if (groupRepo.getCurrentUserId() != null) {
-                                val throttleMs = if (isRecordingSession || repo.activeSession.value != null) 15_000L else 45_000L
+                                val throttleMs = if (isActivelyRecording) 15_000L else 45_000L
                                 val latestSync = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
                                 if (now - latestSync >= throttleMs) {
                                     lastCloudSyncMs = now
@@ -1195,7 +1210,12 @@ class LocationForegroundService : Service() {
                         }
                     }
                 }
-                delay(if (modeNow == TrackingMode.POWER_SAVER) 10_000L else 25_000L)
+                val delayMs = when {
+                    modeNow == TrackingMode.POWER_SAVER && isActivelyRecording -> 20_000L
+                    modeNow == TrackingMode.POWER_SAVER -> 45_000L
+                    else -> 30_000L
+                }
+                delay(delayMs)
             }
         }
     }
@@ -1207,13 +1227,13 @@ class LocationForegroundService : Service() {
             val repo = app.repository
             val groupRepo = app.groupRepository
             while (isActive) {
-                delay(90_000L)
+                delay(120_000L)
                 if (!groupRepo.isBackgroundProtectionActiveAndSignedIn()) break
                 if (isRecordingSession || repo.activeSession.value != null) continue
                 val loc = repo.currentLocation.value ?: continue
                 val now = System.currentTimeMillis()
                 val latestSync = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
-                if (now - latestSync >= 85_000L) {
+                if (now - latestSync >= 115_000L) {
                     lastCloudSyncMs = now
                     groupRepo.syncDeviceAndGroupTelemetry(loc, repo.trackingMode.value.name)
                 }
