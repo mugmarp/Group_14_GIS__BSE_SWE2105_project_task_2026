@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -262,6 +263,13 @@ fun GroupScreen(
             nowMs
         )
     }
+    val staleSameModelDevices = remember(otherPersonalDevices, nowMs) {
+        otherPersonalDevices.filter { dev ->
+            dev.deviceModel.equals(Build.MODEL, ignoreCase = true) &&
+                (dev.lastUpdated?.toDate()?.time?.let { nowMs - it > 24L * 60L * 60L * 1000L } ?: false)
+        }
+    }
+    var showCleanStaleDialog by remember { mutableStateOf(false) }
     val personalDeviceById = remember(otherPersonalDevices) {
         otherPersonalDevices.associateBy { it.deviceId.ifBlank { it.id } }
     }
@@ -621,6 +629,59 @@ fun GroupScreen(
                         )
                     }
 
+                    if (staleSameModelDevices.isNotEmpty()) {
+                        item {
+                            Card(
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = colorScheme.tertiaryContainer.copy(alpha = 0.45f)),
+                                border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.35f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Stale ${Build.MODEL} ${if (staleSameModelDevices.size == 1) "entry" else "entries"} (${staleSameModelDevices.size})",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "Inactive >24h — likely from an older install of this phone.",
+                                            fontSize = 11.sp,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    OutlinedButton(
+                                        onClick = {
+                                            if (staleSameModelDevices.size == 1) {
+                                                devicePendingRemoval = staleSameModelDevices.first()
+                                            } else {
+                                                showCleanStaleDialog = true
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .testTag("clean_stale_same_model_btn")
+                                    ) {
+                                        Text(
+                                            text = if (staleSameModelDevices.size == 1) "Review" else "Clean All",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if (otherPersonalDevices.isEmpty()) {
                         item {
                             Card(
@@ -853,11 +914,49 @@ fun GroupScreen(
     if (showSignOutConfirmDialog) {
         SignOutConfirmDialog(
             isBackgroundProtectionEnabled = isBackgroundProtectionEnabled,
-            onConfirm = {
+            onConfirm = { unlinkDevice ->
                 showSignOutConfirmDialog = false
-                performSignOut(context, scope)
+                performSignOut(
+                    context = context,
+                    scope = scope,
+                    onBeforeSignOut = if (unlinkDevice) {
+                        { groupViewModel.unlinkCurrentDeviceForSignOut() }
+                    } else {
+                        null
+                    }
+                )
             },
             onDismiss = { showSignOutConfirmDialog = false }
+        )
+    }
+
+    if (showCleanStaleDialog && staleSameModelDevices.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { showCleanStaleDialog = false },
+            title = { Text("Remove ${staleSameModelDevices.size} Stale Entries?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Remove ${staleSameModelDevices.size} offline ${Build.MODEL} entries inactive for over 24 hours? Do not confirm if you actively use another identical spare phone on this account.",
+                    fontSize = 13.sp,
+                    color = colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        groupViewModel.removePersonalDevices(staleSameModelDevices)
+                        showCleanStaleDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = colorScheme.error)
+                ) {
+                    Text("Remove Stale")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCleanStaleDialog = false }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 

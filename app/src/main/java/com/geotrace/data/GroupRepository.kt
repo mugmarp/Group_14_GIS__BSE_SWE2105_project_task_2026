@@ -80,6 +80,7 @@ class GroupRepository(
 
     private val auth = Firebase.auth
     private val prefs = context.getSharedPreferences("geotrace_prefs", Context.MODE_PRIVATE)
+    private val identityPrefs = context.getSharedPreferences("geotrace_device_identity", Context.MODE_PRIVATE)
     private val p2pScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val connectionsClient: ConnectionsClient by lazy {
         Nearby.getConnectionsClient(context)
@@ -88,9 +89,9 @@ class GroupRepository(
     val currentDeviceId: String = loadOrInitDeviceId()
     val bleTag: String = currentDeviceId
         .filter { it.isLetterOrDigit() }
-        .take(6)
+        .takeLast(6)
         .uppercase()
-        .padEnd(6, '0')
+        .padStart(6, '0')
 
     // Nearby P2P Peers & Connection Pipeline State
     private val _nearbyPeers = MutableStateFlow<List<P2PPeer>>(emptyList())
@@ -259,9 +260,9 @@ class GroupRepository(
     @Volatile
     private var lastP2PError: String? = null
     @Volatile
-    private var lastHandledRingTimestampMs: Long = prefs.getLong("last_handled_ring_ms", 0L)
+    private var lastHandledRingTimestampMs: Long = loadIdentityLong("last_handled_ring_ms", 0L)
     @Volatile
-    private var lastHandledRingToken: String = prefs.getString("last_handled_ring_token", "") ?: ""
+    private var lastHandledRingToken: String = loadIdentityString("last_handled_ring_token", "")
     @Volatile
     private var lastIncomingP2PRingMs: Long = 0L
     @Volatile
@@ -295,36 +296,92 @@ class GroupRepository(
         }
     }
 
+    private fun loadIdentityString(key: String, default: String): String {
+        val local = identityPrefs.getString(key, null)
+        if (local != null) return local
+        val migrated = prefs.getString(key, null)
+        if (migrated != null) {
+            identityPrefs.edit().putString(key, migrated).apply()
+            return migrated
+        }
+        return default
+    }
+
+    private fun loadIdentityLong(key: String, default: Long): Long {
+        if (identityPrefs.contains(key)) return identityPrefs.getLong(key, default)
+        if (prefs.contains(key)) {
+            val migrated = prefs.getLong(key, default)
+            identityPrefs.edit().putLong(key, migrated).apply()
+            return migrated
+        }
+        return default
+    }
+
     private fun loadOrInitDeviceId(): String {
-        val saved = prefs.getString("geotrace_device_id", null)
-        if (!saved.isNullOrBlank()) return saved
         val modelPrefix = android.os.Build.MODEL
             .filter { it.isLetterOrDigit() }
             .take(6)
             .lowercase()
             .ifBlank { "dev" }
-        val generated = "${modelPrefix}_${UUID.randomUUID().toString().replace("-", "").take(10)}"
-        prefs.edit().putString("geotrace_device_id", generated).apply()
+
+        val rawAndroidId = try {
+            android.provider.Settings.Secure.getString(
+                context.contentResolver,
+                android.provider.Settings.Secure.ANDROID_ID
+            )?.trim()?.lowercase()
+        } catch (_: Exception) {
+            null
+        }
+
+        // Known Android emulator placeholder or unavailable SSAID falls back to persisted UUID
+        val hasValidSsaid = !rawAndroidId.isNullOrBlank() &&
+            rawAndroidId != "9774d56d682e549c" &&
+            rawAndroidId.length >= 8
+
+        if (hasValidSsaid) {
+            val salted = "geotrace:device:v1:${context.packageName}:$rawAndroidId"
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(salted.toByteArray(StandardCharsets.UTF_8))
+            val hexHash = digest.joinToString("") { "%02x".format(it) }.take(12)
+            val deterministicId = "${modelPrefix}_$hexHash"
+            if (identityPrefs.getString("ssaid_device_id", null) != deterministicId) {
+                identityPrefs.edit().putString("ssaid_device_id", deterministicId).apply()
+            }
+            return deterministicId
+        }
+
+        val savedFallback = identityPrefs.getString("fallback_device_id", null)
+            ?: prefs.getString("geotrace_device_id", null)
+        if (!savedFallback.isNullOrBlank()) {
+            identityPrefs.edit().putString("fallback_device_id", savedFallback).apply()
+            return savedFallback
+        }
+        val generated = "${modelPrefix}_${UUID.randomUUID().toString().replace("-", "").take(12)}"
+        identityPrefs.edit().putString("fallback_device_id", generated).apply()
         return generated
     }
 
     private fun loadOrInitOfflineCallsign(): String {
-        val saved = prefs.getString("offline_p2p_callsign", null)
-        if (!saved.isNullOrBlank()) return saved
+        val saved = identityPrefs.getString("offline_p2p_callsign", null)
+            ?: prefs.getString("offline_p2p_callsign", null)
+        if (!saved.isNullOrBlank()) {
+            identityPrefs.edit().putString("offline_p2p_callsign", saved).apply()
+            return saved
+        }
         val modelTag = android.os.Build.MODEL
             .filter { it.isLetterOrDigit() }
             .take(6)
             .ifBlank { "Phone" }
         val suffix = currentDeviceId.takeLast(4).uppercase()
         val generated = "$modelTag-$suffix"
-        prefs.edit().putString("offline_p2p_callsign", generated).apply()
+        identityPrefs.edit().putString("offline_p2p_callsign", generated).apply()
         return generated
     }
 
     fun setOfflineCallsign(callsign: String) {
         val cleaned = callsign.trim().take(24)
         if (cleaned.isNotBlank()) {
-            prefs.edit().putString("offline_p2p_callsign", cleaned).apply()
+            identityPrefs.edit().putString("offline_p2p_callsign", cleaned).apply()
             _offlineCallsign.value = cleaned
             if (isP2PMeshRequested) {
                 restartP2PMeshAsync(cleaned)
@@ -924,7 +981,7 @@ class GroupRepository(
                                 if (reqToken.isNotBlank()) {
                                     lastHandledRingToken = reqToken
                                 }
-                                prefs.edit()
+                                identityPrefs.edit()
                                     .putLong("last_handled_ring_ms", reqAt)
                                     .putString("last_handled_ring_token", lastHandledRingToken)
                                     .apply()
@@ -1021,6 +1078,22 @@ class GroupRepository(
         } catch (e: Exception) {
             Log.e(TAG, "Failed to remove personal device: ${e.message}", e)
             Result.failure(e)
+        }
+    }
+
+    suspend fun unlinkCurrentDeviceBeforeSignOut() {
+        val uid = auth.currentUser?.uid ?: return
+        try {
+            db.collection("users").document(uid)
+                .collection("devices").document(currentDeviceId)
+                .delete()
+                .await()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to unlink personal device doc on sign out: ${e.message}")
+        }
+        val groupIds = (listOfNotNull(getSelectedGroupId()) + knownGroupIds.toList()).distinct()
+        for (groupId in groupIds) {
+            clearGroupPresence(groupId)
         }
     }
 

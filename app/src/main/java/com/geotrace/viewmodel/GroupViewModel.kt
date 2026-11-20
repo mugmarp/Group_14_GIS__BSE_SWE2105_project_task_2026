@@ -648,6 +648,28 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun removePersonalDevices(devices: List<PersonalDevice>) {
+        if (devices.isEmpty()) return
+        viewModelScope.launch {
+            _isActionLoading.value = true
+            var removedCount = 0
+            for (device in devices) {
+                val res = repository.removePersonalDevice(device.deviceId.ifBlank { device.id })
+                if (res.isSuccess) removedCount++
+            }
+            _isActionLoading.value = false
+            if (removedCount > 0) {
+                _statusMessage.value = "Removed $removedCount stale device ${if (removedCount == 1) "entry" else "entries"}."
+            } else {
+                _errorMessage.value = "Failed to remove stale device entries."
+            }
+        }
+    }
+
+    suspend fun unlinkCurrentDeviceForSignOut() {
+        repository.unlinkCurrentDeviceBeforeSignOut()
+    }
+
     fun syncNow() {
         groupMembersRefreshTick.value += 1
         val group = _activeGroup.value

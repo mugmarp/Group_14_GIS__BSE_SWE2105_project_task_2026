@@ -112,10 +112,19 @@ fun performGoogleSignIn(
     }
 }
 
-fun performSignOut(context: Context, scope: CoroutineScope) {
+fun performSignOut(
+    context: Context,
+    scope: CoroutineScope,
+    onBeforeSignOut: (suspend () -> Unit)? = null
+) {
     val credentialManager = CredentialManager.create(context)
     scope.launch {
         withContext(NonCancellable) {
+            try {
+                onBeforeSignOut?.invoke()
+            } catch (e: Exception) {
+                Log.w("DevicesAuth", "Pre-sign-out cleanup warning: ${e.message}")
+            }
             try {
                 credentialManager.clearCredentialState(ClearCredentialStateRequest())
             } catch (e: Exception) {
