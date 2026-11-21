@@ -43,6 +43,7 @@ fun CreateGroupDialog(
     val colorScheme = MaterialTheme.colorScheme
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         title = { Text("Create Tracking Group", fontWeight = FontWeight.Bold) },
         text = {
             Column {
@@ -57,6 +58,7 @@ fun CreateGroupDialog(
                     onValueChange = { onGroupNameChange(it.take(50)) },
                     label = { Text("Group Name (e.g. Field Ops or Home Devices)") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth().testTag("group_name_input")
                 )
             }
@@ -65,13 +67,14 @@ fun CreateGroupDialog(
             Button(
                 onClick = onConfirm,
                 enabled = groupName.isNotBlank(),
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.testTag("confirm_create_group_btn")
             ) {
                 Text("Create")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, shape = RoundedCornerShape(14.dp)) {
                 Text("Cancel")
             }
         }
@@ -88,6 +91,7 @@ fun JoinGroupDialog(
     val colorScheme = MaterialTheme.colorScheme
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         title = { Text("Join Group with Code", fontWeight = FontWeight.Bold) },
         text = {
             Column {
@@ -102,6 +106,7 @@ fun JoinGroupDialog(
                     onValueChange = { onInviteCodeChange(it.uppercase().take(12)) },
                     label = { Text("Invitation Code") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth().testTag("invite_code_input")
                 )
             }
@@ -110,13 +115,14 @@ fun JoinGroupDialog(
             Button(
                 onClick = onConfirm,
                 enabled = inviteCode.trim().length >= 4,
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.testTag("confirm_join_group_btn")
             ) {
                 Text("Join")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, shape = RoundedCornerShape(14.dp)) {
                 Text("Cancel")
             }
         }
@@ -133,6 +139,7 @@ fun RenameDeviceDialog(
     val colorScheme = MaterialTheme.colorScheme
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         title = { Text("Rename This Device", fontWeight = FontWeight.Bold) },
         text = {
             Column {
@@ -147,6 +154,7 @@ fun RenameDeviceDialog(
                     onValueChange = { onCallsignChange(it.take(24)) },
                     label = { Text("Device Name (e.g. Spare Pixel or Study Tablet)") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth().testTag("callsign_input")
                 )
             }
@@ -155,13 +163,14 @@ fun RenameDeviceDialog(
             Button(
                 onClick = onConfirm,
                 enabled = callsign.isNotBlank(),
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.testTag("confirm_callsign_btn")
             ) {
                 Text("Save")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, shape = RoundedCornerShape(14.dp)) {
                 Text("Cancel")
             }
         }
@@ -177,6 +186,7 @@ fun RemoveDeviceDialog(
     val colorScheme = MaterialTheme.colorScheme
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         title = { Text("Remove Linked Device?", fontWeight = FontWeight.Bold) },
         text = {
             Text(
@@ -188,6 +198,7 @@ fun RemoveDeviceDialog(
         confirmButton = {
             Button(
                 onClick = onConfirm,
+                shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = colorScheme.error),
                 modifier = Modifier.testTag("confirm_remove_device_btn")
             ) {
@@ -195,7 +206,7 @@ fun RemoveDeviceDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, shape = RoundedCornerShape(14.dp)) {
                 Text("Cancel")
             }
         }
@@ -213,6 +224,7 @@ fun RemoveGroupMemberDialog(
     val colorScheme = MaterialTheme.colorScheme
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         title = {
             Text(
                 if (isOwnStale) "Remove Stale Device?" else "Remove From Group?",
@@ -233,6 +245,7 @@ fun RemoveGroupMemberDialog(
         confirmButton = {
             Button(
                 onClick = onConfirm,
+                shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = colorScheme.error),
                 modifier = Modifier.testTag("confirm_remove_group_member_btn")
             ) {
@@ -240,7 +253,7 @@ fun RemoveGroupMemberDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, shape = RoundedCornerShape(14.dp)) {
                 Text("Cancel")
             }
         }
@@ -256,6 +269,7 @@ fun DeleteGroupDialog(
     val colorScheme = MaterialTheme.colorScheme
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         title = { Text("Delete '${group.name}'?", fontWeight = FontWeight.Bold) },
         text = {
             Text(
@@ -267,6 +281,7 @@ fun DeleteGroupDialog(
         confirmButton = {
             Button(
                 onClick = onConfirm,
+                shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = colorScheme.error),
                 modifier = Modifier.testTag("confirm_delete_group_btn")
             ) {
@@ -274,7 +289,7 @@ fun DeleteGroupDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, shape = RoundedCornerShape(14.dp)) {
                 Text("Cancel")
             }
         }
@@ -299,6 +314,7 @@ fun LeaveGroupConfirmDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         title = {
             Text(
                 if (isSoleMember) "Leave & Delete Group?" else "Leave '${group.name}'?",
@@ -311,6 +327,7 @@ fun LeaveGroupConfirmDialog(
         confirmButton = {
             Button(
                 onClick = onConfirm,
+                shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = colorScheme.error),
                 modifier = Modifier.testTag("confirm_leave_group_btn")
             ) {
@@ -318,7 +335,7 @@ fun LeaveGroupConfirmDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, shape = RoundedCornerShape(14.dp)) {
                 Text("Cancel")
             }
         }
@@ -336,6 +353,7 @@ fun SignOutConfirmDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         title = { Text("Sign Out of GeoTrace?", fontWeight = FontWeight.Bold) },
         text = {
             Column {
@@ -353,7 +371,7 @@ fun SignOutConfirmDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .clickable { unlinkDevice = !unlinkDevice }
                         .testTag("sign_out_unlink_device_row"),
                     verticalAlignment = Alignment.CenterVertically
@@ -374,6 +392,7 @@ fun SignOutConfirmDialog(
         confirmButton = {
             Button(
                 onClick = { onConfirm(unlinkDevice) },
+                shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = colorScheme.error),
                 modifier = Modifier.testTag("confirm_sign_out_btn")
             ) {
@@ -381,7 +400,7 @@ fun SignOutConfirmDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, shape = RoundedCornerShape(14.dp)) {
                 Text("Cancel")
             }
         }
@@ -396,6 +415,7 @@ fun BackgroundLocationSettingsDialog(
     val colorScheme = MaterialTheme.colorScheme
     AlertDialog(
         onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
         title = { Text("Enable 'Allow All the Time'", fontWeight = FontWeight.Bold) },
         text = {
             Text(
@@ -407,13 +427,14 @@ fun BackgroundLocationSettingsDialog(
         confirmButton = {
             Button(
                 onClick = onOpenSettings,
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.testTag("open_bg_location_settings_btn")
             ) {
                 Text("Open Settings")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(onClick = onDismiss, shape = RoundedCornerShape(14.dp)) {
                 Text("Later")
             }
         }

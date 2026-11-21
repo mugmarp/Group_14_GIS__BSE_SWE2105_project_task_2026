@@ -118,7 +118,7 @@ fun PlaceSearchDialog(
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             Surface(
-                shape = RoundedCornerShape(22.dp),
+                shape = RoundedCornerShape(24.dp),
                 color = colorScheme.surface,
                 shadowElevation = 10.dp,
                 border = BorderStroke(1.dp, colorScheme.outlineVariant),
@@ -195,7 +195,7 @@ fun PlaceSearchDialog(
                                 focusedContainerColor = customColors.surfaceContainerLow,
                                 unfocusedContainerColor = customColors.surfaceContainerLow
                             ),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(16.dp),
                             modifier = Modifier
                                 .weight(1f)
                                 .focusRequester(focusRequester)
@@ -245,6 +245,8 @@ fun PlaceSearchDialog(
 
                     if (isSearchingOnline) {
                         LinearProgressIndicator(
+                            color = colorScheme.primary,
+                            trackColor = colorScheme.outlineVariant.copy(alpha = 0.35f),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(2.dp)
@@ -361,7 +363,7 @@ private fun SearchResultRow(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Surface(
-                    shape = RoundedCornerShape(4.dp),
+                    shape = CircleShape,
                     color = tintColor.copy(alpha = 0.13f)
                 ) {
                     Text(
@@ -369,7 +371,7 @@ private fun SearchResultRow(
                         fontSize = 8.sp,
                         fontWeight = FontWeight.Bold,
                         color = tintColor,
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                     )
                 }
             }

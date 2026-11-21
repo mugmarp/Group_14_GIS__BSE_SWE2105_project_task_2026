@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -52,6 +53,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -169,7 +171,7 @@ fun OfflineMapsDialog(
         ) {
             val adaptiveMaxHeight = (maxHeight * 0.88f).coerceAtMost(680.dp)
             Surface(
-                shape = RoundedCornerShape(22.dp),
+                shape = RoundedCornerShape(24.dp),
                 color = colorScheme.surface,
                 border = BorderStroke(1.dp, colorScheme.outlineVariant),
                 shadowElevation = 10.dp,
@@ -229,26 +231,46 @@ fun OfflineMapsDialog(
                 ) {
                     // Active Download Progress Card
                     if (progress.isDownloading) {
+                        val pct = if (progress.totalTiles > 0) {
+                            (progress.completedTiles.toFloat() / progress.totalTiles.toFloat()).coerceIn(0f, 1f)
+                        } else 0f
                         Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = colorScheme.primaryContainer.copy(alpha = 0.45f),
-                            border = BorderStroke(1.dp, colorScheme.primary),
+                            shape = RoundedCornerShape(16.dp),
+                            color = customColors.statusActiveBg,
+                            border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.7f)),
                             modifier = Modifier.fillMaxWidth().testTag("offline_download_progress_card")
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = "Downloading '${progress.regionName}'",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.onSurface
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                val pct = if (progress.totalTiles > 0) {
-                                    (progress.completedTiles.toFloat() / progress.totalTiles.toFloat()).coerceIn(0f, 1f)
-                                } else 0f
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Downloading '${progress.regionName}'",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    GeoTraceStatusBadge(
+                                        text = "${(pct * 100).toInt()}%",
+                                        tone = StatusBadgeTone.ACTIVE
+                                    )
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
                                 LinearProgressIndicator(
                                     progress = { pct },
-                                    modifier = Modifier.fillMaxWidth().height(8.dp)
+                                    color = colorScheme.primary,
+                                    trackColor = colorScheme.onSurface.copy(alpha = 0.14f),
+                                    drawStopIndicator = {},
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(8.dp)
+                                        .clip(CircleShape)
                                 )
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Row(
@@ -268,12 +290,14 @@ fun OfflineMapsDialog(
                                     )
                                     TextButton(
                                         onClick = onDismiss,
+                                        shape = RoundedCornerShape(12.dp),
                                         modifier = Modifier.heightIn(min = 48.dp).testTag("hide_offline_download_btn")
                                     ) {
                                         Text("Hide", fontWeight = FontWeight.Bold)
                                     }
                                     TextButton(
                                         onClick = { viewModel.cancelOfflineRegionDownload() },
+                                        shape = RoundedCornerShape(12.dp),
                                         modifier = Modifier.heightIn(min = 48.dp).testTag("cancel_offline_download_btn")
                                     ) {
                                         Text("Cancel", color = colorScheme.error, fontWeight = FontWeight.Bold)
@@ -290,7 +314,7 @@ fun OfflineMapsDialog(
 
                     if (progress.errorMessage != null) {
                         Surface(
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(14.dp),
                             color = colorScheme.errorContainer,
                             border = BorderStroke(1.dp, colorScheme.error),
                             modifier = Modifier.fillMaxWidth()
@@ -317,8 +341,17 @@ fun OfflineMapsDialog(
                     }
 
                     // New Region Configurator
+                    val offlineChipColors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = colorScheme.primary,
+                        selectedLabelColor = colorScheme.onPrimary,
+                        containerColor = colorScheme.surface,
+                        labelColor = colorScheme.onSurface,
+                        disabledSelectedContainerColor = colorScheme.primary.copy(alpha = 0.25f),
+                        disabledContainerColor = customColors.surfaceContainerLow.copy(alpha = 0.6f),
+                        disabledLabelColor = colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
                     Surface(
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(16.dp),
                         color = customColors.surfaceContainerLow,
                         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f)),
                         modifier = Modifier.fillMaxWidth()
@@ -352,10 +385,8 @@ fun OfflineMapsDialog(
                                         enabled = enabled && !progress.isDownloading,
                                         onClick = { areaMode = mode },
                                         label = { Text(mode.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = colorScheme.primary,
-                                            selectedLabelColor = colorScheme.onPrimary
-                                        ),
+                                        shape = RoundedCornerShape(14.dp),
+                                        colors = offlineChipColors,
                                         modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                     )
                                 }
@@ -376,10 +407,8 @@ fun OfflineMapsDialog(
                                                 enabled = !progress.isDownloading,
                                                 onClick = { selectedType = type },
                                                 label = { Text(type.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-                                                colors = FilterChipDefaults.filterChipColors(
-                                                    selectedContainerColor = colorScheme.secondary,
-                                                    selectedLabelColor = colorScheme.onSecondary
-                                                ),
+                                                shape = RoundedCornerShape(14.dp),
+                                                colors = offlineChipColors,
                                                 modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                             )
                                         }
@@ -404,10 +433,8 @@ fun OfflineMapsDialog(
                                         enabled = !progress.isDownloading,
                                         onClick = { detailTier = tier },
                                         label = { Text(tier.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-                                        colors = FilterChipDefaults.filterChipColors(
-                                            selectedContainerColor = colorScheme.primary,
-                                            selectedLabelColor = colorScheme.onPrimary
-                                        ),
+                                        shape = RoundedCornerShape(14.dp),
+                                        colors = offlineChipColors,
                                         modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                     )
                                 }
@@ -420,57 +447,9 @@ fun OfflineMapsDialog(
                                 placeholder = { Text(suggestedName) },
                                 singleLine = true,
                                 enabled = !progress.isDownloading,
+                                shape = RoundedCornerShape(14.dp),
                                 modifier = Modifier.fillMaxWidth().testTag("offline_region_name_input")
                             )
-
-                            // Estimate Pill
-                            Surface(
-                                shape = RoundedCornerShape(10.dp),
-                                color = if (exceedsCap) colorScheme.errorContainer.copy(alpha = 0.6f) else colorScheme.surface,
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (exceedsCap) colorScheme.error else colorScheme.outlineVariant.copy(alpha = 0.6f)
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                val summaryText = when {
-                                    targetBox == null -> "Open the Map tab or wait for a GPS fix to compute area bounds."
-                                    exceedsCap -> "Area too large ($estTiles tiles > ${OfflineMapManager.MAX_TILES_PER_DOWNLOAD} max). Zoom in closer on the map or choose 2 km / Standard."
-                                    else -> "Estimated download: $estTiles tiles (~${String.format(Locale.US, "%.1f", estMb)} MB)"
-                                }
-                                Text(
-                                    text = summaryText,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = if (exceedsCap) colorScheme.error else colorScheme.onSurface,
-                                    modifier = Modifier.padding(10.dp)
-                                )
-                            }
-
-                            Button(
-                                onClick = {
-                                    val box = targetBox ?: return@Button
-                                    val finalName = regionName.trim().ifBlank { suggestedName }
-                                    viewModel.startOfflineRegionDownload(
-                                        name = finalName,
-                                        box = box,
-                                        tileType = selectedType,
-                                        minZoom = detailTier.minZoom,
-                                        maxZoom = detailTier.maxZoom
-                                    )
-                                    regionName = ""
-                                },
-                                enabled = targetBox != null && !exceedsCap && !progress.isDownloading && estTiles > 0,
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .testTag("start_offline_download_btn")
-                            ) {
-                                Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Download Map Region", fontWeight = FontWeight.Bold)
-                            }
                         }
                     }
 
@@ -485,7 +464,7 @@ fun OfflineMapsDialog(
 
                     if (savedRegions.isEmpty()) {
                         Surface(
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(16.dp),
                             color = customColors.surfaceContainerLow,
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -519,6 +498,61 @@ fun OfflineMapsDialog(
                             )
                         }
                     }
+                }
+
+                // Sticky Primary Action & Estimate Bar (always visible above cache footer)
+                Spacer(modifier = Modifier.height(10.dp))
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (exceedsCap) colorScheme.errorContainer.copy(alpha = 0.6f) else customColors.surfaceContainerLow,
+                    border = BorderStroke(
+                        1.dp,
+                        if (exceedsCap) colorScheme.error else colorScheme.outlineVariant.copy(alpha = 0.6f)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    val summaryText = when {
+                        targetBox == null -> "Open the Map tab or wait for a GPS fix to compute area bounds."
+                        exceedsCap -> "Area too large ($estTiles tiles > ${OfflineMapManager.MAX_TILES_PER_DOWNLOAD} max). Zoom in closer on the map or choose 2 km / Standard."
+                        else -> "Estimated download: $estTiles tiles (~${String.format(Locale.US, "%.1f", estMb)} MB)"
+                    }
+                    Text(
+                        text = summaryText,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (exceedsCap) colorScheme.error else colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Button(
+                    onClick = {
+                        val box = targetBox ?: return@Button
+                        val finalName = regionName.trim().ifBlank { suggestedName }
+                        viewModel.startOfflineRegionDownload(
+                            name = finalName,
+                            box = box,
+                            tileType = selectedType,
+                            minZoom = detailTier.minZoom,
+                            maxZoom = detailTier.maxZoom
+                        )
+                        regionName = ""
+                    },
+                    enabled = targetBox != null && !exceedsCap && !progress.isDownloading && estTiles > 0,
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("start_offline_download_btn")
+                ) {
+                    Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (progress.isDownloading) "Download in Progress..." else "Download Map Region",
+                        fontWeight = FontWeight.Bold
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -601,7 +635,7 @@ private fun OfflineRegionCard(
     }
 
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(16.dp),
         color = colorScheme.surface,
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f)),
         modifier = Modifier.fillMaxWidth().testTag("offline_region_${region.id}")

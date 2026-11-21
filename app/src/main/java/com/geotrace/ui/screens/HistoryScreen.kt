@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -217,7 +218,7 @@ fun HistoryScreen(
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(18.dp),
                         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                         border = BorderStroke(1.dp, colorScheme.outlineVariant)
                     ) {
@@ -252,7 +253,7 @@ fun HistoryScreen(
                                 Spacer(modifier = Modifier.height(16.dp))
                                 Button(
                                     onClick = onNavigateBack,
-                                    shape = RoundedCornerShape(10.dp),
+                                    shape = RoundedCornerShape(16.dp),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = colorScheme.primary,
                                         contentColor = colorScheme.onPrimary
@@ -330,7 +331,7 @@ fun HistoryScreen(
                     onValueChange = { renameInput = it },
                     label = { Text("Trail Name", fontSize = 12.sp) },
                     singleLine = true,
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("rename_trail_input")
@@ -343,6 +344,7 @@ fun HistoryScreen(
                         sessionToRename = null
                     },
                     enabled = renameInput.isNotBlank(),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.height(48.dp)
                 ) {
                     Text("Save Name", fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -351,12 +353,13 @@ fun HistoryScreen(
             dismissButton = {
                 TextButton(
                     onClick = { sessionToRename = null },
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.height(48.dp)
                 ) {
                     Text("Cancel", fontSize = 12.sp)
                 }
             },
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(24.dp),
             containerColor = colorScheme.surface
         )
     }
@@ -391,6 +394,7 @@ fun HistoryScreen(
                         viewModel.deleteSession(target.id)
                         sessionToDelete = null
                     },
+                    shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = colorScheme.error,
                         contentColor = colorScheme.onError
@@ -407,12 +411,13 @@ fun HistoryScreen(
             dismissButton = {
                 TextButton(
                     onClick = { sessionToDelete = null },
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.height(48.dp)
                 ) {
                     Text("Cancel", fontSize = 12.sp)
                 }
             },
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(24.dp),
             containerColor = colorScheme.surface
         )
     }
@@ -461,7 +466,7 @@ fun HistoryScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(190.dp),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(14.dp),
                         color = customColors.surfaceContainerLow,
                         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f))
                     ) {
@@ -486,7 +491,7 @@ fun HistoryScreen(
                             onClick = {
                                 saveDocumentLauncher.launch(payload.suggestedFileName)
                             },
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier
                                 .weight(1f)
                                 .height(48.dp)
@@ -510,7 +515,7 @@ fun HistoryScreen(
                                 containerColor = colorScheme.primary,
                                 contentColor = colorScheme.onPrimary
                             ),
-                            shape = RoundedCornerShape(8.dp),
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier
                                 .weight(1f)
                                 .height(48.dp)
@@ -526,13 +531,13 @@ fun HistoryScreen(
             confirmButton = {
                 TextButton(
                     onClick = { pendingExport = null },
-                    shape = RoundedCornerShape(8.dp),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.height(48.dp)
                 ) {
                     Text("Close", color = colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 }
             },
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(24.dp),
             containerColor = colorScheme.surface
         )
     }
@@ -600,7 +605,7 @@ private fun TrailWaypointsDialog(
                     ) {
                         waypoints.forEachIndexed { idx, wp ->
                             Surface(
-                                shape = RoundedCornerShape(10.dp),
+                                shape = RoundedCornerShape(14.dp),
                                 color = customColors.surfaceContainerLow,
                                 border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
                                 modifier = Modifier.fillMaxWidth()
@@ -682,12 +687,13 @@ private fun TrailWaypointsDialog(
         confirmButton = {
             TextButton(
                 onClick = onDismiss,
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.height(48.dp)
             ) {
                 Text("Close", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
         },
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(24.dp),
         containerColor = colorScheme.surface
     )
 }
@@ -715,9 +721,9 @@ private fun SessionHistoryCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(18.dp))
             .testTag("session_card_${session.id}"),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
@@ -750,7 +756,7 @@ private fun SessionHistoryCard(
                             if (session.isRecording) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Surface(
-                                    shape = RoundedCornerShape(4.dp),
+                                    shape = CircleShape,
                                     color = colorScheme.error.copy(alpha = 0.14f)
                                 ) {
                                     Text(
@@ -758,7 +764,7 @@ private fun SessionHistoryCard(
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = colorScheme.error,
-                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                     )
                                 }
                             }
@@ -773,7 +779,7 @@ private fun SessionHistoryCard(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Surface(
-                                shape = RoundedCornerShape(4.dp),
+                                shape = CircleShape,
                                 color = colorScheme.primary.copy(alpha = 0.12f)
                             ) {
                                 Text(
@@ -781,7 +787,7 @@ private fun SessionHistoryCard(
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = colorScheme.primary,
-                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                 )
                             }
                         }
@@ -819,8 +825,8 @@ private fun SessionHistoryCard(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
-                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                        .background(customColors.surfaceContainerLow, RoundedCornerShape(14.dp))
+                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
                         .padding(horizontal = 8.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
@@ -868,7 +874,7 @@ private fun SessionHistoryCard(
                         if (onViewOnMap != null) {
                             OutlinedButton(
                                 onClick = onViewOnMap,
-                                shape = RoundedCornerShape(10.dp),
+                                shape = RoundedCornerShape(14.dp),
                                 border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f)),
                                 colors = ButtonDefaults.outlinedButtonColors(
                                     containerColor = colorScheme.primary.copy(alpha = 0.06f),
@@ -895,7 +901,7 @@ private fun SessionHistoryCard(
                         if (onViewWaypoints != null) {
                             OutlinedButton(
                                 onClick = onViewWaypoints,
-                                shape = RoundedCornerShape(10.dp),
+                                shape = RoundedCornerShape(14.dp),
                                 border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.45f)),
                                 colors = ButtonDefaults.outlinedButtonColors(
                                     containerColor = colorScheme.tertiary.copy(alpha = 0.06f),
@@ -992,7 +998,7 @@ private fun ExportFormatButton(
     OutlinedButton(
         onClick = onClick,
         enabled = enabled,
-        shape = RoundedCornerShape(8.dp),
+        shape = RoundedCornerShape(14.dp),
         colors = ButtonDefaults.outlinedButtonColors(contentColor = color),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),

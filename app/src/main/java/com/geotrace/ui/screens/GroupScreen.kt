@@ -452,7 +452,7 @@ fun GroupScreen(
                         ) {
                             Button(
                                 onClick = { showCreateDialog = true },
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(16.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary),
                                 modifier = Modifier
                                     .weight(1f)
@@ -466,7 +466,7 @@ fun GroupScreen(
 
                             OutlinedButton(
                                 onClick = { showJoinDialog = true },
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(16.dp),
                                 border = BorderStroke(1.dp, colorScheme.primary),
                                 modifier = Modifier
                                     .weight(1f)
@@ -495,7 +495,7 @@ fun GroupScreen(
                         if (sortedMembers.isEmpty() && pendingMemberUids.isEmpty()) {
                             item {
                                 Card(
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = RoundedCornerShape(18.dp),
                                     colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                                     border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
                                     modifier = Modifier.fillMaxWidth()
@@ -634,7 +634,7 @@ fun GroupScreen(
                     if (staleSameModelDevices.isNotEmpty()) {
                         item {
                             Card(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(16.dp),
                                 colors = CardDefaults.cardColors(containerColor = colorScheme.tertiaryContainer.copy(alpha = 0.45f)),
                                 border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.35f)),
                                 modifier = Modifier.fillMaxWidth()
@@ -668,7 +668,7 @@ fun GroupScreen(
                                                 showCleanStaleDialog = true
                                             }
                                         },
-                                        shape = RoundedCornerShape(8.dp),
+                                        shape = RoundedCornerShape(14.dp),
                                         modifier = Modifier
                                             .heightIn(min = 48.dp)
                                             .testTag("clean_stale_same_model_btn")
@@ -687,7 +687,7 @@ fun GroupScreen(
                     if (otherPersonalDevices.isEmpty()) {
                         item {
                             Card(
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(18.dp),
                                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                                 border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
                                 modifier = Modifier.fillMaxWidth()
@@ -770,7 +770,7 @@ fun GroupScreen(
                     if (nearbyPeers.isEmpty()) {
                         item {
                             Card(
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(18.dp),
                                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                                 border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
                                 modifier = Modifier.fillMaxWidth()
@@ -936,6 +936,7 @@ fun GroupScreen(
     if (showCleanStaleDialog && staleSameModelDevices.isNotEmpty()) {
         AlertDialog(
             onDismissRequest = { showCleanStaleDialog = false },
+            shape = RoundedCornerShape(24.dp),
             title = { Text("Remove ${staleSameModelDevices.size} Stale Entries?", fontWeight = FontWeight.Bold) },
             text = {
                 Text(
@@ -950,13 +951,14 @@ fun GroupScreen(
                         groupViewModel.removePersonalDevices(staleSameModelDevices)
                         showCleanStaleDialog = false
                     },
+                    shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = colorScheme.error)
                 ) {
                     Text("Remove Stale")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showCleanStaleDialog = false }) {
+                TextButton(onClick = { showCleanStaleDialog = false }, shape = RoundedCornerShape(14.dp)) {
                     Text("Cancel")
                 }
             }
@@ -976,6 +978,7 @@ fun GroupScreen(
     if (showP2PPermissionSettingsDialog) {
         AlertDialog(
             onDismissRequest = { showP2PPermissionSettingsDialog = false },
+            shape = RoundedCornerShape(24.dp),
             title = {
                 Text("Permissions Required", fontWeight = FontWeight.Bold)
             },
@@ -990,13 +993,14 @@ fun GroupScreen(
                     onClick = {
                         showP2PPermissionSettingsDialog = false
                         openAppLocationSettings(context)
-                    }
+                    },
+                    shape = RoundedCornerShape(14.dp)
                 ) {
                     Text("Open App Settings", fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showP2PPermissionSettingsDialog = false }) {
+                TextButton(onClick = { showP2PPermissionSettingsDialog = false }, shape = RoundedCornerShape(14.dp)) {
                     Text("Cancel")
                 }
             }

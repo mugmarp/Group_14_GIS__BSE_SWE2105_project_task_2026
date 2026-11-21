@@ -108,7 +108,7 @@ fun MemberCard(
     }
 
     Card(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelf) customColors.surfaceContainerLow else colorScheme.surface
         ),
@@ -309,7 +309,7 @@ fun PersonalDeviceCard(
     val isRingPending = device.ringRequestedAt > 0L && (nowMs - device.ringRequestedAt) in -5_000L..60_000L
 
     Card(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, fleetAccent.copy(alpha = 0.4f)),
         modifier = Modifier.fillMaxWidth().testTag("personal_device_card_${device.deviceId}")
@@ -404,7 +404,7 @@ fun PersonalDeviceCard(
                 OutlinedButton(
                     onClick = onLocateClick,
                     enabled = hasValidCoords,
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
@@ -422,7 +422,7 @@ fun PersonalDeviceCard(
                 if (isRingPending) {
                     Button(
                         onClick = onCancelRingClick,
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(14.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = customColors.warning),
                         modifier = Modifier
                             .weight(1f)
@@ -440,7 +440,7 @@ fun PersonalDeviceCard(
                 } else {
                     FilledTonalButton(
                         onClick = onRingClick,
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .weight(1f)
                             .height(48.dp)
@@ -491,7 +491,7 @@ fun P2PPeerCard(
     val isRingCoolingDown = lastRingSentAtMs > 0L && (nowMs - lastRingSentAtMs) in 0L..8_000L
 
     Card(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(
             1.dp,
@@ -556,7 +556,7 @@ fun P2PPeerCard(
                 OutlinedButton(
                     onClick = onLocatePeer,
                     enabled = peer.hasValidCoordinates,
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
@@ -574,7 +574,7 @@ fun P2PPeerCard(
                 FilledTonalButton(
                     onClick = onRingPeer,
                     enabled = !isRingCoolingDown,
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
@@ -610,7 +610,7 @@ fun GroupRowCard(
     val count = group.memberIds.size
 
     Card(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isActive) colorScheme.primaryContainer.copy(alpha = 0.22f) else colorScheme.surface
         ),
@@ -660,7 +660,7 @@ fun GroupRowCard(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (isActive) {
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
+                        shape = CircleShape,
                         color = colorScheme.primary
                     ) {
                         Text(
@@ -668,13 +668,13 @@ fun GroupRowCard(
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onPrimary,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
                         )
                     }
                 } else {
                     OutlinedButton(
                         onClick = onSelect,
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.heightIn(min = 48.dp)
                     ) {
                         Text("Select", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
@@ -719,7 +719,7 @@ fun PendingMemberCard(
     }
 
     Card(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = customColors.surfaceContainerLow),
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
         modifier = Modifier
@@ -790,7 +790,7 @@ fun StatusChipBadge(
     textColor: Color
 ) {
     Surface(
-        shape = RoundedCornerShape(6.dp),
+        shape = CircleShape,
         color = bg
     ) {
         Text(
@@ -799,7 +799,7 @@ fun StatusChipBadge(
             fontWeight = FontWeight.Bold,
             letterSpacing = 0.04.sp,
             color = textColor,
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
         )
     }
 }

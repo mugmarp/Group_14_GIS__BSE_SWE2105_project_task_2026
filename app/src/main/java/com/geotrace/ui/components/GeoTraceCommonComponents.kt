@@ -104,7 +104,7 @@ fun GeoTraceStatusBadge(
         )
     }
     Surface(
-        shape = RoundedCornerShape(8.dp),
+        shape = CircleShape,
         color = bg,
         border = BorderStroke(1.dp, border),
         modifier = modifier
@@ -115,7 +115,7 @@ fun GeoTraceStatusBadge(
             color = fg,
             maxLines = 1,
             softWrap = false,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
         )
     }
 }
@@ -145,8 +145,9 @@ fun GeoTraceTopBar(
                 onClick = onBack,
                 modifier = Modifier
                     .size(48.dp)
-                    .background(customColors.surfaceContainerLow, RoundedCornerShape(12.dp))
-                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(customColors.surfaceContainerLow, RoundedCornerShape(14.dp))
+                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
                     .then(if (backTestTag != null) Modifier.testTag(backTestTag) else Modifier)
             ) {
                 Icon(
@@ -224,7 +225,7 @@ fun TileLayerPickerList(
         MapTileType.entries.forEach { tileType ->
             val isSelected = selectedTileType == tileType
             Surface(
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(16.dp),
                 color = if (isSelected) colorScheme.primary.copy(alpha = 0.10f) else customColors.surfaceContainerLow,
                 border = BorderStroke(
                     if (isSelected) 1.5.dp else 1.dp,
@@ -233,7 +234,7 @@ fun TileLayerPickerList(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 56.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .clickable { onSelectTileType(tileType) }
                     .testTag("tile_layer_${tileType.name.lowercase()}")
             ) {
@@ -249,7 +250,7 @@ fun TileLayerPickerList(
                         Box(
                             modifier = Modifier
                                 .size(36.dp)
-                                .clip(RoundedCornerShape(9.dp))
+                                .clip(RoundedCornerShape(11.dp))
                                 .background(
                                     if (isSelected) colorScheme.primary.copy(alpha = 0.14f)
                                     else colorScheme.surface
@@ -300,7 +301,7 @@ fun HeadingUpToggleRow(
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(16.dp),
         color = if (checked) colorScheme.primary.copy(alpha = 0.08f) else customColors.surfaceContainerLow,
         border = BorderStroke(
             1.dp,
@@ -309,7 +310,7 @@ fun HeadingUpToggleRow(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(16.dp))
             .clickable { onCheckedChange(!checked) }
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
     ) {
@@ -382,7 +383,7 @@ fun SharedMapOverlayToggleRow(
     val customColors = LocalCustomColors.current
 
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(16.dp),
         color = if (checked) colorScheme.primary.copy(alpha = 0.08f) else customColors.surfaceContainerLow,
         border = BorderStroke(
             1.dp,
@@ -391,7 +392,7 @@ fun SharedMapOverlayToggleRow(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(16.dp))
             .clickable { onCheckedChange(!checked) }
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
     ) {

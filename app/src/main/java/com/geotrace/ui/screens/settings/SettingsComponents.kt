@@ -87,10 +87,10 @@ internal fun SettingsSubgroupHubCard(
             .adaptiveContentWidth()
             .fillMaxWidth()
             .heightIn(min = 72.dp)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onClick)
             .testTag(testTag),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
@@ -161,7 +161,7 @@ internal fun SettingsSectionCard(
         modifier = modifier
             .adaptiveContentWidth()
             .fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {

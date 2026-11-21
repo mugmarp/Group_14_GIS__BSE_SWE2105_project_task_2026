@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -327,6 +328,7 @@ fun MapViewComposable(
     onSaveMapCamera: ((GeoPoint, Double, Float) -> Unit)? = null,
     isMapPickMode: Boolean = false,
     onMapCoordinatePicked: ((Double, Double) -> Unit)? = null,
+    onMapSingleTap: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -334,6 +336,7 @@ fun MapViewComposable(
     val density = LocalDensity.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val currentOnMapCoordinatePicked by rememberUpdatedState(onMapCoordinatePicked)
+    val currentOnMapSingleTap by rememberUpdatedState(onMapSingleTap)
     val currentIsMapPickMode by rememberUpdatedState(isMapPickMode)
     val currentOnFollowPausedByUser by rememberUpdatedState(onFollowPausedByUser)
     val currentOnSaveMapCamera by rememberUpdatedState(onSaveMapCamera)
@@ -662,6 +665,7 @@ fun MapViewComposable(
     val persistentEventsOverlay = remember {
         MapEventsOverlay(object : MapEventsReceiver {
             override fun singleTapConfirmedHelper(p: GeoPoint?): Boolean {
+                currentOnMapSingleTap?.invoke()
                 selectedMarkerInfo = null
                 droppedInspectPin = null
                 if (currentIsMapPickMode && p != null) {
@@ -1469,7 +1473,7 @@ fun MapViewComposable(
             val showRecenterAction = selectedMarkerInfo == null && activeFocus != null && onRecenterSelf != null
             val hasActionRow = hasInspectCoords || showRecenterAction
             Surface(
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(20.dp),
                 color = colorScheme.surface,
                 shadowElevation = 6.dp,
                 border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.55f)),
@@ -1503,7 +1507,7 @@ fun MapViewComposable(
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Surface(
-                                    shape = RoundedCornerShape(4.dp),
+                                    shape = CircleShape,
                                     color = colorScheme.primary.copy(alpha = 0.14f)
                                 ) {
                                     Text(
@@ -1511,7 +1515,7 @@ fun MapViewComposable(
                                         fontSize = 8.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = colorScheme.primary,
-                                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                                     )
                                 }
                                 Spacer(modifier = Modifier.width(6.dp))
@@ -1572,11 +1576,11 @@ fun MapViewComposable(
                         ) {
                             if (hasInspectCoords) {
                                 Surface(
-                                    shape = RoundedCornerShape(8.dp),
+                                    shape = RoundedCornerShape(12.dp),
                                     color = if (inspectCoordsCopied) colorScheme.tertiary.copy(alpha = 0.14f) else colorScheme.primary.copy(alpha = 0.10f),
                                     modifier = Modifier
                                         .heightIn(min = 44.dp)
-                                        .clip(RoundedCornerShape(8.dp))
+                                        .clip(RoundedCornerShape(12.dp))
                                         .clickable {
                                             com.geotrace.ui.screens.copyCoordinatesWithFeedback(
                                                 context = context,
@@ -1610,12 +1614,12 @@ fun MapViewComposable(
                                     }
                                 }
                                 Surface(
-                                    shape = RoundedCornerShape(8.dp),
+                                    shape = RoundedCornerShape(12.dp),
                                     color = customColors.surfaceContainerLow,
                                     border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.65f)),
                                     modifier = Modifier
                                         .heightIn(min = 44.dp)
-                                        .clip(RoundedCornerShape(8.dp))
+                                        .clip(RoundedCornerShape(12.dp))
                                         .clickable {
                                             com.geotrace.ui.screens.shareCoordinatesIntent(
                                                 context = context,
@@ -1649,11 +1653,11 @@ fun MapViewComposable(
                             }
                             if (showRecenterAction) {
                                 Surface(
-                                    shape = RoundedCornerShape(8.dp),
+                                    shape = RoundedCornerShape(12.dp),
                                     color = colorScheme.secondary.copy(alpha = 0.12f),
                                     modifier = Modifier
                                         .heightIn(min = 44.dp)
-                                        .clip(RoundedCornerShape(8.dp))
+                                        .clip(RoundedCornerShape(12.dp))
                                         .clickable {
                                             droppedInspectPin = null
                                             onRecenterSelf?.invoke()
@@ -1746,11 +1750,11 @@ fun MapViewComposable(
                         .size(48.dp)
                         .then(
                             if (settings.autoRotateHeadingUp && !isHeadingUpPausedByUser && isActivelyFollowing) {
-                                Modifier.border(1.5.dp, colorScheme.primary, RoundedCornerShape(12.dp))
+                                Modifier.border(1.5.dp, colorScheme.primary, RoundedCornerShape(15.dp))
                             } else Modifier
                         )
                         .testTag("compass_reset_btn"),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(15.dp),
                     containerColor = colorScheme.surface,
                     contentColor = colorScheme.onSurface,
                     elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp)
@@ -1772,9 +1776,9 @@ fun MapViewComposable(
                     modifier = Modifier
                         .size(48.dp)
                         .testTag("layer_switcher_btn"),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(15.dp),
                     containerColor = if (showLayerMenu) colorScheme.primaryContainer else colorScheme.surface,
-                    contentColor = if (showLayerMenu) colorScheme.primary else colorScheme.secondary,
+                    contentColor = if (showLayerMenu) colorScheme.onPrimaryContainer else colorScheme.secondary,
                     elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp)
                 ) {
                     Icon(Icons.Default.Layers, contentDescription = "Select Map Layer", modifier = Modifier.size(22.dp))
@@ -1805,11 +1809,11 @@ fun MapViewComposable(
                     .size(48.dp)
                     .then(
                         if (!isActivelyFollowing) {
-                            Modifier.border(1.5.dp, colorScheme.primary, RoundedCornerShape(12.dp))
+                            Modifier.border(1.5.dp, colorScheme.primary, RoundedCornerShape(15.dp))
                         } else Modifier
                     )
                     .testTag("recenter_map_btn"),
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(15.dp),
                 containerColor = if (isActivelyFollowing) colorScheme.primary else colorScheme.surface,
                 contentColor = if (isActivelyFollowing) colorScheme.onPrimary else colorScheme.primary,
                 elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp)
@@ -1823,7 +1827,7 @@ fun MapViewComposable(
 
             // Zoom In / Out Cluster (48dp standard touch targets)
             Surface(
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(15.dp),
                 color = colorScheme.surface,
                 shadowElevation = 3.dp,
                 border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant)
@@ -1916,13 +1920,13 @@ fun MapViewComposable(
 
                     if (onOpenOfflineMaps != null) {
                         Surface(
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(16.dp),
                             color = colorScheme.tertiary.copy(alpha = 0.12f),
                             border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.45f)),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 56.dp)
-                                .clip(RoundedCornerShape(12.dp))
+                                .clip(RoundedCornerShape(16.dp))
                                 .clickable {
                                     showLayerMenu = false
                                     onOpenOfflineMaps()
@@ -2099,7 +2103,7 @@ private fun MapScaleBarPill(
 
     val barWidthDp = with(density) { bestPx.roundToInt().toDp() }
     Surface(
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(12.dp),
         color = colorScheme.surface.copy(alpha = 0.88f),
         shadowElevation = 2.dp,
         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.65f)),

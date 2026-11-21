@@ -83,7 +83,7 @@ fun GhostModeBanner(
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         color = customColors.statusWarningBg,
         border = BorderStroke(1.dp, customColors.statusWarningBorder),
         modifier = Modifier.fillMaxWidth().testTag("ghost_mode_banner")
@@ -183,7 +183,7 @@ fun ThisDeviceCompactCard(
     }
 
     Card(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth().testTag("this_device_controls_card")
@@ -193,7 +193,7 @@ fun ThisDeviceCompactCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(14.dp))
                     .clickable { expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -378,7 +378,7 @@ fun ThisDeviceCompactCard(
                             if (isProtectionPaused || !isProtectionServiceRunning) {
                                 FilledTonalButton(
                                     onClick = onResumeBackgroundProtection,
-                                    shape = RoundedCornerShape(10.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     modifier = Modifier.weight(1f).height(48.dp).testTag("resume_protection_btn")
                                 ) {
                                     Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -392,7 +392,7 @@ fun ThisDeviceCompactCard(
                             } else {
                                 OutlinedButton(
                                     onClick = onPauseBackgroundProtection,
-                                    shape = RoundedCornerShape(10.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     modifier = Modifier.weight(1f).height(48.dp).testTag("pause_protection_btn")
                                 ) {
                                     Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -407,7 +407,7 @@ fun ThisDeviceCompactCard(
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = onOpenNotificationSettings,
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.fillMaxWidth().height(48.dp).testTag("fix_notif_permission_btn")
                         ) {
                             Icon(Icons.Default.NotificationsActive, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -420,7 +420,7 @@ fun ThisDeviceCompactCard(
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = onOpenBgLocationSettings,
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.fillMaxWidth().height(48.dp).testTag("fix_bg_permission_btn")
                         ) {
                             Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -446,7 +446,7 @@ fun DevicesSubTabBar(
     val customColors = LocalCustomColors.current
 
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(16.dp),
         color = customColors.surfaceContainerLow,
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
         modifier = Modifier.fillMaxWidth().testTag("devices_subtab_bar")
@@ -463,12 +463,12 @@ fun DevicesSubTabBar(
                 }
                 val isSelected = selectedTab == tab
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(12.dp),
                     color = if (isSelected) colorScheme.primary else colorScheme.surface.copy(alpha = 0.0f),
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 48.dp)
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .clickable { onSelectTab(tab) }
                         .testTag(tab.testTag)
                 ) {
@@ -586,7 +586,7 @@ fun ActiveGroupHeroCard(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(14.dp),
                     color = customColors.surfaceContainerLow,
                     border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
                     modifier = Modifier.fillMaxWidth()
@@ -764,7 +764,7 @@ fun P2PRadarControlCard(
             if (!isBluetoothEnabled || !isLocationEnabled || hasMissingPermissions) {
                 Spacer(modifier = Modifier.height(10.dp))
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(14.dp),
                     color = customColors.statusWarningBg,
                     border = BorderStroke(1.dp, customColors.statusWarningBorder),
                     modifier = Modifier.fillMaxWidth()
@@ -800,7 +800,7 @@ fun P2PRadarControlCard(
                             if (!isBluetoothEnabled) {
                                 OutlinedButton(
                                     onClick = onOpenBluetoothSettings,
-                                    shape = RoundedCornerShape(8.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(48.dp)
@@ -812,7 +812,7 @@ fun P2PRadarControlCard(
                             if (!isLocationEnabled) {
                                 OutlinedButton(
                                     onClick = onOpenLocationSettings,
-                                    shape = RoundedCornerShape(8.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(48.dp)
@@ -824,7 +824,7 @@ fun P2PRadarControlCard(
                             if (hasMissingPermissions) {
                                 OutlinedButton(
                                     onClick = onOpenAppSettings,
-                                    shape = RoundedCornerShape(8.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(48.dp)
@@ -846,7 +846,7 @@ fun P2PRadarControlCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(12.dp),
                         color = when {
                             p2pMeshState.errorText != null -> colorScheme.errorContainer
                             radioChipHealthy -> successColor.copy(alpha = 0.12f)
@@ -869,7 +869,7 @@ fun P2PRadarControlCard(
                         )
                     }
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(12.dp),
                         color = colorScheme.primary.copy(alpha = 0.1f),
                         modifier = Modifier.weight(1f)
                     ) {
@@ -889,7 +889,7 @@ fun P2PRadarControlCard(
 
                 OutlinedButton(
                     onClick = onRescanP2P,
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp)
@@ -907,7 +907,7 @@ fun P2PRadarControlCard(
                 if (p2pMeshState.errorText != null) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
+                        shape = RoundedCornerShape(12.dp),
                         color = colorScheme.errorContainer,
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -943,7 +943,7 @@ fun AuthGateCard(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     Card(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth().testTag("auth_gate_card")
@@ -987,7 +987,7 @@ fun AuthGateCard(
             ) {
                 listOf("Fleet Sync", "Remote Ring", "Group Sharing").forEach { tag ->
                     Surface(
-                        shape = RoundedCornerShape(8.dp),
+                        shape = CircleShape,
                         color = LocalCustomColors.current.surfaceContainerLow,
                         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.55f))
                     ) {
@@ -996,7 +996,7 @@ fun AuthGateCard(
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
                             color = colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         )
                     }
                 }
@@ -1006,7 +1006,7 @@ fun AuthGateCard(
             Button(
                 onClick = onSignInClick,
                 enabled = !isSigningIn,
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1064,7 +1064,7 @@ fun AccountProfileStrip(
         ?: "Field Operator"
 
     Surface(
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(18.dp),
         color = customColors.surfaceContainerLow,
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
         modifier = Modifier.fillMaxWidth()

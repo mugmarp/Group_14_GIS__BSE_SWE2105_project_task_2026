@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrightnessHigh
@@ -325,7 +326,7 @@ internal fun MapLayersSettingsPage(
                 icon = Icons.Default.CloudDownload
             ) {
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(16.dp),
                     color = customColors.surfaceContainerLow,
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -364,7 +365,7 @@ internal fun MapLayersSettingsPage(
                         Spacer(modifier = Modifier.width(8.dp))
                         OutlinedButton(
                             onClick = onOpenOfflineMaps,
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(14.dp),
                             contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
                             modifier = Modifier
                                 .heightIn(min = 48.dp)
@@ -484,7 +485,7 @@ internal fun MotionFilteringSettingsPage(
                 Spacer(modifier = Modifier.height(14.dp))
 
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(16.dp),
                     color = customColors.surfaceContainerLow,
                     border = BorderStroke(1.dp, colorScheme.outlineVariant),
                     modifier = Modifier.fillMaxWidth()
@@ -616,7 +617,7 @@ internal fun CellularEngineSettingsPage(
                 }
 
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(16.dp),
                     color = customColors.surfaceContainerLow,
                     border = BorderStroke(1.dp, statusColor.copy(alpha = 0.3f)),
                     modifier = Modifier.fillMaxWidth()
@@ -636,7 +637,7 @@ internal fun CellularEngineSettingsPage(
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Surface(
-                                shape = RoundedCornerShape(6.dp),
+                                shape = CircleShape,
                                 color = statusColor.copy(alpha = 0.14f)
                             ) {
                                 Text(
@@ -665,7 +666,7 @@ internal fun CellularEngineSettingsPage(
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(18.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                 border = BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
@@ -674,7 +675,7 @@ internal fun CellularEngineSettingsPage(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 48.dp)
-                            .clip(RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(14.dp))
                             .clickable { overrideExpanded = !overrideExpanded }
                             .padding(horizontal = 4.dp, vertical = 6.dp)
                             .testTag("toggle_opencellid_override_btn"),
@@ -715,6 +716,7 @@ internal fun CellularEngineSettingsPage(
                                 label = { Text("Custom Override Key (Optional)") },
                                 placeholder = { Text("Enter temporary OpenCellID key") },
                                 singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .testTag("opencellid_api_key_input")
@@ -749,7 +751,7 @@ internal fun CellularEngineSettingsPage(
                                             Toast.LENGTH_SHORT
                                         ).show()
                                     },
-                                    shape = RoundedCornerShape(10.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     modifier = Modifier
                                         .weight(1f)
                                         .heightIn(min = 48.dp)
@@ -770,7 +772,7 @@ internal fun CellularEngineSettingsPage(
                                             Toast.LENGTH_SHORT
                                         ).show()
                                     },
-                                    shape = RoundedCornerShape(10.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     modifier = Modifier
                                         .heightIn(min = 48.dp)
                                         .testTag("clear_opencellid_key_btn")
@@ -882,7 +884,7 @@ internal fun ProtectionAlertsSettingsPage(
                         if (isProtectionPaused || !isProtectionRunning) {
                             FilledTonalButton(
                                 onClick = { groupViewModel.resumeBackgroundProtection() },
-                                shape = RoundedCornerShape(10.dp),
+                                shape = RoundedCornerShape(14.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .heightIn(min = 48.dp)
@@ -899,7 +901,7 @@ internal fun ProtectionAlertsSettingsPage(
                         } else {
                             OutlinedButton(
                                 onClick = { groupViewModel.pauseBackgroundProtection() },
-                                shape = RoundedCornerShape(10.dp),
+                                shape = RoundedCornerShape(14.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .heightIn(min = 48.dp)
@@ -916,7 +918,7 @@ internal fun ProtectionAlertsSettingsPage(
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = { openAppNotificationSettings(context) },
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 48.dp)
@@ -932,7 +934,7 @@ internal fun ProtectionAlertsSettingsPage(
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = onRequestBgLocationDialog,
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 48.dp)
@@ -944,7 +946,7 @@ internal fun ProtectionAlertsSettingsPage(
                     if (isProtectionEnabled) {
                         Spacer(modifier = Modifier.height(10.dp))
                         Surface(
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(14.dp),
                             color = customColors.surfaceContainerLow,
                             border = BorderStroke(
                                 1.dp,
@@ -978,7 +980,7 @@ internal fun ProtectionAlertsSettingsPage(
                                     Spacer(modifier = Modifier.height(8.dp))
                                     OutlinedButton(
                                         onClick = { openBatteryOptimizationSettings(context) },
-                                        shape = RoundedCornerShape(10.dp),
+                                        shape = RoundedCornerShape(14.dp),
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .heightIn(min = 48.dp)
@@ -1035,7 +1037,7 @@ internal fun ProtectionAlertsSettingsPage(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(customColors.warning.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                            .background(customColors.warning.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
                             .padding(10.dp)
                     ) {
                         Text(
@@ -1116,7 +1118,7 @@ internal fun UpdatesInfoSettingsPage(
                     Button(
                         onClick = { scope.launch { viewModel.appUpdateManager.checkForUpdates() } },
                         enabled = updateStatus !is UpdateStatus.Checking && updateStatus !is UpdateStatus.Downloading,
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .heightIn(min = 48.dp)
                             .testTag("check_updates_btn")
@@ -1154,7 +1156,7 @@ internal fun UpdatesInfoSettingsPage(
                     }
                     is UpdateStatus.UpToDate -> {
                         Surface(
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(14.dp),
                             color = colorScheme.tertiary.copy(alpha = 0.12f),
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -1176,7 +1178,7 @@ internal fun UpdatesInfoSettingsPage(
                     }
                     is UpdateStatus.UpdateAvailable -> {
                         Card(
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(containerColor = customColors.surfaceContainerLow),
                             border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.5f)),
                             modifier = Modifier.fillMaxWidth()
@@ -1198,7 +1200,7 @@ internal fun UpdatesInfoSettingsPage(
                                 Spacer(modifier = Modifier.height(10.dp))
                                 Button(
                                     onClick = { viewModel.appUpdateManager.startDownload(status.info) },
-                                    shape = RoundedCornerShape(10.dp),
+                                    shape = RoundedCornerShape(14.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .heightIn(min = 48.dp)
@@ -1234,12 +1236,18 @@ internal fun UpdatesInfoSettingsPage(
                             Spacer(modifier = Modifier.height(6.dp))
                             LinearProgressIndicator(
                                 progress = { status.progressPercent / 100f },
-                                modifier = Modifier.fillMaxWidth()
+                                color = colorScheme.primary,
+                                trackColor = colorScheme.onSurface.copy(alpha = 0.14f),
+                                drawStopIndicator = {},
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(8.dp)
+                                    .clip(CircleShape)
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             OutlinedButton(
                                 onClick = { viewModel.appUpdateManager.cancelDownload() },
-                                shape = RoundedCornerShape(10.dp),
+                                shape = RoundedCornerShape(14.dp),
                                 modifier = Modifier
                                     .heightIn(min = 48.dp)
                                     .testTag("cancel_update_download_btn")
@@ -1255,7 +1263,7 @@ internal fun UpdatesInfoSettingsPage(
                                 containerColor = colorScheme.tertiary,
                                 contentColor = colorScheme.onTertiary
                             ),
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 48.dp)
@@ -1267,7 +1275,7 @@ internal fun UpdatesInfoSettingsPage(
                     is UpdateStatus.InstallPermissionRequired -> {
                         Button(
                             onClick = { viewModel.appUpdateManager.openInstallPermissionSettings() },
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(min = 48.dp)
@@ -1279,7 +1287,7 @@ internal fun UpdatesInfoSettingsPage(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(colorScheme.error.copy(alpha = 0.1f), RoundedCornerShape(10.dp))
+                                .background(colorScheme.error.copy(alpha = 0.1f), RoundedCornerShape(14.dp))
                                 .padding(10.dp)
                         ) {
                             Text(
@@ -1295,7 +1303,7 @@ internal fun UpdatesInfoSettingsPage(
 
                 OutlinedButton(
                     onClick = { viewModel.appUpdateManager.openReleasesPage() },
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)

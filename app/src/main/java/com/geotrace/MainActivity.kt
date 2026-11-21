@@ -74,8 +74,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -304,78 +307,111 @@ fun MainAppScreen(
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
-        // Compact 48dp Bottom Bar (Map & Devices) — height strictly preserved, flush top hairline & inner capsule pill
+        // Compact 48dp Bottom Bar (Map & Devices) — height strictly preserved, curved 20dp top-border radius
         bottomBar = {
             if (currentScreen == Screen.MAP || currentScreen == Screen.GROUPS) {
+                val navShape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+                val navTopBorderColor = colorScheme.outlineVariant.copy(alpha = 0.65f)
                 Surface(
-                    shape = RectangleShape,
+                    shape = navShape,
                     color = colorScheme.surface,
-                    shadowElevation = 4.dp,
+                    shadowElevation = 6.dp,
                     modifier = Modifier
                         .fillMaxWidth()
+                        .drawWithContent {
+                            drawContent()
+                            val radiusPx = 20.dp.toPx()
+                            val strokePx = 1.dp.toPx()
+                            val halfStroke = strokePx / 2f
+                            val topBorderPath = Path().apply {
+                                moveTo(halfStroke, radiusPx)
+                                arcTo(
+                                    rect = Rect(
+                                        left = halfStroke,
+                                        top = halfStroke,
+                                        right = radiusPx * 2f - halfStroke,
+                                        bottom = radiusPx * 2f - halfStroke
+                                    ),
+                                    startAngleDegrees = 180f,
+                                    sweepAngleDegrees = 90f,
+                                    forceMoveTo = false
+                                )
+                                lineTo(size.width - radiusPx, halfStroke)
+                                arcTo(
+                                    rect = Rect(
+                                        left = size.width - radiusPx * 2f + halfStroke,
+                                        top = halfStroke,
+                                        right = size.width - halfStroke,
+                                        bottom = radiusPx * 2f - halfStroke
+                                    ),
+                                    startAngleDegrees = 270f,
+                                    sweepAngleDegrees = 90f,
+                                    forceMoveTo = false
+                                )
+                            }
+                            drawPath(
+                                path = topBorderPath,
+                                color = navTopBorderColor,
+                                style = Stroke(width = strokePx)
+                            )
+                        }
                         .testTag("bottom_nav_bar")
                 ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        HorizontalDivider(
-                            thickness = 1.dp,
-                            color = colorScheme.outlineVariant.copy(alpha = 0.55f)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val navTabs = listOf(
+                            Triple(Screen.MAP, "Map", Icons.Default.Map to Icons.Outlined.OutlinedMap),
+                            Triple(Screen.GROUPS, "Devices", Icons.Default.Group to Icons.Outlined.OutlinedGroup)
                         )
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .navigationBarsPadding()
-                                .padding(horizontal = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val navTabs = listOf(
-                                Triple(Screen.MAP, "Map", Icons.Default.Map to Icons.Outlined.OutlinedMap),
-                                Triple(Screen.GROUPS, "Devices", Icons.Default.Group to Icons.Outlined.OutlinedGroup)
-                            )
-                            navTabs.forEach { (screen, label, icons) ->
-                                val selected = currentScreen == screen
-                                val (filledIcon, outlinedIcon) = icons
-                                val contentTint = if (selected) {
-                                    colorScheme.primary
-                                } else {
-                                    colorScheme.onSurfaceVariant.copy(alpha = 0.82f)
-                                }
-                                Box(
+                        navTabs.forEach { (screen, label, icons) ->
+                            val selected = currentScreen == screen
+                            val (filledIcon, outlinedIcon) = icons
+                            val contentTint = if (selected) {
+                                colorScheme.primary
+                            } else {
+                                colorScheme.onSurfaceVariant.copy(alpha = 0.82f)
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .heightIn(min = 48.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable { currentScreen = screen }
+                                    .testTag(if (screen == Screen.MAP) "nav_bottom_map" else "nav_bottom_groups"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Row(
                                     modifier = Modifier
-                                        .weight(1f)
-                                        .heightIn(min = 48.dp)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .clickable { currentScreen = screen }
-                                        .testTag(if (screen == Screen.MAP) "nav_bottom_map" else "nav_bottom_groups"),
-                                    contentAlignment = Alignment.Center
+                                        .height(34.dp)
+                                        .clip(CircleShape)
+                                        .background(
+                                            if (selected) colorScheme.primary.copy(alpha = 0.12f)
+                                            else Color.Transparent
+                                        )
+                                        .padding(horizontal = 18.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .height(34.dp)
-                                            .clip(RoundedCornerShape(17.dp))
-                                            .background(
-                                                if (selected) colorScheme.primary.copy(alpha = 0.12f)
-                                                else Color.Transparent
-                                            )
-                                            .padding(horizontal = 18.dp),
-                                        horizontalArrangement = Arrangement.Center,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Icon(
-                                            imageVector = if (selected) filledIcon else outlinedIcon,
-                                            contentDescription = if (screen == Screen.MAP) "Map" else "Devices and Tracking Groups",
-                                            tint = contentTint,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text(
-                                            text = label,
-                                            fontSize = 12.sp,
-                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                            letterSpacing = 0.02.sp,
-                                            color = contentTint,
-                                            maxLines = 1
-                                        )
-                                    }
+                                    Icon(
+                                        imageVector = if (selected) filledIcon else outlinedIcon,
+                                        contentDescription = if (screen == Screen.MAP) "Map" else "Devices and Tracking Groups",
+                                        tint = contentTint,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = label,
+                                        fontSize = 12.sp,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                        letterSpacing = 0.02.sp,
+                                        color = contentTint,
+                                        maxLines = 1
+                                    )
                                 }
                             }
                         }
@@ -568,7 +604,7 @@ fun MainAppScreen(
                                 containerColor = colorScheme.error,
                                 contentColor = colorScheme.onError
                             ),
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(14.dp),
                             modifier = Modifier.height(48.dp).testTag("stop_find_alarm_btn")
                         ) {
                             Text("Stop Alarm", fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -652,7 +688,7 @@ fun MainAppScreen(
                         }
                     }
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(16.dp),
                         color = if (menuCoordsCopied) colorScheme.primary.copy(alpha = 0.10f) else customColors.surfaceContainerLow,
                         border = BorderStroke(
                             1.dp,
@@ -660,7 +696,7 @@ fun MainAppScreen(
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(16.dp))
                             .then(
                                 @OptIn(ExperimentalFoundationApi::class)
                                 if (currentLocation != null) {
@@ -742,7 +778,7 @@ fun MainAppScreen(
                             if (currentLocation != null) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Surface(
-                                    shape = RoundedCornerShape(8.dp),
+                                    shape = CircleShape,
                                     color = if (menuCoordsCopied) colorScheme.primary else colorScheme.surface
                                 ) {
                                     Row(
@@ -927,9 +963,9 @@ private fun MenuNavigationCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.8f))
     ) {
@@ -945,7 +981,7 @@ private fun MenuNavigationCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(12.dp),
                     color = customColors.surfaceContainerLow,
                     modifier = Modifier.size(40.dp)
                 ) {
@@ -977,7 +1013,7 @@ private fun MenuNavigationCard(
             Spacer(modifier = Modifier.width(8.dp))
 
             Surface(
-                shape = RoundedCornerShape(6.dp),
+                shape = CircleShape,
                 color = customColors.surfaceContainerLow,
                 border = BorderStroke(1.dp, badgeColor.copy(alpha = 0.5f))
             ) {
@@ -989,7 +1025,7 @@ private fun MenuNavigationCard(
                     maxLines = 1,
                     softWrap = false,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
                 )
             }
         }
