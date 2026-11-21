@@ -365,8 +365,8 @@ fun GeofenceScreen(
                                             containerColor = colorScheme.primary,
                                             contentColor = colorScheme.onPrimary
                                         ),
-                                        shape = RoundedCornerShape(14.dp),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                        shape = CircleShape,
+                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                                         modifier = Modifier
                                             .heightIn(min = 48.dp)
                                             .testTag("add_geofence_btn")
@@ -385,7 +385,7 @@ fun GeofenceScreen(
                         item {
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(18.dp),
+                                shape = RoundedCornerShape(24.dp),
                                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                                 border = BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.35f))
                             ) {
@@ -587,7 +587,7 @@ fun GeofenceScreen(
                         containerColor = colorScheme.error,
                         contentColor = colorScheme.onError
                     ),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = CircleShape,
                     modifier = Modifier.testTag("confirm_delete_geofence_btn")
                 ) {
                     Text("Delete", fontWeight = FontWeight.Bold)
@@ -596,12 +596,12 @@ fun GeofenceScreen(
             dismissButton = {
                 TextButton(
                     onClick = { pendingDeleteZone = null },
-                    shape = RoundedCornerShape(14.dp)
+                    shape = CircleShape
                 ) {
                     Text("Cancel", color = colorScheme.onSurfaceVariant)
                 }
             },
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(28.dp),
             containerColor = colorScheme.surface
         )
     }
@@ -706,7 +706,7 @@ internal fun GeofenceZoneCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("geofence_card_${zone.id}"),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (zone.isEnabled) colorScheme.surface else customColors.surfaceContainerLow
         ),
@@ -728,7 +728,7 @@ internal fun GeofenceZoneCard(
                             .size(34.dp)
                             .background(
                                 categoryColor.copy(alpha = if (zone.isEnabled) 0.15f else 0.08f),
-                                RoundedCornerShape(12.dp)
+                                CircleShape
                             ),
                         contentAlignment = Alignment.Center
                     ) {
@@ -767,7 +767,12 @@ internal fun GeofenceZoneCard(
                     Switch(
                         checked = zone.isEnabled,
                         onCheckedChange = onToggleEnabled,
-                        colors = SwitchDefaults.colors(checkedThumbColor = colorScheme.primary),
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = colorScheme.onPrimary,
+                            checkedTrackColor = colorScheme.primary,
+                            uncheckedThumbColor = colorScheme.outline,
+                            uncheckedTrackColor = colorScheme.surfaceVariant
+                        ),
                         modifier = Modifier.testTag("toggle_geofence_${zone.id}")
                     )
                 }
@@ -1025,7 +1030,7 @@ private fun GeofenceEditDialog(
                         onValueChange = { name = it },
                         label = { Text("Zone Name") },
                         singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("geofence_name_input")
@@ -1055,7 +1060,7 @@ private fun GeofenceEditDialog(
                                     colorHex = cat.defaultColor
                                 },
                                 label = { Text("${cat.iconEmoji} ${cat.label}", fontSize = 11.sp) },
-                                shape = RoundedCornerShape(14.dp),
+                                shape = CircleShape,
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = colorScheme.primary.copy(alpha = 0.15f),
                                     selectedLabelColor = colorScheme.primary
@@ -1069,7 +1074,7 @@ private fun GeofenceEditDialog(
                 // Editable Radius Slider & Live Calculations
                 item {
                     Card(
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(20.dp),
                         colors = CardDefaults.cardColors(containerColor = colorScheme.surfaceVariant.copy(alpha = 0.5f))
                     ) {
                         Column(modifier = Modifier.padding(10.dp)) {
@@ -1114,7 +1119,7 @@ private fun GeofenceEditDialog(
                                 listOf(50f, 100f, 250f, 500f).forEach { r ->
                                     OutlinedButton(
                                         onClick = { radius = r },
-                                        shape = RoundedCornerShape(14.dp),
+                                        shape = CircleShape,
                                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
                                         modifier = Modifier
                                             .weight(1f)
@@ -1218,7 +1223,7 @@ private fun GeofenceEditDialog(
                                 label = { Text("Latitude") },
                                 isError = !isLatValid || !isNotNullIsland,
                                 singleLine = true,
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(16.dp),
                                 modifier = Modifier.weight(1f)
                             )
                             OutlinedTextField(
@@ -1227,7 +1232,7 @@ private fun GeofenceEditDialog(
                                 label = { Text("Longitude") },
                                 isError = !isLonValid || !isNotNullIsland,
                                 singleLine = true,
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(16.dp),
                                 modifier = Modifier.weight(1f)
                             )
                         }
@@ -1283,7 +1288,7 @@ private fun GeofenceEditDialog(
                                 .fillMaxWidth()
                                 .background(
                                     colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                                    RoundedCornerShape(14.dp)
+                                    RoundedCornerShape(16.dp)
                                 )
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1306,7 +1311,12 @@ private fun GeofenceEditDialog(
                             Switch(
                                 checked = isEnabled,
                                 onCheckedChange = { isEnabled = it },
-                                colors = SwitchDefaults.colors(checkedThumbColor = colorScheme.primary),
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = colorScheme.onPrimary,
+                                    checkedTrackColor = colorScheme.primary,
+                                    uncheckedThumbColor = colorScheme.outline,
+                                    uncheckedTrackColor = colorScheme.surfaceVariant
+                                ),
                                 modifier = Modifier.testTag("geofence_enabled_switch")
                             )
                         }
@@ -1340,7 +1350,7 @@ private fun GeofenceEditDialog(
                     containerColor = colorScheme.primary,
                     contentColor = colorScheme.onPrimary
                 ),
-                shape = RoundedCornerShape(14.dp),
+                shape = CircleShape,
                 modifier = Modifier
                     .heightIn(min = 48.dp)
                     .testTag("confirm_save_geofence_btn")
@@ -1353,13 +1363,13 @@ private fun GeofenceEditDialog(
         dismissButton = {
             TextButton(
                 onClick = onDismiss,
-                shape = RoundedCornerShape(14.dp),
+                shape = CircleShape,
                 modifier = Modifier.heightIn(min = 48.dp)
             ) {
                 Text("Cancel", color = colorScheme.onSurfaceVariant)
             }
         },
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(28.dp),
         containerColor = colorScheme.surface
     )
 }

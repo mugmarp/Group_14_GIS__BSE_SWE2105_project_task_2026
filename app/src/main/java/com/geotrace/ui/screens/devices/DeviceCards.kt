@@ -108,7 +108,7 @@ fun MemberCard(
     }
 
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelf) customColors.surfaceContainerLow else colorScheme.surface
         ),
@@ -118,157 +118,172 @@ fun MemberCard(
         ),
         modifier = Modifier.fillMaxWidth().testTag("member_card_${member.id.ifBlank { member.userId }}")
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(parsedAvatarColor),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = member.displayName.take(2).uppercase(),
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(CircleShape)
+                        .background(parsedAvatarColor),
+                    contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = member.displayName,
-                        fontSize = 14.sp,
+                        text = member.displayName.take(2).uppercase(),
+                        color = Color.White,
                         fontWeight = FontWeight.Bold,
-                        color = colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
+                        fontSize = 14.sp
                     )
-                    if (isSelf) {
-                        StatusChipBadge(
-                            label = "THIS DEVICE",
-                            bg = colorScheme.primary.copy(alpha = 0.12f),
-                            textColor = colorScheme.primary
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = member.displayName,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
-                    } else if (matchingOwnDevice != null) {
-                        StatusChipBadge(
-                            label = "MY FLEET",
-                            bg = colorScheme.secondary.copy(alpha = 0.12f),
-                            textColor = colorScheme.secondary
+                        if (isSelf) {
+                            StatusChipBadge(
+                                label = "THIS DEVICE",
+                                bg = colorScheme.primary.copy(alpha = 0.12f),
+                                textColor = colorScheme.primary
+                            )
+                        } else if (matchingOwnDevice != null) {
+                            StatusChipBadge(
+                                label = "MY FLEET",
+                                bg = colorScheme.secondary.copy(alpha = 0.12f),
+                                textColor = colorScheme.secondary
+                            )
+                        } else if (isGroupOwner) {
+                            StatusChipBadge(
+                                label = "OWNER",
+                                bg = customColors.statusNominalBg,
+                                textColor = customColors.statusNominalText
+                            )
+                        }
+                    }
+
+                    if (!isSelf && member.deviceModel.isNotBlank()) {
+                        Text(
+                            text = member.deviceModel,
+                            fontSize = 10.sp,
+                            color = colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
-                    } else if (isGroupOwner) {
-                        StatusChipBadge(
-                            label = "OWNER",
-                            bg = customColors.statusNominalBg,
-                            textColor = customColors.statusNominalText
+                    }
+
+                    Text(
+                        text = motionSummary,
+                        fontSize = 11.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 2.dp)
+                    ) {
+                        val lowBattery = member.batteryPercent <= 20
+                        Icon(
+                            imageVector = resolveBatteryIcon(member.isCharging, member.batteryPercent),
+                            contentDescription = if (member.isCharging) "Charging" else "Battery level",
+                            tint = if (lowBattery) colorScheme.error else successColor,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "${member.batteryPercent}% • ${formatTrackingModeLabel(member.trackingMode)} • ",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontFeatureSettings = "tnum"
+                            ),
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = freshnessText,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontFeatureSettings = "tnum"
+                            ),
+                            color = if (isStale) customColors.warning else successColor
                         )
                     }
                 }
 
-                if (!isSelf && member.deviceModel.isNotBlank()) {
-                    Text(
-                        text = member.deviceModel,
-                        fontSize = 10.sp,
-                        color = colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                if (canRemove) {
+                    IconButton(
+                        onClick = onRemoveClick,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("remove_member_${member.id.ifBlank { member.userId }}")
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Remove ${member.displayName} from group",
+                            tint = colorScheme.error,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
                 }
+            }
 
-                Text(
-                    text = motionSummary,
-                    fontSize = 11.sp,
-                    color = colorScheme.onSurfaceVariant
-                )
-
+            val showLocateAction = !isSelf && hasValidCoords
+            val showRingAction = matchingOwnDevice != null && onRingOwnDeviceClick != null
+            if (showLocateAction || showRingAction) {
+                Spacer(modifier = Modifier.height(10.dp))
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(top = 2.dp)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val lowBattery = member.batteryPercent <= 20
-                    Icon(
-                        imageVector = resolveBatteryIcon(member.isCharging, member.batteryPercent),
-                        contentDescription = if (member.isCharging) "Charging" else "Battery level",
-                        tint = if (lowBattery) colorScheme.error else successColor,
-                        modifier = Modifier.size(13.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "${member.batteryPercent}% • ${formatTrackingModeLabel(member.trackingMode)} • ",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontSize = 10.sp,
-                            fontFamily = JetBrainsMonoFontFamily,
-                            fontFeatureSettings = "tnum"
-                        ),
-                        color = colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = freshnessText,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = JetBrainsMonoFontFamily,
-                            fontFeatureSettings = "tnum"
-                        ),
-                        color = if (isStale) customColors.warning else successColor
-                    )
-                }
-            }
+                    if (showLocateAction) {
+                        OutlinedButton(
+                            onClick = onLocateClick,
+                            shape = CircleShape,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("locate_member_${member.id.ifBlank { member.userId }}")
+                        ) {
+                            Icon(
+                                Icons.Default.MyLocation,
+                                contentDescription = "Locate ${member.displayName} on Map",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Locate", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
 
-            if (matchingOwnDevice != null && onRingOwnDeviceClick != null) {
-                IconButton(
-                    onClick = { onRingOwnDeviceClick(matchingOwnDevice) },
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("ring_member_own_${member.deviceId.ifBlank { member.id }}")
-                ) {
-                    Icon(
-                        Icons.Default.VolumeUp,
-                        contentDescription = "Ring ${member.displayName}",
-                        tint = colorScheme.secondary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
-
-            if (!isSelf && hasValidCoords) {
-                IconButton(
-                    onClick = onLocateClick,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("locate_member_${member.id.ifBlank { member.userId }}")
-                ) {
-                    Icon(
-                        Icons.Default.MyLocation,
-                        contentDescription = "Locate ${member.displayName} on Map",
-                        tint = colorScheme.primary,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
-
-            if (canRemove) {
-                IconButton(
-                    onClick = onRemoveClick,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("remove_member_${member.id.ifBlank { member.userId }}")
-                ) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = "Remove ${member.displayName} from group",
-                        tint = colorScheme.error,
-                        modifier = Modifier.size(19.dp)
-                    )
+                    if (showRingAction) {
+                        FilledTonalButton(
+                            onClick = { onRingOwnDeviceClick!!(matchingOwnDevice!!) },
+                            shape = CircleShape,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("ring_member_own_${member.deviceId.ifBlank { member.id }}")
+                        ) {
+                            Icon(
+                                Icons.Default.VolumeUp,
+                                contentDescription = "Ring ${member.displayName}",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Ring", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
         }
@@ -309,12 +324,12 @@ fun PersonalDeviceCard(
     val isRingPending = device.ringRequestedAt > 0L && (nowMs - device.ringRequestedAt) in -5_000L..60_000L
 
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, fleetAccent.copy(alpha = 0.4f)),
         modifier = Modifier.fillMaxWidth().testTag("personal_device_card_${device.deviceId}")
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
@@ -395,7 +410,7 @@ fun PersonalDeviceCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -404,7 +419,7 @@ fun PersonalDeviceCard(
                 OutlinedButton(
                     onClick = onLocateClick,
                     enabled = hasValidCoords,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = CircleShape,
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
@@ -422,7 +437,7 @@ fun PersonalDeviceCard(
                 if (isRingPending) {
                     Button(
                         onClick = onCancelRingClick,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(containerColor = customColors.warning),
                         modifier = Modifier
                             .weight(1f)
@@ -440,7 +455,7 @@ fun PersonalDeviceCard(
                 } else {
                     FilledTonalButton(
                         onClick = onRingClick,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = CircleShape,
                         modifier = Modifier
                             .weight(1f)
                             .height(48.dp)
@@ -491,7 +506,7 @@ fun P2PPeerCard(
     val isRingCoolingDown = lastRingSentAtMs > 0L && (nowMs - lastRingSentAtMs) in 0L..8_000L
 
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(
             1.dp,
@@ -499,11 +514,11 @@ fun P2PPeerCard(
         ),
         modifier = Modifier.fillMaxWidth().testTag("p2p_peer_card_${peer.endpointId}")
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(42.dp)
                         .clip(CircleShape)
                         .background(if (isStale) customColors.statusWarningBg else successColor.copy(alpha = 0.15f)),
                     contentAlignment = Alignment.Center
@@ -547,7 +562,7 @@ fun P2PPeerCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -556,7 +571,7 @@ fun P2PPeerCard(
                 OutlinedButton(
                     onClick = onLocatePeer,
                     enabled = peer.hasValidCoordinates,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = CircleShape,
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
@@ -574,7 +589,7 @@ fun P2PPeerCard(
                 FilledTonalButton(
                     onClick = onRingPeer,
                     enabled = !isRingCoolingDown,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = CircleShape,
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
@@ -610,7 +625,7 @@ fun GroupRowCard(
     val count = group.memberIds.size
 
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isActive) colorScheme.primaryContainer.copy(alpha = 0.22f) else colorScheme.surface
         ),
@@ -620,6 +635,7 @@ fun GroupRowCard(
         ),
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(24.dp))
             .clickable { onSelect() }
             .testTag("group_card_${group.id}")
     ) {
@@ -674,7 +690,7 @@ fun GroupRowCard(
                 } else {
                     OutlinedButton(
                         onClick = onSelect,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = CircleShape,
                         modifier = Modifier.heightIn(min = 48.dp)
                     ) {
                         Text("Select", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
@@ -719,7 +735,7 @@ fun PendingMemberCard(
     }
 
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = customColors.surfaceContainerLow),
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
         modifier = Modifier

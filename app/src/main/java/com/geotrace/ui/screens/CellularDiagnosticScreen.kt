@@ -162,8 +162,8 @@ fun CellularDiagnosticScreen(
                                 containerColor = colorScheme.primary,
                                 contentColor = colorScheme.onPrimary
                             ),
-                            shape = RoundedCornerShape(14.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                             modifier = Modifier
                                 .height(48.dp)
                                 .testTag("refresh_cells_btn")
@@ -190,8 +190,9 @@ fun CellularDiagnosticScreen(
                                 onClick = onOpenMenu,
                                 modifier = Modifier
                                     .size(48.dp)
-                                    .background(customColors.surfaceContainerLow, RoundedCornerShape(14.dp))
-                                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+                                    .clip(CircleShape)
+                                    .background(customColors.surfaceContainerLow, CircleShape)
+                                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), CircleShape)
                                     .testTag("cellular_menu_btn")
                             ) {
                                 Icon(
@@ -219,7 +220,7 @@ fun CellularDiagnosticScreen(
             } else {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                     border = BorderStroke(1.dp, colorScheme.outlineVariant)
                 ) {
@@ -266,7 +267,7 @@ fun CellularDiagnosticScreen(
                                 containerColor = colorScheme.primary,
                                 contentColor = colorScheme.onPrimary
                             ),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = CircleShape,
                             modifier = Modifier.height(48.dp)
                         ) {
                             Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -306,7 +307,7 @@ fun CellularDiagnosticScreen(
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(20.dp),
                     colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                     border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f))
                 ) {
@@ -352,7 +353,7 @@ private fun CellPermissionRequiredCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("cell_permission_card"),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
@@ -397,7 +398,7 @@ private fun CellPermissionRequiredCard(
                     containerColor = colorScheme.primary,
                     contentColor = colorScheme.onPrimary
                 ),
-                shape = RoundedCornerShape(14.dp),
+                shape = CircleShape,
                 modifier = Modifier
                     .height(48.dp)
                     .testTag("grant_cell_permission_btn")
@@ -434,7 +435,7 @@ private fun OpenCellIdStatusCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("opencellid_status_card"),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
@@ -487,7 +488,7 @@ private fun OpenCellIdStatusCard(
                     Spacer(modifier = Modifier.height(10.dp))
                     Button(
                         onClick = { onLocateTowerOnMap(servingTowerLocation) },
-                        shape = RoundedCornerShape(14.dp),
+                        shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = colorScheme.primary,
                             contentColor = colorScheme.onPrimary
@@ -506,7 +507,7 @@ private fun OpenCellIdStatusCard(
                 Spacer(modifier = Modifier.height(10.dp))
                 OutlinedButton(
                     onClick = onOpenSettings,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = CircleShape,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp)
@@ -529,9 +530,9 @@ private fun ServingCellCard(cell: CellTowerInfo) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(24.dp))
             .testTag("serving_cell_card"),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
@@ -611,8 +612,8 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(customColors.surfaceContainerLow, RoundedCornerShape(14.dp))
-                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                        .background(customColors.surfaceContainerLow, RoundedCornerShape(16.dp))
+                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
                         .padding(horizontal = 10.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -740,7 +741,7 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
     val colorScheme = MaterialTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
@@ -863,7 +864,7 @@ private fun TriangulationComparisonCard() {
     val colorScheme = MaterialTheme.colorScheme
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {

@@ -25,6 +25,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -76,12 +78,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -307,24 +311,27 @@ fun MainAppScreen(
 
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
-        // Compact 48dp Bottom Bar (Map & Devices) — height strictly preserved, curved 20dp top-border radius
+        // Compact 48dp Bottom Bar (Map & Devices) — height strictly preserved, crisp clipped 24dp top-border radius
         bottomBar = {
             if (currentScreen == Screen.MAP || currentScreen == Screen.GROUPS) {
-                val navShape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
-                val navTopBorderColor = colorScheme.outlineVariant.copy(alpha = 0.65f)
+                val navShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+                val navTopBorderColor = colorScheme.outlineVariant.copy(alpha = 0.7f)
                 Surface(
                     shape = navShape,
                     color = colorScheme.surface,
-                    shadowElevation = 6.dp,
+                    shadowElevation = 8.dp,
                     modifier = Modifier
                         .fillMaxWidth()
+                        .clip(navShape)
                         .drawWithContent {
                             drawContent()
-                            val radiusPx = 20.dp.toPx()
+                            val radiusPx = 24.dp.toPx()
                             val strokePx = 1.dp.toPx()
                             val halfStroke = strokePx / 2f
+                            val fadeEndY = radiusPx + 12.dp.toPx()
                             val topBorderPath = Path().apply {
-                                moveTo(halfStroke, radiusPx)
+                                moveTo(halfStroke, fadeEndY)
+                                lineTo(halfStroke, radiusPx)
                                 arcTo(
                                     rect = Rect(
                                         left = halfStroke,
@@ -348,10 +355,19 @@ fun MainAppScreen(
                                     sweepAngleDegrees = 90f,
                                     forceMoveTo = false
                                 )
+                                lineTo(size.width - halfStroke, fadeEndY)
                             }
                             drawPath(
                                 path = topBorderPath,
-                                color = navTopBorderColor,
+                                brush = Brush.verticalGradient(
+                                    colorStops = arrayOf(
+                                        0.0f to navTopBorderColor,
+                                        (radiusPx / fadeEndY) to navTopBorderColor.copy(alpha = 0.35f),
+                                        1.0f to Color.Transparent
+                                    ),
+                                    startY = 0f,
+                                    endY = fadeEndY
+                                ),
                                 style = Stroke(width = strokePx)
                             )
                         }
@@ -380,7 +396,7 @@ fun MainAppScreen(
                                 modifier = Modifier
                                     .weight(1f)
                                     .heightIn(min = 48.dp)
-                                    .clip(RoundedCornerShape(16.dp))
+                                    .clip(CircleShape)
                                     .clickable { currentScreen = screen }
                                     .testTag(if (screen == Screen.MAP) "nav_bottom_map" else "nav_bottom_groups"),
                                 contentAlignment = Alignment.Center
@@ -420,15 +436,23 @@ fun MainAppScreen(
             }
         }
     ) { innerPadding ->
+        val layoutDirection = LocalLayoutDirection.current
+        val mapBottomOverlayPadding = innerPadding.calculateBottomPadding()
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .padding(
+                    start = innerPadding.calculateStartPadding(layoutDirection),
+                    top = innerPadding.calculateTopPadding(),
+                    end = innerPadding.calculateEndPadding(layoutDirection),
+                    bottom = if (currentScreen == Screen.MAP) 0.dp else mapBottomOverlayPadding
+                )
         ) {
             when (currentScreen) {
                 Screen.MAP -> MapScreen(
                     viewModel = viewModel,
                     groupViewModel = groupViewModel,
+                    bottomOverlayPadding = mapBottomOverlayPadding,
                     onOpenMenu = {
                         scope.launch {
                             showMenuSheet = true
@@ -559,7 +583,7 @@ fun MainAppScreen(
                 Surface(
                     color = colorScheme.errorContainer,
                     border = BorderStroke(2.dp, colorScheme.error),
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(24.dp),
                     shadowElevation = 10.dp,
                     modifier = Modifier
                         .align(Alignment.TopCenter)
@@ -604,7 +628,7 @@ fun MainAppScreen(
                                 containerColor = colorScheme.error,
                                 contentColor = colorScheme.onError
                             ),
-                            shape = RoundedCornerShape(14.dp),
+                            shape = CircleShape,
                             modifier = Modifier.height(48.dp).testTag("stop_find_alarm_btn")
                         ) {
                             Text("Stop Alarm", fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -963,9 +987,9 @@ private fun MenuNavigationCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(22.dp))
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(22.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.8f))
     ) {
@@ -981,7 +1005,7 @@ private fun MenuNavigationCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(14.dp),
                     color = customColors.surfaceContainerLow,
                     modifier = Modifier.size(40.dp)
                 ) {

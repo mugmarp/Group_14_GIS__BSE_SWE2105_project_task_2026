@@ -87,6 +87,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -330,6 +331,7 @@ fun MapViewComposable(
     isMapPickMode: Boolean = false,
     onMapCoordinatePicked: ((Double, Double) -> Unit)? = null,
     onMapSingleTap: (() -> Unit)? = null,
+    bottomOverlayPadding: Dp = 0.dp,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -1483,7 +1485,7 @@ fun MapViewComposable(
                     .padding(
                         start = 14.dp,
                         end = 80.dp,
-                        bottom = if (isRecording) 70.dp else 16.dp
+                        bottom = (if (isRecording) 70.dp else 16.dp) + bottomOverlayPadding
                     )
                     .widthIn(max = 310.dp)
                     .onSizeChanged { inspectCardHeightPx = it.height }
@@ -1714,6 +1716,7 @@ fun MapViewComposable(
 
         // Calibrated Live Map Scale Bar (stacks cleanly above recording pill / inspect card)
         val scaleBarBottomPadding = (if (isRecording) 70.dp else 16.dp) +
+            bottomOverlayPadding +
             if (inspectCardTitle != null && inspectCardBadge != null && inspectCardHeightPx > 0) {
                 with(density) { inspectCardHeightPx.toDp() } + 8.dp
             } else {
@@ -1741,7 +1744,7 @@ fun MapViewComposable(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(bottom = 16.dp, end = 16.dp),
+                .padding(bottom = 16.dp + bottomOverlayPadding, end = 16.dp),
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {

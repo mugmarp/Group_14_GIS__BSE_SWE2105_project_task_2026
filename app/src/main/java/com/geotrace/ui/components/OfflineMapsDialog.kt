@@ -171,7 +171,7 @@ fun OfflineMapsDialog(
         ) {
             val adaptiveMaxHeight = (maxHeight * 0.88f).coerceAtMost(680.dp)
             Surface(
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(28.dp),
                 color = colorScheme.surface,
                 border = BorderStroke(1.dp, colorScheme.outlineVariant),
                 shadowElevation = 10.dp,
@@ -235,7 +235,7 @@ fun OfflineMapsDialog(
                             (progress.completedTiles.toFloat() / progress.totalTiles.toFloat()).coerceIn(0f, 1f)
                         } else 0f
                         Surface(
-                            shape = RoundedCornerShape(16.dp),
+                            shape = RoundedCornerShape(20.dp),
                             color = customColors.statusActiveBg,
                             border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.7f)),
                             modifier = Modifier.fillMaxWidth().testTag("offline_download_progress_card")
@@ -290,14 +290,14 @@ fun OfflineMapsDialog(
                                     )
                                     TextButton(
                                         onClick = onDismiss,
-                                        shape = RoundedCornerShape(12.dp),
+                                        shape = CircleShape,
                                         modifier = Modifier.heightIn(min = 48.dp).testTag("hide_offline_download_btn")
                                     ) {
                                         Text("Hide", fontWeight = FontWeight.Bold)
                                     }
                                     TextButton(
                                         onClick = { viewModel.cancelOfflineRegionDownload() },
-                                        shape = RoundedCornerShape(12.dp),
+                                        shape = CircleShape,
                                         modifier = Modifier.heightIn(min = 48.dp).testTag("cancel_offline_download_btn")
                                     ) {
                                         Text("Cancel", color = colorScheme.error, fontWeight = FontWeight.Bold)
@@ -351,7 +351,7 @@ fun OfflineMapsDialog(
                         disabledLabelColor = colorScheme.onSurface.copy(alpha = 0.6f)
                     )
                     Surface(
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(20.dp),
                         color = customColors.surfaceContainerLow,
                         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f)),
                         modifier = Modifier.fillMaxWidth()
@@ -385,7 +385,7 @@ fun OfflineMapsDialog(
                                         enabled = enabled && !progress.isDownloading,
                                         onClick = { areaMode = mode },
                                         label = { Text(mode.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-                                        shape = RoundedCornerShape(14.dp),
+                                        shape = CircleShape,
                                         colors = offlineChipColors,
                                         modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                     )
@@ -407,7 +407,7 @@ fun OfflineMapsDialog(
                                                 enabled = !progress.isDownloading,
                                                 onClick = { selectedType = type },
                                                 label = { Text(type.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-                                                shape = RoundedCornerShape(14.dp),
+                                                shape = CircleShape,
                                                 colors = offlineChipColors,
                                                 modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                             )
@@ -433,7 +433,7 @@ fun OfflineMapsDialog(
                                         enabled = !progress.isDownloading,
                                         onClick = { detailTier = tier },
                                         label = { Text(tier.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-                                        shape = RoundedCornerShape(14.dp),
+                                        shape = CircleShape,
                                         colors = offlineChipColors,
                                         modifier = Modifier.weight(1f).heightIn(min = 48.dp)
                                     )
@@ -447,7 +447,7 @@ fun OfflineMapsDialog(
                                 placeholder = { Text(suggestedName) },
                                 singleLine = true,
                                 enabled = !progress.isDownloading,
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(16.dp),
                                 modifier = Modifier.fillMaxWidth().testTag("offline_region_name_input")
                             )
                         }
@@ -464,7 +464,7 @@ fun OfflineMapsDialog(
 
                     if (savedRegions.isEmpty()) {
                         Surface(
-                            shape = RoundedCornerShape(16.dp),
+                            shape = RoundedCornerShape(20.dp),
                             color = customColors.surfaceContainerLow,
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -503,7 +503,7 @@ fun OfflineMapsDialog(
                 // Sticky Primary Action & Estimate Bar (always visible above cache footer)
                 Spacer(modifier = Modifier.height(10.dp))
                 Surface(
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     color = if (exceedsCap) colorScheme.errorContainer.copy(alpha = 0.6f) else customColors.surfaceContainerLow,
                     border = BorderStroke(
                         1.dp,
@@ -541,7 +541,7 @@ fun OfflineMapsDialog(
                         regionName = ""
                     },
                     enabled = targetBox != null && !exceedsCap && !progress.isDownloading && estTiles > 0,
-                    shape = RoundedCornerShape(16.dp),
+                    shape = CircleShape,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp)
@@ -596,6 +596,7 @@ fun OfflineMapsDialog(
     if (showClearCacheConfirm) {
         AlertDialog(
             onDismissRequest = { showClearCacheConfirm = false },
+            shape = RoundedCornerShape(28.dp),
             title = { Text("Clear Offline Tile Cache?", fontWeight = FontWeight.Bold) },
             text = {
                 Text(
@@ -609,13 +610,17 @@ fun OfflineMapsDialog(
                         viewModel.clearAllTileCache()
                         showClearCacheConfirm = false
                     },
+                    shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(containerColor = colorScheme.error)
                 ) {
                     Text("Clear All")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showClearCacheConfirm = false }) {
+                TextButton(
+                    onClick = { showClearCacheConfirm = false },
+                    shape = CircleShape
+                ) {
                     Text("Cancel")
                 }
             }
@@ -635,7 +640,7 @@ private fun OfflineRegionCard(
     }
 
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
         color = colorScheme.surface,
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f)),
         modifier = Modifier.fillMaxWidth().testTag("offline_region_${region.id}")

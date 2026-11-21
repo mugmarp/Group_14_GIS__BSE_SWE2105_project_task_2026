@@ -111,10 +111,10 @@ internal fun GeofenceSubgroupCard(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 68.dp)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(24.dp))
             .clickable(onClick = onClick)
             .testTag(testTag),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
@@ -127,7 +127,7 @@ internal fun GeofenceSubgroupCard(
             Box(
                 modifier = Modifier
                     .size(40.dp)
-                    .background(badgeColor.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
+                    .background(badgeColor.copy(alpha = 0.12f), RoundedCornerShape(14.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -226,8 +226,8 @@ internal fun GeofenceZonesSubScreen(
                                 containerColor = colorScheme.primary,
                                 contentColor = colorScheme.onPrimary
                             ),
-                            shape = RoundedCornerShape(14.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                             modifier = Modifier
                                 .heightIn(min = 48.dp)
                                 .testTag("add_geofence_btn")
@@ -244,7 +244,7 @@ internal fun GeofenceZonesSubScreen(
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(18.dp),
+                        shape = RoundedCornerShape(24.dp),
                         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                         border = BorderStroke(1.dp, colorScheme.outlineVariant)
                     ) {
@@ -276,7 +276,7 @@ internal fun GeofenceZonesSubScreen(
                             Spacer(modifier = Modifier.height(10.dp))
                             OutlinedButton(
                                 onClick = onBrowsePresets,
-                                shape = RoundedCornerShape(14.dp),
+                                shape = CircleShape,
                                 modifier = Modifier.heightIn(min = 48.dp)
                             ) {
                                 Text("Browse MUST Presets", fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -353,7 +353,7 @@ internal fun GeofenceAlertsPrecisionSubScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("geofence_notification_card"),
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                 border = BorderStroke(
                     1.dp,
@@ -426,7 +426,12 @@ internal fun GeofenceAlertsPrecisionSubScreen(
                         Switch(
                             checked = settings.geofenceNotificationEnabled,
                             onCheckedChange = onToggleNotifications,
-                            colors = SwitchDefaults.colors(checkedThumbColor = colorScheme.primary),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = colorScheme.onPrimary,
+                                checkedTrackColor = colorScheme.primary,
+                                uncheckedThumbColor = colorScheme.outline,
+                                uncheckedTrackColor = colorScheme.surfaceVariant
+                            ),
                             modifier = Modifier.testTag("geofence_notification_toggle")
                         )
                     }
@@ -436,7 +441,7 @@ internal fun GeofenceAlertsPrecisionSubScreen(
 
                         if (geofenceApiStatus.errorMessage != null) {
                             Surface(
-                                shape = RoundedCornerShape(14.dp),
+                                shape = RoundedCornerShape(16.dp),
                                 color = customColors.warning.copy(alpha = 0.12f),
                                 border = BorderStroke(1.dp, customColors.warning.copy(alpha = 0.4f)),
                                 modifier = Modifier.fillMaxWidth()
@@ -452,7 +457,7 @@ internal fun GeofenceAlertsPrecisionSubScreen(
                                         Spacer(modifier = Modifier.height(6.dp))
                                         OutlinedButton(
                                             onClick = onRequestBackgroundLocation,
-                                            shape = RoundedCornerShape(14.dp),
+                                            shape = CircleShape,
                                             modifier = Modifier.heightIn(min = 48.dp)
                                         ) {
                                             Text("Allow Background Location", fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -507,7 +512,7 @@ internal fun GeofenceAlertsPrecisionSubScreen(
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                 border = BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.35f))
             ) {
@@ -599,7 +604,7 @@ internal fun GeofenceAlertsPrecisionSubScreen(
                                         softWrap = false
                                     )
                                 },
-                                shape = RoundedCornerShape(14.dp),
+                                shape = CircleShape,
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = colorScheme.primary,
                                     selectedLabelColor = colorScheme.onPrimary,
@@ -624,7 +629,7 @@ internal fun GeofenceAlertsPrecisionSubScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(customColors.surfaceContainerLow, RoundedCornerShape(14.dp))
+                            .background(customColors.surfaceContainerLow, RoundedCornerShape(16.dp))
                             .padding(horizontal = 12.dp, vertical = 10.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
@@ -648,7 +653,12 @@ internal fun GeofenceAlertsPrecisionSubScreen(
                         Switch(
                             checked = settings.geofenceAccuracyGateEnabled,
                             onCheckedChange = { viewModel.toggleGeofenceAccuracyGate(it) },
-                            colors = SwitchDefaults.colors(checkedThumbColor = colorScheme.primary),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = colorScheme.onPrimary,
+                                checkedTrackColor = colorScheme.primary,
+                                uncheckedThumbColor = colorScheme.outline,
+                                uncheckedTrackColor = colorScheme.surfaceVariant
+                            ),
                             modifier = Modifier.testTag("geofence_accuracy_gate_switch")
                         )
                     }
@@ -716,8 +726,8 @@ internal fun GeofencePresetsSubScreen(
                     trailingContent = {
                         OutlinedButton(
                             onClick = onResetSamples,
-                            shape = RoundedCornerShape(14.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                             modifier = Modifier
                                 .heightIn(min = 48.dp)
                                 .testTag("reset_sample_zones_btn")
@@ -746,9 +756,9 @@ internal fun GeofencePresetsSubScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
+                    .clip(RoundedCornerShape(24.dp))
                     .clickable { onSelectPreset(preset) },
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                 border = BorderStroke(
                     1.dp,
@@ -768,7 +778,7 @@ internal fun GeofencePresetsSubScreen(
                     Box(
                         modifier = Modifier
                             .size(40.dp)
-                            .background(colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(12.dp)),
+                            .background(colorScheme.primary.copy(alpha = 0.1f), RoundedCornerShape(14.dp)),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(preset.category.iconEmoji, fontSize = 18.sp)
@@ -877,7 +887,7 @@ internal fun GeofenceTransitionsSubScreen(
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                     border = BorderStroke(1.dp, colorScheme.outlineVariant)
                 ) {
@@ -912,7 +922,7 @@ internal fun GeofenceTransitionsSubScreen(
         } else {
             items(recentAlerts, key = { it.id }) { alert ->
                 Surface(
-                    shape = RoundedCornerShape(16.dp),
+                    shape = RoundedCornerShape(20.dp),
                     color = colorScheme.surface,
                     border = BorderStroke(1.dp, colorScheme.outline.copy(alpha = 0.35f)),
                     modifier = Modifier.fillMaxWidth()

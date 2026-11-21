@@ -99,6 +99,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.geotrace.model.CoordinateFormat
@@ -127,6 +128,7 @@ import java.util.Locale
 fun MapScreen(
     viewModel: TrackerViewModel,
     groupViewModel: GroupViewModel? = null,
+    bottomOverlayPadding: Dp = 0.dp,
     onOpenMenu: () -> Unit,
     onNavigateToGroups: (() -> Unit)? = null,
     onReturnToGeofence: (() -> Unit)? = null,
@@ -430,7 +432,8 @@ fun MapScreen(
                 if (isHeaderExpanded) {
                     isHeaderExpanded = false
                 }
-            }
+            },
+            bottomOverlayPadding = bottomOverlayPadding
         )
 
         // Subtle Top Status Edge Scrim for clean legibility over bright map tiles
@@ -458,15 +461,15 @@ fun MapScreen(
                 .padding(top = 8.dp)
         ) {
             Surface(
-                shape = RoundedCornerShape(22.dp),
+                shape = RoundedCornerShape(24.dp),
                 color = colorScheme.surface,
                 shadowElevation = 3.dp,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 14.dp)
-                    .clip(RoundedCornerShape(22.dp))
+                    .clip(RoundedCornerShape(24.dp))
                     .animateContentSize()
-                    .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(22.dp))
+                    .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(24.dp))
                     .testTag("telemetry_hud_card")
             ) {
                 Column(
@@ -589,9 +592,9 @@ fun MapScreen(
                                 onClick = onOpenMenu,
                                 modifier = Modifier
                                     .size(48.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(customColors.surfaceContainerLow, RoundedCornerShape(14.dp))
-                                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+                                    .clip(CircleShape)
+                                    .background(customColors.surfaceContainerLow, CircleShape)
+                                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), CircleShape)
                                     .testTag("menu_btn")
                             ) {
                                 Icon(
@@ -616,7 +619,7 @@ fun MapScreen(
                                 // Interactive Vector Coordinates Bar (Tap to copy DD/DMS, Long-Press or Share icon to share)
                                 val hasFix = currentLocation != null
                                 Surface(
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = RoundedCornerShape(16.dp),
                                     color = if (vectorCoordsCopied) colorScheme.primary.copy(alpha = 0.12f) else customColors.surfaceContainerLow,
                                     border = BorderStroke(
                                         1.dp,
@@ -624,7 +627,7 @@ fun MapScreen(
                                     ),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(14.dp))
+                                        .clip(RoundedCornerShape(16.dp))
                                         .then(
                                             if (hasFix) {
                                                 Modifier.combinedClickable(
@@ -750,8 +753,8 @@ fun MapScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .background(customColors.surfaceContainerLow, RoundedCornerShape(14.dp))
-                                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                                        .background(customColors.surfaceContainerLow, RoundedCornerShape(16.dp))
+                                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
                                         .padding(horizontal = 8.dp, vertical = 8.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
@@ -817,7 +820,7 @@ fun MapScreen(
                                                 showWaypointDialog = true
                                             },
                                             enabled = currentLocation != null,
-                                            shape = RoundedCornerShape(14.dp),
+                                            shape = CircleShape,
                                             modifier = Modifier
                                                 .weight(1f)
                                                 .heightIn(min = 48.dp)
@@ -833,7 +836,7 @@ fun MapScreen(
                                             onClick = {
                                                 if (isPaused) viewModel.resumeTracking() else viewModel.pauseTracking()
                                             },
-                                            shape = RoundedCornerShape(14.dp),
+                                            shape = CircleShape,
                                             colors = ButtonDefaults.filledTonalButtonColors(
                                                 containerColor = if (isPaused) colorScheme.tertiaryContainer else colorScheme.surfaceVariant,
                                                 contentColor = if (isPaused) colorScheme.onTertiaryContainer else colorScheme.onSurfaceVariant
@@ -856,28 +859,6 @@ fun MapScreen(
                                             )
                                         }
                                     }
-                                } else if (!isPickingGeofenceCenter) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Button(
-                                        onClick = {
-                                            if (!com.geotrace.service.LocationForegroundService.hasLocationPermission(context)) {
-                                                Toast.makeText(context, "Grant Location permission to record a field trail.", Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-                                                sessionNameInput = "Field Trail $timeStr"
-                                                showStartDialog = true
-                                            }
-                                        },
-                                        shape = RoundedCornerShape(16.dp),
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(min = 48.dp)
-                                            .testTag("start_track_hud_btn")
-                                    ) {
-                                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Record Field Trail", fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                    }
                                 }
                             }
                         }
@@ -896,15 +877,15 @@ fun MapScreen(
             ) {
                 Spacer(modifier = Modifier.width(6.dp))
 
-                // Primary Record Trail Quick Pill (shown ONLY when HUD is collapsed so it never duplicates HUD CTA)
-                if (!isHeaderExpanded && activeSession == null && !isPickingGeofenceCenter) {
+                // Compact Persistent Record Trail Pill (covers minimal horizontal width & stays anchored across HUD states)
+                if (activeSession == null && !isPickingGeofenceCenter) {
                     Surface(
-                        shape = RoundedCornerShape(20.dp),
+                        shape = CircleShape,
                         color = colorScheme.primary,
                         shadowElevation = 3.dp,
                         modifier = Modifier
-                            .heightIn(min = 40.dp)
-                            .clip(RoundedCornerShape(20.dp))
+                            .heightIn(min = 42.dp)
+                            .clip(CircleShape)
                             .clickable {
                                 if (!com.geotrace.service.LocationForegroundService.hasLocationPermission(context)) {
                                     Toast.makeText(context, "Grant Location permission to record a field trail.", Toast.LENGTH_SHORT).show()
@@ -918,7 +899,7 @@ fun MapScreen(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp)
                         ) {
                             Icon(
                                 Icons.Default.PlayArrow,
@@ -929,7 +910,7 @@ fun MapScreen(
                             Spacer(modifier = Modifier.width(5.dp))
                             Text(
                                 text = "Record Trail",
-                                fontSize = 11.sp,
+                                fontSize = 11.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = colorScheme.onPrimary
                             )
@@ -1279,7 +1260,7 @@ fun MapScreen(
             Surface(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(start = 14.dp, end = 78.dp, bottom = 14.dp)
+                    .padding(start = 14.dp, end = 78.dp, bottom = 14.dp + bottomOverlayPadding)
                     .testTag("floating_recording_pill"),
                 shape = RoundedCornerShape(24.dp),
                 color = colorScheme.surface,
@@ -1332,7 +1313,7 @@ fun MapScreen(
                             containerColor = colorScheme.error,
                             contentColor = colorScheme.onError
                         ),
-                        shape = RoundedCornerShape(18.dp),
+                        shape = CircleShape,
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 0.dp)
                     ) {
                         Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(15.dp))
@@ -1377,7 +1358,7 @@ fun MapScreen(
                         onValueChange = { waypointNameInput = it },
                         label = { Text("Waypoint Name", fontSize = 12.sp) },
                         singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("waypoint_name_input")
@@ -1387,7 +1368,7 @@ fun MapScreen(
                         onValueChange = { waypointNoteInput = it },
                         label = { Text("Field Note (Optional)", fontSize = 12.sp) },
                         singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("waypoint_note_input")
@@ -1415,7 +1396,7 @@ fun MapScreen(
                         showWaypointDialog = false
                     },
                     enabled = loc != null,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = CircleShape,
                     modifier = Modifier.testTag("confirm_drop_waypoint_btn")
                 ) {
                     Text("Save Waypoint", fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -1424,12 +1405,12 @@ fun MapScreen(
             dismissButton = {
                 TextButton(
                     onClick = { showWaypointDialog = false },
-                    shape = RoundedCornerShape(14.dp)
+                    shape = CircleShape
                 ) {
                     Text("Cancel", fontSize = 12.sp)
                 }
             },
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(28.dp),
             containerColor = colorScheme.surface
         )
     }
@@ -1504,12 +1485,12 @@ fun MapScreen(
             confirmButton = {
                 TextButton(
                     onClick = { showProfileDialog = false },
-                    shape = RoundedCornerShape(14.dp)
+                    shape = CircleShape
                 ) {
                     Text("Close", fontWeight = FontWeight.Bold, color = colorScheme.primary)
                 }
             },
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(28.dp),
             containerColor = colorScheme.surface
         )
     }
@@ -1539,7 +1520,7 @@ fun MapScreen(
                         onValueChange = { sessionNameInput = it },
                         label = { Text("Session Identifier", fontSize = 12.sp) },
                         singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("session_name_input")
@@ -1560,7 +1541,7 @@ fun MapScreen(
                         containerColor = colorScheme.primary,
                         contentColor = colorScheme.onPrimary
                     ),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = CircleShape,
                     modifier = Modifier.testTag("confirm_start_btn")
                 ) {
                     Text("Start Recording", fontWeight = FontWeight.Bold, fontSize = 12.sp)
@@ -1569,12 +1550,12 @@ fun MapScreen(
             dismissButton = {
                 TextButton(
                     onClick = { showStartDialog = false },
-                    shape = RoundedCornerShape(14.dp)
+                    shape = CircleShape
                 ) {
                     Text("Cancel", color = colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 }
             },
-            shape = RoundedCornerShape(24.dp),
+            shape = RoundedCornerShape(28.dp),
             containerColor = colorScheme.surface
         )
     }
@@ -1662,6 +1643,7 @@ fun MapScreen(
                             showDevicesSheet = false
                             onNavigateToGroups?.invoke()
                         },
+                        shape = CircleShape,
                         modifier = Modifier
                             .heightIn(min = 48.dp)
                             .testTag("manage_groups_from_sheet_btn")
@@ -1683,11 +1665,12 @@ fun MapScreen(
                     val isOffline = updatedMs == null || (nowMs - updatedMs) > 120_000L
                     val memColor = try { Color(android.graphics.Color.parseColor(member.avatarColor)) } catch (e: Exception) { colorScheme.primary }
                     Surface(
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(20.dp),
                         color = customColors.surfaceContainerLow,
                         border = BorderStroke(1.dp, if (isOffline) customColors.warning.copy(alpha = 0.5f) else colorScheme.outlineVariant.copy(alpha = 0.6f)),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
                             .clickable {
                                 showDevicesSheet = false
                                 if (member.latitude != 0.0 || member.longitude != 0.0) {
@@ -1769,11 +1752,12 @@ fun MapScreen(
                     val devUpdatedMs = device.lastUpdated?.toDate()?.time
                     val (devFreshness, devStale) = com.geotrace.ui.screens.devices.formatFreshness(devUpdatedMs, nowMs, 90_000L)
                     Surface(
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(20.dp),
                         color = customColors.surfaceContainerLow,
                         border = BorderStroke(1.dp, if (devStale) customColors.warning.copy(alpha = 0.5f) else customColors.fleetAccent.copy(alpha = 0.45f)),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
                             .clickable {
                                 showDevicesSheet = false
                                 if (hasCoords) {
@@ -1855,11 +1839,12 @@ fun MapScreen(
                         "Nearby"
                     }
                     Surface(
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(20.dp),
                         color = customColors.surfaceContainerLow,
                         border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.55f)),
                         modifier = Modifier
                             .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
                             .clickable {
                                 showDevicesSheet = false
                                 if (hasPeerCoords) {
@@ -1961,9 +1946,9 @@ private fun ProfileOptionCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(20.dp))
             .clickable { onClick() },
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) color.copy(alpha = 0.08f) else colorScheme.surface
         ),

@@ -197,8 +197,9 @@ fun ResearchAnalysisScreen(
                             },
                             modifier = Modifier
                                 .size(48.dp)
-                                .background(customColors.surfaceContainerLow, RoundedCornerShape(14.dp))
-                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+                                .clip(CircleShape)
+                                .background(customColors.surfaceContainerLow, CircleShape)
+                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), CircleShape)
                                 .testTag("research_share_btn")
                         ) {
                             Icon(
@@ -217,9 +218,9 @@ fun ResearchAnalysisScreen(
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(18.dp))
+                        .clip(RoundedCornerShape(24.dp))
                         .testTag("live_benchmark_card"),
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(24.dp),
                     colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                     border = BorderStroke(1.dp, colorScheme.outlineVariant)
                 ) {
@@ -276,8 +277,8 @@ fun ResearchAnalysisScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(customColors.surfaceContainerLow, RoundedCornerShape(14.dp))
-                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                                .background(customColors.surfaceContainerLow, RoundedCornerShape(16.dp))
+                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
                                 .padding(10.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
@@ -325,8 +326,8 @@ fun ResearchAnalysisScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(customColors.surfaceContainerLow, RoundedCornerShape(14.dp))
-                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                                .background(customColors.surfaceContainerLow, RoundedCornerShape(16.dp))
+                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
                                 .padding(10.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
@@ -393,7 +394,7 @@ fun ResearchAnalysisScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("session_mode_benchmarks_card"),
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                 border = BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
@@ -481,9 +482,9 @@ fun ResearchAnalysisScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
+                    .clip(RoundedCornerShape(24.dp))
                     .testTag("tech_comparator_card"),
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                 border = BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
@@ -527,7 +528,7 @@ fun ResearchAnalysisScreen(
                                     selected = selected,
                                     onClick = { selectedTech = tech },
                                     label = { Text(tech.shortLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = CircleShape,
                                     modifier = Modifier.heightIn(min = 48.dp),
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = colorScheme.primary,
@@ -548,7 +549,7 @@ fun ResearchAnalysisScreen(
                         Spacer(modifier = Modifier.height(12.dp))
 
                         Surface(
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(16.dp),
                             color = customColors.surfaceContainerLow,
                             border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f)),
                             modifier = Modifier.fillMaxWidth()
@@ -588,7 +589,7 @@ fun ResearchAnalysisScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("scenario_recommender_card"),
-                shape = RoundedCornerShape(18.dp),
+                shape = RoundedCornerShape(24.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
                 border = BorderStroke(1.dp, colorScheme.outlineVariant)
             ) {
@@ -623,7 +624,7 @@ fun ResearchAnalysisScreen(
                                 selected = selected,
                                 onClick = { selectedScenario = scenario },
                                 label = { Text(scenario.chipLabel, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
-                                shape = RoundedCornerShape(14.dp),
+                                shape = CircleShape,
                                 modifier = Modifier.heightIn(min = 48.dp),
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = colorScheme.secondary,
@@ -644,7 +645,7 @@ fun ResearchAnalysisScreen(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Surface(
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(16.dp),
                         color = customColors.surfaceContainerLow,
                         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f)),
                         modifier = Modifier.fillMaxWidth()
@@ -687,7 +688,7 @@ fun ResearchAnalysisScreen(
                                         ).show()
                                     },
                                     enabled = !isAlreadyActive,
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = CircleShape,
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -721,7 +722,7 @@ fun ResearchAnalysisScreen(
                                         ).show()
                                     },
                                     enabled = !hysteresisMatches,
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = CircleShape,
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -825,8 +826,8 @@ private fun CollapsibleResearchCard(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp)),
-        shape = RoundedCornerShape(18.dp),
+            .clip(RoundedCornerShape(24.dp)),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant)
     ) {
@@ -842,7 +843,7 @@ private fun CollapsibleResearchCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .clickable(onClick = onToggle)
                         .padding(horizontal = 4.dp, vertical = 2.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,

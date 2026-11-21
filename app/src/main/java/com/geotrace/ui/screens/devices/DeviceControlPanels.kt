@@ -83,13 +83,13 @@ fun GhostModeBanner(
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(24.dp),
         color = customColors.statusWarningBg,
         border = BorderStroke(1.dp, customColors.statusWarningBorder),
         modifier = Modifier.fillMaxWidth().testTag("ghost_mode_banner")
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -120,7 +120,8 @@ fun GhostModeBanner(
             }
             TextButton(
                 onClick = onResumeClick,
-                modifier = Modifier.testTag("resume_sharing_btn")
+                shape = CircleShape,
+                modifier = Modifier.heightIn(min = 48.dp).testTag("resume_sharing_btn")
             ) {
                 Text("Resume", fontWeight = FontWeight.Bold, color = customColors.statusWarningText)
             }
@@ -161,7 +162,7 @@ fun ThisDeviceCompactCard(
     } else if (currentUser != null) {
         "Cloud ready"
     } else {
-        "Offline mode"
+        "Local device • P2P ready"
     }
 
     val badgeLabel = when {
@@ -184,17 +185,17 @@ fun ThisDeviceCompactCard(
     }
 
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth().testTag("this_device_controls_card")
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .clickable { expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -210,7 +211,8 @@ fun ThisDeviceCompactCard(
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurface,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                         StatusChipBadge(
                             label = badgeLabel,
@@ -240,28 +242,6 @@ fun ThisDeviceCompactCard(
                         )
                     }
 
-                    if (currentUser != null) {
-                        IconButton(
-                            onClick = onSyncNow,
-                            enabled = !isSyncing,
-                            modifier = Modifier.size(48.dp).testTag("sync_now_btn")
-                        ) {
-                            if (isSyncing) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(18.dp),
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(
-                                    Icons.Default.Sync,
-                                    contentDescription = "Sync Live Telemetry Now",
-                                    tint = colorScheme.primary,
-                                    modifier = Modifier.size(19.dp)
-                                )
-                            }
-                        }
-                    }
-
                     IconButton(
                         onClick = { expanded = !expanded },
                         modifier = Modifier.size(48.dp).testTag("toggle_device_controls_btn")
@@ -280,7 +260,7 @@ fun ThisDeviceCompactCard(
                 enter = expandVertically(),
                 exit = shrinkVertically()
             ) {
-                Column(modifier = Modifier.padding(top = 8.dp)) {
+                Column(modifier = Modifier.padding(top = 10.dp)) {
                     HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
                     Spacer(modifier = Modifier.height(10.dp))
 
@@ -299,7 +279,7 @@ fun ThisDeviceCompactCard(
                                 tint = if (isGhostMode) customColors.warning else colorScheme.primary,
                                 modifier = Modifier.size(18.dp)
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
                                     text = "Ghost Mode (Hide from Groups & P2P)",
@@ -314,15 +294,22 @@ fun ThisDeviceCompactCard(
                                 )
                             }
                         }
+                        Spacer(modifier = Modifier.width(12.dp))
                         Switch(
                             checked = isGhostMode,
                             onCheckedChange = { onToggleGhostMode() },
-                            colors = SwitchDefaults.colors(checkedThumbColor = customColors.warning),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = colorScheme.onPrimary,
+                                checkedTrackColor = customColors.warning,
+                                uncheckedThumbColor = colorScheme.outline,
+                                uncheckedTrackColor = colorScheme.surfaceVariant,
+                                uncheckedBorderColor = colorScheme.outlineVariant
+                            ),
                             modifier = Modifier.testTag("ghost_mode_switch")
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -334,12 +321,16 @@ fun ThisDeviceCompactCard(
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(
-                                Icons.Default.NotificationsActive,
+                                imageVector = if (currentUser == null) Icons.Default.Lock else Icons.Default.NotificationsActive,
                                 contentDescription = null,
-                                tint = if (isBackgroundProtectionEnabled) colorScheme.tertiary else colorScheme.onSurfaceVariant,
+                                tint = when {
+                                    currentUser == null -> colorScheme.onSurfaceVariant
+                                    isBackgroundProtectionEnabled -> colorScheme.tertiary
+                                    else -> colorScheme.onSurfaceVariant
+                                },
                                 modifier = Modifier.size(18.dp)
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
                             Column {
                                 Text(
                                     text = "24/7 Background Protection",
@@ -349,7 +340,7 @@ fun ThisDeviceCompactCard(
                                 )
                                 Text(
                                     text = when {
-                                        currentUser == null -> "Requires Google Sign-In for cloud sync & Remote Ring"
+                                        currentUser == null -> "Sign in with Google to enable cloud sync & Remote Ring"
                                         !isBackgroundProtectionEnabled -> "Only syncs & rings while app is open"
                                         isProtectionPaused -> "Paused • Background location sync stopped until resumed"
                                         !isProtectionServiceRunning -> "Service standby • Tap Resume or check Location permission"
@@ -362,43 +353,84 @@ fun ThisDeviceCompactCard(
                                 )
                             }
                         }
+                        Spacer(modifier = Modifier.width(12.dp))
                         Switch(
                             checked = isBackgroundProtectionEnabled && currentUser != null,
                             onCheckedChange = onToggleBackgroundProtection,
-                            colors = SwitchDefaults.colors(checkedThumbColor = colorScheme.tertiary),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = colorScheme.onTertiary,
+                                checkedTrackColor = colorScheme.tertiary,
+                                uncheckedThumbColor = colorScheme.outline,
+                                uncheckedTrackColor = colorScheme.surfaceVariant,
+                                uncheckedBorderColor = colorScheme.outlineVariant
+                            ),
                             modifier = Modifier.testTag("background_protection_switch")
                         )
                     }
 
-                    if (isBackgroundProtectionEnabled && currentUser != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
+                    if (currentUser != null) {
+                        Spacer(modifier = Modifier.height(10.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            if (isProtectionPaused || !isProtectionServiceRunning) {
-                                FilledTonalButton(
-                                    onClick = onResumeBackgroundProtection,
-                                    shape = RoundedCornerShape(14.dp),
-                                    modifier = Modifier.weight(1f).height(48.dp).testTag("resume_protection_btn")
-                                ) {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        if (isProtectionPaused) "Resume 24/7" else "Start 24/7 Service",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.SemiBold
+                            OutlinedButton(
+                                onClick = onSyncNow,
+                                enabled = !isSyncing,
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("sync_now_btn")
+                            ) {
+                                if (isSyncing) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
                                     )
+                                } else {
+                                    Icon(Icons.Default.Sync, contentDescription = null, modifier = Modifier.size(16.dp))
                                 }
-                            } else {
-                                OutlinedButton(
-                                    onClick = onPauseBackgroundProtection,
-                                    shape = RoundedCornerShape(14.dp),
-                                    modifier = Modifier.weight(1f).height(48.dp).testTag("pause_protection_btn")
-                                ) {
-                                    Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Pause 24/7", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    if (isSyncing) "Syncing..." else "Sync Now",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1
+                                )
+                            }
+
+                            if (isBackgroundProtectionEnabled) {
+                                if (isProtectionPaused || !isProtectionServiceRunning) {
+                                    FilledTonalButton(
+                                        onClick = onResumeBackgroundProtection,
+                                        shape = CircleShape,
+                                        modifier = Modifier.weight(1f).height(48.dp).testTag("resume_protection_btn")
+                                    ) {
+                                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            if (isProtectionPaused) "Resume 24/7" else "Start 24/7",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1
+                                        )
+                                    }
+                                } else {
+                                    OutlinedButton(
+                                        onClick = onPauseBackgroundProtection,
+                                        shape = CircleShape,
+                                        modifier = Modifier.weight(1f).height(48.dp).testTag("pause_protection_btn")
+                                    ) {
+                                        Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            "Pause 24/7",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -408,7 +440,7 @@ fun ThisDeviceCompactCard(
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = onOpenNotificationSettings,
-                            shape = RoundedCornerShape(14.dp),
+                            shape = CircleShape,
                             modifier = Modifier.fillMaxWidth().height(48.dp).testTag("fix_notif_permission_btn")
                         ) {
                             Icon(Icons.Default.NotificationsActive, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -421,7 +453,7 @@ fun ThisDeviceCompactCard(
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = onOpenBgLocationSettings,
-                            shape = RoundedCornerShape(14.dp),
+                            shape = CircleShape,
                             modifier = Modifier.fillMaxWidth().height(48.dp).testTag("fix_bg_permission_btn")
                         ) {
                             Icon(Icons.Default.Settings, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -447,13 +479,13 @@ fun DevicesSubTabBar(
     val customColors = LocalCustomColors.current
 
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = CircleShape,
         color = customColors.surfaceContainerLow,
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
         modifier = Modifier.fillMaxWidth().testTag("devices_subtab_bar")
     ) {
         Row(
-            modifier = Modifier.padding(4.dp),
+            modifier = Modifier.padding(5.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             DevicesSubTab.entries.forEach { tab ->
@@ -464,12 +496,12 @@ fun DevicesSubTabBar(
                 }
                 val isSelected = selectedTab == tab
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isSelected) colorScheme.primary else colorScheme.surface.copy(alpha = 0.0f),
+                    shape = CircleShape,
+                    color = if (isSelected) colorScheme.primary else Color.Transparent,
                     modifier = Modifier
                         .weight(1f)
                         .heightIn(min = 48.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(CircleShape)
                         .clickable { onSelectTab(tab) }
                         .testTag(tab.testTag)
                 ) {
@@ -477,11 +509,11 @@ fun DevicesSubTabBar(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 4.dp, vertical = 12.dp)
+                            .padding(horizontal = 6.dp, vertical = 12.dp)
                     ) {
                         Text(
                             text = if (count > 0) "${tab.label} ($count)" else tab.label,
-                            fontSize = 12.sp,
+                            fontSize = 11.5.sp,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
                             color = if (isSelected) colorScheme.onPrimary else colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center,
@@ -511,7 +543,7 @@ fun ActiveGroupHeroCard(
     val successColor = colorScheme.tertiary
 
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth().testTag("active_group_card")
@@ -551,12 +583,18 @@ fun ActiveGroupHeroCard(
                 }
 
                 if (activeGroup != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        OutlinedButton(
                             onClick = onLeaveClick,
-                            modifier = Modifier.testTag("leave_group_btn")
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, colorScheme.outlineVariant),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 0.dp),
+                            modifier = Modifier.heightIn(min = 48.dp).testTag("leave_group_btn")
                         ) {
-                            Text("Leave", color = colorScheme.error, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("Leave", color = colorScheme.onSurfaceVariant, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                         }
                         if (activeGroup.createdBy == currentUserUid) {
                             IconButton(
@@ -587,7 +625,7 @@ fun ActiveGroupHeroCard(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Surface(
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     color = customColors.surfaceContainerLow,
                     border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
                     modifier = Modifier.fillMaxWidth()
@@ -703,7 +741,7 @@ fun P2PRadarControlCard(
     }
 
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(
             1.dp,
@@ -723,7 +761,7 @@ fun P2PRadarControlCard(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(42.dp)
                             .clip(CircleShape)
                             .background(
                                 if (isP2PEnabled) successColor.copy(alpha = 0.14f)
@@ -754,10 +792,18 @@ fun P2PRadarControlCard(
                     }
                 }
 
+                Spacer(modifier = Modifier.width(12.dp))
+
                 Switch(
                     checked = isP2PEnabled,
                     onCheckedChange = { onToggleP2P() },
-                    colors = SwitchDefaults.colors(checkedThumbColor = successColor),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = colorScheme.onTertiary,
+                        checkedTrackColor = successColor,
+                        uncheckedThumbColor = colorScheme.outline,
+                        uncheckedTrackColor = colorScheme.surfaceVariant,
+                        uncheckedBorderColor = colorScheme.outlineVariant
+                    ),
                     modifier = Modifier.testTag("p2p_mesh_switch")
                 )
             }
@@ -765,14 +811,14 @@ fun P2PRadarControlCard(
             if (!isBluetoothEnabled || !isLocationEnabled || hasMissingPermissions) {
                 Spacer(modifier = Modifier.height(10.dp))
                 Surface(
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     color = customColors.statusWarningBg,
                     border = BorderStroke(1.dp, customColors.statusWarningBorder),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
-                        modifier = Modifier.padding(10.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         val blockers = buildList {
                             if (!isBluetoothEnabled) add("Bluetooth is OFF")
@@ -801,7 +847,7 @@ fun P2PRadarControlCard(
                             if (!isBluetoothEnabled) {
                                 OutlinedButton(
                                     onClick = onOpenBluetoothSettings,
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = CircleShape,
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(48.dp)
@@ -813,7 +859,7 @@ fun P2PRadarControlCard(
                             if (!isLocationEnabled) {
                                 OutlinedButton(
                                     onClick = onOpenLocationSettings,
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = CircleShape,
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(48.dp)
@@ -825,7 +871,7 @@ fun P2PRadarControlCard(
                             if (hasMissingPermissions) {
                                 OutlinedButton(
                                     onClick = onOpenAppSettings,
-                                    shape = RoundedCornerShape(14.dp),
+                                    shape = CircleShape,
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(48.dp)
@@ -847,7 +893,7 @@ fun P2PRadarControlCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
+                        shape = CircleShape,
                         color = when {
                             p2pMeshState.errorText != null -> colorScheme.errorContainer
                             radioChipHealthy -> successColor.copy(alpha = 0.12f)
@@ -866,11 +912,11 @@ fun P2PRadarControlCard(
                             },
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                         )
                     }
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
+                        shape = CircleShape,
                         color = colorScheme.primary.copy(alpha = 0.1f),
                         modifier = Modifier.weight(1f)
                     ) {
@@ -881,16 +927,16 @@ fun P2PRadarControlCard(
                             color = colorScheme.primary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 OutlinedButton(
                     onClick = onRescanP2P,
-                    shape = RoundedCornerShape(14.dp),
+                    shape = CircleShape,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp)
@@ -908,12 +954,12 @@ fun P2PRadarControlCard(
                 if (p2pMeshState.errorText != null) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Surface(
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(16.dp),
                         color = colorScheme.errorContainer,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Row(
-                            modifier = Modifier.padding(8.dp),
+                            modifier = Modifier.padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Icon(
@@ -939,23 +985,24 @@ fun P2PRadarControlCard(
 @Composable
 fun AuthGateCard(
     isSigningIn: Boolean,
+    isFleetMode: Boolean = false,
     onSignInClick: () -> Unit,
     onJumpToP2PClick: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant),
         modifier = Modifier.fillMaxWidth().testTag("auth_gate_card")
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(18.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Box(
                 modifier = Modifier
-                    .size(48.dp)
+                    .size(50.dp)
                     .clip(CircleShape)
                     .background(colorScheme.primary.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
@@ -969,13 +1016,17 @@ fun AuthGateCard(
             }
             Spacer(modifier = Modifier.height(10.dp))
             Text(
-                text = "Cloud Sync & Group Sharing",
+                text = if (isFleetMode) "Personal Device Fleet" else "Cloud Sync & Group Sharing",
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Bold,
                 color = colorScheme.onSurface
             )
             Text(
-                text = "Sync your devices on one map, ring misplaced hardware remotely, and share live groups.",
+                text = if (isFleetMode) {
+                    "Link your phones and tablets under one Google account to track them on one map and ring misplaced hardware remotely."
+                } else {
+                    "Create private tracking groups, share 6-character invite codes, and coordinate live field positions."
+                },
                 fontSize = 12.sp,
                 color = colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -986,7 +1037,12 @@ fun AuthGateCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(vertical = 4.dp)
             ) {
-                listOf("Fleet Sync", "Remote Ring", "Group Sharing").forEach { tag ->
+                val tags = if (isFleetMode) {
+                    listOf("Multi-Device", "Remote Ring", "24/7 Protection")
+                } else {
+                    listOf("Live Groups", "Invite Codes", "Cloud Sync")
+                }
+                tags.forEach { tag ->
                     Surface(
                         shape = CircleShape,
                         color = LocalCustomColors.current.surfaceContainerLow,
@@ -1002,12 +1058,12 @@ fun AuthGateCard(
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             Button(
                 onClick = onSignInClick,
                 enabled = !isSigningIn,
-                shape = RoundedCornerShape(16.dp),
+                shape = CircleShape,
                 colors = ButtonDefaults.buttonColors(containerColor = colorScheme.primary),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1045,6 +1101,7 @@ fun AuthGateCard(
             Spacer(modifier = Modifier.height(6.dp))
             TextButton(
                 onClick = onJumpToP2PClick,
+                shape = CircleShape,
                 modifier = Modifier.heightIn(min = 48.dp)
             ) {
                 Text("Offline? Use P2P Radar without signing in", fontSize = 12.sp)
@@ -1065,7 +1122,7 @@ fun AccountProfileStrip(
         ?: "Field Operator"
 
     Surface(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(24.dp),
         color = customColors.surfaceContainerLow,
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
         modifier = Modifier.fillMaxWidth()

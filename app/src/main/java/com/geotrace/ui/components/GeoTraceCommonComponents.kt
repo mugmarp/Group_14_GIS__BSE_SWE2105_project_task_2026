@@ -157,9 +157,9 @@ fun GeoTraceTopBar(
                 onClick = onBack,
                 modifier = Modifier
                     .size(48.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(customColors.surfaceContainerLow, RoundedCornerShape(14.dp))
-                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+                    .clip(CircleShape)
+                    .background(customColors.surfaceContainerLow, CircleShape)
+                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), CircleShape)
                     .then(if (backTestTag != null) Modifier.testTag(backTestTag) else Modifier)
             ) {
                 Icon(
@@ -237,7 +237,7 @@ fun TileLayerPickerList(
         MapTileType.entries.forEach { tileType ->
             val isSelected = selectedTileType == tileType
             Surface(
-                shape = RoundedCornerShape(16.dp),
+                shape = RoundedCornerShape(20.dp),
                 color = if (isSelected) colorScheme.primary.copy(alpha = 0.10f) else customColors.surfaceContainerLow,
                 border = BorderStroke(
                     if (isSelected) 1.5.dp else 1.dp,
@@ -246,7 +246,7 @@ fun TileLayerPickerList(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 56.dp)
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(RoundedCornerShape(20.dp))
                     .clickable { onSelectTileType(tileType) }
                     .testTag("tile_layer_${tileType.name.lowercase()}")
             ) {
