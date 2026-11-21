@@ -29,12 +29,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Analytics
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Policy
-import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Science
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tune
@@ -62,7 +60,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -75,7 +72,12 @@ import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
 import com.geotrace.service.OpenCellIdLookupState
 import com.geotrace.service.OpenCellIdStatus
+import com.geotrace.ui.components.GeoTraceTopBar
+import com.geotrace.ui.components.ScreenListContentPadding
+import com.geotrace.ui.components.adaptiveContentWidth
+import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.ui.theme.TelemetryHeaderLabelStyle
 import com.geotrace.viewmodel.TrackerViewModel
 import java.util.Locale
 
@@ -153,107 +155,73 @@ fun ResearchAnalysisScreen(
         }
     }
 
-    LazyColumn(
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(colorScheme.background),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentAlignment = Alignment.TopCenter
     ) {
-        // Header
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    if (onNavigateBack != null) {
+        LazyColumn(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxSize(),
+            contentPadding = ScreenListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Header
+            item {
+                GeoTraceTopBar(
+                    title = "SWE2105 Research Lab",
+                    subtitle = "Option 1 (IP) vs Option 2 (GNSS & Cell Telemetry)",
+                    onBack = onNavigateBack,
+                    backContentDescription = "Back to Live Map",
+                    backTestTag = "research_back_btn",
+                    trailingContent = {
                         IconButton(
-                            onClick = onNavigateBack,
+                            onClick = {
+                                shareResearchSummary(
+                                    context = context,
+                                    trackingMode = trackingMode,
+                                    currentLocation = currentLocation,
+                                    cellTowerLocation = cellTowerLocation,
+                                    servingCellInfo = servingCellInfo,
+                                    openCellIdStatus = openCellIdStatus,
+                                    mastOffsetMeters = mastOffsetMeters,
+                                    filteredJitterMeters = filteredJitterMeters,
+                                    filteredJitterCount = filteredJitterCount,
+                                    modeStats = modeStats,
+                                    totalSessionCount = allSessions.size,
+                                    settings = settings
+                                )
+                            },
                             modifier = Modifier
                                 .size(48.dp)
-                                .testTag("research_back_btn")
+                                .background(customColors.surfaceContainerLow, RoundedCornerShape(12.dp))
+                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                                .testTag("research_share_btn")
                         ) {
                             Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back to Live Map",
-                                tint = colorScheme.onSurface
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(4.dp))
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.School,
-                                contentDescription = null,
+                                Icons.Default.Share,
+                                contentDescription = "Share Research Benchmark Summary",
                                 tint = colorScheme.primary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = "SWE2105 Research Lab",
-                                fontSize = 17.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = colorScheme.onBackground,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
+                                modifier = Modifier.size(20.dp)
                             )
                         }
-                        Text(
-                            text = "Option 1 (IP) vs Option 2 (GNSS & Cell Telemetry)",
-                            fontSize = 11.sp,
-                            color = colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
                     }
-                }
-
-                IconButton(
-                    onClick = {
-                        shareResearchSummary(
-                            context = context,
-                            trackingMode = trackingMode,
-                            currentLocation = currentLocation,
-                            cellTowerLocation = cellTowerLocation,
-                            servingCellInfo = servingCellInfo,
-                            openCellIdStatus = openCellIdStatus,
-                            mastOffsetMeters = mastOffsetMeters,
-                            filteredJitterMeters = filteredJitterMeters,
-                            filteredJitterCount = filteredJitterCount,
-                            modeStats = modeStats,
-                            totalSessionCount = allSessions.size,
-                            settings = settings
-                        )
-                    },
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("research_share_btn")
-                ) {
-                    Icon(
-                        Icons.Default.Share,
-                        contentDescription = "Share Research Benchmark Summary",
-                        tint = colorScheme.primary
-                    )
-                }
+                )
             }
-        }
 
-        // Card 1: Live Empirical Telemetry Benchmark (GNSS vs Cell Mast)
-        item {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("live_benchmark_card"),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
-                border = BorderStroke(1.dp, colorScheme.outlineVariant)
-            ) {
+            // Card 1: Live Empirical Telemetry Benchmark (GNSS vs Cell Mast)
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .testTag("live_benchmark_card"),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                    border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                ) {
                 Column {
                     Box(
                         modifier = Modifier
@@ -389,8 +357,11 @@ fun ResearchAnalysisScreen(
                         ) {
                             Text(
                                 text = "Deadband Filtered: $filteredJitterCount spikes (${String.format(Locale.US, "%.1f", filteredJitterMeters)}m)",
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontSize = 10.sp,
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    fontFeatureSettings = "tnum"
+                                ),
                                 color = colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
@@ -400,10 +371,13 @@ fun ResearchAnalysisScreen(
                             )
                             Text(
                                 text = "Geofence: ±${settings.geofenceHysteresisMeters.toInt()}m",
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFeatureSettings = "tnum"
+                                ),
                                 color = colorScheme.tertiary,
-                                fontWeight = FontWeight.Bold,
                                 maxLines = 1
                             )
                         }
@@ -482,9 +456,12 @@ fun ResearchAnalysisScreen(
                                     } else {
                                         "--"
                                     },
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.sp,
+                                        fontFamily = JetBrainsMonoFontFamily,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFeatureSettings = "tnum"
+                                    ),
                                     color = if (stat.trialCount > 0) colorScheme.primary else colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
@@ -503,6 +480,7 @@ fun ResearchAnalysisScreen(
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
                     .testTag("tech_comparator_card"),
                 shape = RoundedCornerShape(16.dp),
                 colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
@@ -687,9 +665,12 @@ fun ResearchAnalysisScreen(
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
                                 text = "Suggested Geofence Hysteresis: ${selectedScenario.suggestedHysteresisLabel}",
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontSize = 10.sp,
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFeatureSettings = "tnum"
+                                ),
                                 color = colorScheme.tertiary
                             )
                             if (viewModel != null) {
@@ -825,6 +806,7 @@ fun ResearchAnalysisScreen(
                 )
             }
         }
+        }
     }
 }
 
@@ -840,7 +822,9 @@ private fun CollapsibleResearchCard(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant)
@@ -927,9 +911,12 @@ private fun MetricScoreBar(label: String, targetProgress: Float, color: Color) {
             )
             Text(
                 text = "${(animatedProgress * 100).toInt()}%",
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 10.sp,
+                    fontFamily = JetBrainsMonoFontFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontFeatureSettings = "tnum"
+                ),
                 color = color
             )
         }
@@ -951,18 +938,19 @@ private fun TechMetric(label: String, value: String, color: Color, modifier: Mod
     Column(modifier = modifier) {
         Text(
             text = label,
-            fontSize = 9.sp,
+            style = TelemetryHeaderLabelStyle.copy(fontSize = 9.sp),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.04.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
         Text(
             text = value,
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontSize = 12.sp,
+                fontFamily = JetBrainsMonoFontFamily,
+                fontWeight = FontWeight.Bold,
+                fontFeatureSettings = "tnum"
+            ),
             color = color,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis

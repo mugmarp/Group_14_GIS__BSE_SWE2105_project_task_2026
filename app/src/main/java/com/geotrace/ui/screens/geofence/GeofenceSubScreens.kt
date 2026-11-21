@@ -4,7 +4,6 @@ import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,7 +23,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.History
@@ -36,7 +34,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -52,7 +49,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,7 +57,13 @@ import com.geotrace.model.GeofenceAlert
 import com.geotrace.model.GeofenceZone
 import com.geotrace.model.TrackerSettings
 import com.geotrace.service.GeofenceApiStatus
+import com.geotrace.ui.components.GeoTraceStatusBadge
+import com.geotrace.ui.components.GeoTraceTopBar
+import com.geotrace.ui.components.ScreenListContentPadding
+import com.geotrace.ui.components.StatusBadgeTone
+import com.geotrace.ui.components.adaptiveContentWidth
 import com.geotrace.ui.screens.ZonePreset
+import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.TrackerViewModel
 import java.text.SimpleDateFormat
@@ -84,60 +86,6 @@ enum class GeofenceSubgroup(
         title = "Zone Transition History",
         subtitle = "Chronological log of safe zone entries & exits"
     )
-}
-
-@Composable
-internal fun GeofenceSubHeaderBar(
-    title: String,
-    subtitle: String,
-    backTestTag: String,
-    onBack: () -> Unit,
-    trailingAction: (@Composable () -> Unit)? = null
-) {
-    val colorScheme = MaterialTheme.colorScheme
-    val customColors = LocalCustomColors.current
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        IconButton(
-            onClick = onBack,
-            modifier = Modifier
-                .size(48.dp)
-                .background(customColors.surfaceContainerLow, RoundedCornerShape(12.dp))
-                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-                .testTag(backTestTag)
-        ) {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = "Back to Geofencing",
-                tint = colorScheme.primary,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.Bold,
-                color = colorScheme.onBackground,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = subtitle,
-                fontSize = 11.sp,
-                color = colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-        if (trailingAction != null) {
-            Spacer(modifier = Modifier.width(8.dp))
-            trailingAction()
-        }
-    }
 }
 
 @Composable
@@ -243,21 +191,28 @@ internal fun GeofenceAlertsPrecisionSubScreen(
     val customColors = LocalCustomColors.current
     val delta = settings.geofenceHysteresisMeters
 
-    LazyColumn(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colorScheme.background),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentAlignment = Alignment.TopCenter
     ) {
-        item {
-            GeofenceSubHeaderBar(
-                title = GeofenceSubgroup.ALERTS_PRECISION.title,
-                subtitle = GeofenceSubgroup.ALERTS_PRECISION.subtitle,
-                backTestTag = "geofence_sub_back_btn",
-                onBack = onBack
-            )
-        }
+        LazyColumn(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxSize(),
+            contentPadding = ScreenListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item {
+                GeoTraceTopBar(
+                    title = GeofenceSubgroup.ALERTS_PRECISION.title,
+                    subtitle = GeofenceSubgroup.ALERTS_PRECISION.subtitle,
+                    backContentDescription = "Back to Geofencing",
+                    backTestTag = "geofence_sub_back_btn",
+                    onBack = onBack
+                )
+            }
 
         // Academic Perimeter Alerts Card
         item {
@@ -311,29 +266,18 @@ internal fun GeofenceAlertsPrecisionSubScreen(
                                         modifier = Modifier.weight(1f, fill = false)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
-                                    Surface(
-                                        shape = RoundedCornerShape(4.dp),
-                                        color = if (settings.geofenceNotificationEnabled) {
-                                            if (geofenceApiStatus.isRegisteredWithPlayServices) colorScheme.tertiary.copy(alpha = 0.15f)
-                                            else colorScheme.primary.copy(alpha = 0.15f)
-                                        } else customColors.surfaceContainerLow
-                                    ) {
-                                        Text(
-                                            text = when {
-                                                !settings.geofenceNotificationEnabled -> "OFF BY DEFAULT"
-                                                geofenceApiStatus.isRegisteredWithPlayServices -> "API ACTIVE"
-                                                else -> "IN-APP ACTIVE"
-                                            },
-                                            fontSize = 9.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = when {
-                                                !settings.geofenceNotificationEnabled -> colorScheme.onSurfaceVariant
-                                                geofenceApiStatus.isRegisteredWithPlayServices -> colorScheme.tertiary
-                                                else -> colorScheme.primary
-                                            },
-                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                        )
-                                    }
+                                    GeoTraceStatusBadge(
+                                        text = when {
+                                            !settings.geofenceNotificationEnabled -> "OFF BY DEFAULT"
+                                            geofenceApiStatus.isRegisteredWithPlayServices -> "API ACTIVE"
+                                            else -> "IN-APP ACTIVE"
+                                        },
+                                        tone = when {
+                                            !settings.geofenceNotificationEnabled -> StatusBadgeTone.NEUTRAL
+                                            geofenceApiStatus.isRegisteredWithPlayServices -> StatusBadgeTone.NOMINAL
+                                            else -> StatusBadgeTone.ACTIVE
+                                        }
+                                    )
                                 }
                                 Text(
                                     text = geofenceApiStatus.statusMessage,
@@ -375,10 +319,10 @@ internal fun GeofenceAlertsPrecisionSubScreen(
                                         Spacer(modifier = Modifier.height(6.dp))
                                         OutlinedButton(
                                             onClick = onRequestBackgroundLocation,
-                                            shape = RoundedCornerShape(8.dp),
-                                            modifier = Modifier.heightIn(min = 40.dp)
+                                            shape = RoundedCornerShape(10.dp),
+                                            modifier = Modifier.heightIn(min = 48.dp)
                                         ) {
-                                            Text("Allow Background Location", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            Text("Allow Background Location", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                         }
                                     }
                                 }
@@ -395,8 +339,11 @@ internal fun GeofenceAlertsPrecisionSubScreen(
                             val academicEnabled = enabledZones.count { it.category.isAcademicZone }
                             Text(
                                 text = "GeofencingClient: ${enabledZones.size} enabled ($academicEnabled academic) / ${zones.size} saved",
-                                fontSize = 10.sp,
-                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontSize = 10.sp,
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    fontFeatureSettings = "tnum"
+                                ),
                                 color = colorScheme.onSurfaceVariant,
                                 modifier = Modifier.weight(1f)
                             )
@@ -410,12 +357,12 @@ internal fun GeofenceAlertsPrecisionSubScreen(
                                         Toast.LENGTH_SHORT
                                     ).show()
                                 },
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
                                 modifier = Modifier
-                                    .heightIn(min = 40.dp)
+                                    .heightIn(min = 48.dp)
                                     .testTag("test_geofence_alert_btn")
                             ) {
-                                Text("Test Alert", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("Test Alert", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
@@ -587,14 +534,18 @@ internal fun GeofenceAlertsPrecisionSubScreen(
                         )
                         Text(
                             text = "$filteredJitterCount spikes (${String.format(Locale.US, "%.1f", filteredJitterMeters)} m noise)",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontSize = 11.sp,
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                fontFeatureSettings = "tnum"
+                            ),
                             color = colorScheme.primary
                         )
                     }
                 }
             }
+        }
         }
     }
 }
@@ -609,35 +560,42 @@ internal fun GeofencePresetsSubScreen(
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
-    LazyColumn(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colorScheme.background),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentAlignment = Alignment.TopCenter
     ) {
-        item {
-            GeofenceSubHeaderBar(
-                title = GeofenceSubgroup.MUST_PRESETS.title,
-                subtitle = "Tap any campus or transit template to customize & add",
-                backTestTag = "geofence_sub_back_btn",
-                onBack = onBack,
-                trailingAction = {
-                    OutlinedButton(
-                        onClick = onResetSamples,
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .testTag("reset_sample_zones_btn")
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Reset", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        LazyColumn(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxSize(),
+            contentPadding = ScreenListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                GeoTraceTopBar(
+                    title = GeofenceSubgroup.MUST_PRESETS.title,
+                    subtitle = "Tap any campus or transit template to customize & add",
+                    backContentDescription = "Back to Geofencing",
+                    backTestTag = "geofence_sub_back_btn",
+                    onBack = onBack,
+                    trailingContent = {
+                        OutlinedButton(
+                            onClick = onResetSamples,
+                            shape = RoundedCornerShape(10.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("reset_sample_zones_btn")
+                        ) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Reset", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
-                }
-            )
-        }
+                )
+            }
 
         item {
             Text(
@@ -698,19 +656,19 @@ internal fun GeofencePresetsSubScreen(
                         )
                     }
                     Spacer(modifier = Modifier.width(8.dp))
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = when {
-                            isZoneEnabled -> colorScheme.tertiary.copy(alpha = 0.15f)
-                            alreadyExists -> colorScheme.surfaceVariant
-                            else -> colorScheme.primary.copy(alpha = 0.12f)
-                        }
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                    if (isZoneEnabled) {
+                        GeoTraceStatusBadge(text = "Active", tone = StatusBadgeTone.NOMINAL)
+                    } else if (alreadyExists) {
+                        GeoTraceStatusBadge(text = "Off", tone = StatusBadgeTone.NEUTRAL)
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = colorScheme.primary.copy(alpha = 0.12f)
                         ) {
-                            if (!alreadyExists) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
+                            ) {
                                 Icon(
                                     Icons.Default.Add,
                                     contentDescription = null,
@@ -718,25 +676,18 @@ internal fun GeofencePresetsSubScreen(
                                     modifier = Modifier.size(13.dp)
                                 )
                                 Spacer(modifier = Modifier.width(2.dp))
+                                Text(
+                                    text = "Use",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.primary
+                                )
                             }
-                            Text(
-                                text = when {
-                                    isZoneEnabled -> "Active"
-                                    alreadyExists -> "Off"
-                                    else -> "Use"
-                                },
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = when {
-                                    isZoneEnabled -> colorScheme.tertiary
-                                    alreadyExists -> colorScheme.onSurfaceVariant
-                                    else -> colorScheme.primary
-                                }
-                            )
                         }
                     }
                 }
             }
+        }
         }
     }
 }
@@ -749,38 +700,45 @@ internal fun GeofenceTransitionsSubScreen(
 ) {
     val colorScheme = MaterialTheme.colorScheme
 
-    LazyColumn(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colorScheme.background),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        contentAlignment = Alignment.TopCenter
     ) {
-        item {
-            GeofenceSubHeaderBar(
-                title = GeofenceSubgroup.TRANSITION_HISTORY.title,
-                subtitle = "${recentAlerts.size} recorded boundary event(s)",
-                backTestTag = "geofence_sub_back_btn",
-                onBack = onBack,
-                trailingAction = if (recentAlerts.isNotEmpty()) {
-                    {
-                        TextButton(
-                            onClick = onClearAlerts,
-                            modifier = Modifier
-                                .heightIn(min = 48.dp)
-                                .testTag("clear_geofence_alerts_btn")
-                        ) {
-                            Text(
-                                text = "Clear All",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = colorScheme.error
-                            )
+        LazyColumn(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxSize(),
+            contentPadding = ScreenListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                GeoTraceTopBar(
+                    title = GeofenceSubgroup.TRANSITION_HISTORY.title,
+                    subtitle = "${recentAlerts.size} recorded boundary event(s)",
+                    backContentDescription = "Back to Geofencing",
+                    backTestTag = "geofence_sub_back_btn",
+                    onBack = onBack,
+                    trailingContent = if (recentAlerts.isNotEmpty()) {
+                        {
+                            TextButton(
+                                onClick = onClearAlerts,
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("clear_geofence_alerts_btn")
+                            ) {
+                                Text(
+                                    text = "Clear All",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.error
+                                )
+                            }
                         }
-                    }
-                } else null
-            )
-        }
+                    } else null
+                )
+            }
 
         if (recentAlerts.isEmpty()) {
             item {
@@ -860,6 +818,7 @@ internal fun GeofenceTransitionsSubScreen(
                     }
                 }
             }
+        }
         }
     }
 }

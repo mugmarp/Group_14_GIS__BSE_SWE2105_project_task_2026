@@ -23,7 +23,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOff
@@ -55,7 +54,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,7 +66,14 @@ import com.geotrace.model.CellTowerInfo
 import com.geotrace.model.CellTowerLocation
 import com.geotrace.service.OpenCellIdLookupState
 import com.geotrace.service.OpenCellIdStatus
+import com.geotrace.ui.components.GeoTraceStatusBadge
+import com.geotrace.ui.components.GeoTraceTopBar
+import com.geotrace.ui.components.ScreenListContentPadding
+import com.geotrace.ui.components.StatusBadgeTone
+import com.geotrace.ui.components.adaptiveContentWidth
+import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.ui.theme.TelemetryHeaderLabelStyle
 import com.geotrace.viewmodel.TrackerViewModel
 import java.util.Locale
 
@@ -122,116 +127,83 @@ fun CellularDiagnosticScreen(
     val servingCell = cellTowers.firstOrNull { it.isRegistered } ?: cellTowers.firstOrNull()
     val neighborCells = cellTowers.filter { it != servingCell }
 
-    LazyColumn(
+    Box(
         modifier = modifier
             .fillMaxSize()
             .background(colorScheme.background),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentAlignment = Alignment.TopCenter
     ) {
-        // Header
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (onNavigateBack != null) {
-                        IconButton(onClick = onNavigateBack, modifier = Modifier.size(48.dp)) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back to Live Map",
-                                tint = colorScheme.onSurface
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(2.dp))
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Cellular Telemetry Hub",
-                            fontSize = 16.sp,
-                            lineHeight = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.onBackground,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "TelephonyManager RF base stations",
-                            fontSize = 11.sp,
-                            color = colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            if (hasLocationPermission) {
-                                viewModel.refreshCellTowers()
-                            } else {
-                                permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-                            }
-                        },
-                        enabled = !isRefreshingCells,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = colorScheme.primary,
-                            contentColor = colorScheme.onPrimary
-                        ),
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
-                        modifier = Modifier
-                            .height(48.dp)
-                            .testTag("refresh_cells_btn")
-                    ) {
-                        if (isRefreshingCells) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(15.dp),
-                                strokeWidth = 2.dp,
-                                color = colorScheme.onPrimary
-                            )
-                        } else {
-                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                        }
-                        Spacer(modifier = Modifier.width(5.dp))
-                        Text(
-                            text = if (isRefreshingCells) "Scanning" else "Refresh",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp
-                        )
-                    }
-
-                    if (onOpenMenu != null) {
-                        IconButton(
-                            onClick = onOpenMenu,
+        LazyColumn(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxSize(),
+            contentPadding = ScreenListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Header
+            item {
+                GeoTraceTopBar(
+                    title = "Cellular Telemetry Hub",
+                    subtitle = "TelephonyManager RF base stations",
+                    onBack = onNavigateBack,
+                    backContentDescription = "Back to Live Map",
+                    trailingContent = {
+                        Button(
+                            onClick = {
+                                if (hasLocationPermission) {
+                                    viewModel.refreshCellTowers()
+                                } else {
+                                    permissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+                                }
+                            },
+                            enabled = !isRefreshingCells,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = colorScheme.primary,
+                                contentColor = colorScheme.onPrimary
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                             modifier = Modifier
-                                .size(48.dp)
-                                .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
-                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
-                                .testTag("cellular_menu_btn")
+                                .height(48.dp)
+                                .testTag("refresh_cells_btn")
                         ) {
-                            Icon(
-                                Icons.Default.Menu,
-                                contentDescription = "Open Menu",
-                                tint = colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
+                            if (isRefreshingCells) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(15.dp),
+                                    strokeWidth = 2.dp,
+                                    color = colorScheme.onPrimary
+                                )
+                            } else {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                            }
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = if (isRefreshingCells) "Scanning" else "Refresh",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
                             )
                         }
+
+                        if (onOpenMenu != null) {
+                            IconButton(
+                                onClick = onOpenMenu,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .background(customColors.surfaceContainerLow, RoundedCornerShape(12.dp))
+                                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                                    .testTag("cellular_menu_btn")
+                            ) {
+                                Icon(
+                                    Icons.Default.Menu,
+                                    contentDescription = "Open Menu",
+                                    tint = colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
                     }
-                }
+                )
             }
-        }
 
         // Serving Cell Mast Card / Permission Prompt / Empty State
         item {
@@ -364,6 +336,7 @@ fun CellularDiagnosticScreen(
         item {
             TriangulationComparisonCard()
         }
+        }
     }
 }
 
@@ -447,43 +420,13 @@ private fun OpenCellIdStatusCard(
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
 
-    val (badgeLabel, badgeBg, badgeBorder, badgeText) = when (status.state) {
-        OpenCellIdLookupState.RESOLVED -> listOf(
-            "MAST RESOLVED",
-            customColors.statusActiveBg,
-            customColors.statusActiveBorder,
-            customColors.statusActiveText
-        )
-        OpenCellIdLookupState.NO_API_KEY -> listOf(
-            "LOCAL FALLBACK",
-            customColors.surfaceContainerHigh,
-            colorScheme.outlineVariant,
-            colorScheme.onSurfaceVariant
-        )
-        OpenCellIdLookupState.AUTH_ERROR -> listOf(
-            "API AUTH ERROR",
-            colorScheme.errorContainer.copy(alpha = 0.55f),
-            colorScheme.error.copy(alpha = 0.45f),
-            colorScheme.error
-        )
-        OpenCellIdLookupState.RATE_LIMITED, OpenCellIdLookupState.NETWORK_ERROR -> listOf(
-            "LOOKUP DEGRADED",
-            customColors.surfaceContainerHigh,
-            colorScheme.outlineVariant,
-            customColors.warning
-        )
-        OpenCellIdLookupState.NOT_FOUND -> listOf(
-            "UNINDEXED SECTOR",
-            customColors.surfaceContainerHigh,
-            colorScheme.outlineVariant,
-            colorScheme.onSurfaceVariant
-        )
-        OpenCellIdLookupState.IDLE -> listOf(
-            "OPENCELLID STANDBY",
-            customColors.surfaceContainerHigh,
-            colorScheme.outlineVariant,
-            colorScheme.onSurfaceVariant
-        )
+    val (badgeLabel, badgeTone) = when (status.state) {
+        OpenCellIdLookupState.RESOLVED -> "MAST RESOLVED" to StatusBadgeTone.NOMINAL
+        OpenCellIdLookupState.NO_API_KEY -> "LOCAL FALLBACK" to StatusBadgeTone.NEUTRAL
+        OpenCellIdLookupState.AUTH_ERROR -> "API AUTH ERROR" to StatusBadgeTone.ERROR
+        OpenCellIdLookupState.RATE_LIMITED, OpenCellIdLookupState.NETWORK_ERROR -> "LOOKUP DEGRADED" to StatusBadgeTone.WARNING
+        OpenCellIdLookupState.NOT_FOUND -> "UNINDEXED SECTOR" to StatusBadgeTone.NEUTRAL
+        OpenCellIdLookupState.IDLE -> "OPENCELLID STANDBY" to StatusBadgeTone.NEUTRAL
     }
 
     Card(
@@ -502,24 +445,15 @@ private fun OpenCellIdStatusCard(
             ) {
                 Text(
                     text = "OPENCELLID MAST GEOLOCATION",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.04.sp,
-                    color = colorScheme.onSurfaceVariant
+                    style = TelemetryHeaderLabelStyle,
+                    color = colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = badgeBg as androidx.compose.ui.graphics.Color,
-                    border = BorderStroke(1.dp, badgeBorder as androidx.compose.ui.graphics.Color)
-                ) {
-                    Text(
-                        text = badgeLabel as String,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = badgeText as androidx.compose.ui.graphics.Color,
-                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                    )
-                }
+                Spacer(modifier = Modifier.width(8.dp))
+                GeoTraceStatusBadge(
+                    text = badgeLabel,
+                    tone = badgeTone
+                )
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -541,8 +475,11 @@ private fun OpenCellIdStatusCard(
                         servingTowerLocation.rangeMeters.toInt(),
                         resolvedCount.coerceAtLeast(1)
                     ),
-                    fontSize = 11.sp,
-                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 11.sp,
+                        fontFamily = JetBrainsMonoFontFamily,
+                        fontFeatureSettings = "tnum"
+                    ),
                     color = colorScheme.onSurfaceVariant
                 )
                 if (onLocateTowerOnMap != null) {
@@ -718,9 +655,12 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                         val signalLabel = cell.signalDbm?.let { "$it dBm (${cell.signalLevel}/4 bars)" } ?: "Signal N/A"
                         Text(
                             text = signalLabel,
-                            fontSize = 12.sp,
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 12.sp,
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontWeight = FontWeight.SemiBold,
+                                fontFeatureSettings = "tnum"
+                            ),
                             color = if (cell.signalDbm != null) colorScheme.onSurface else colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -739,9 +679,12 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                         } ?: "--"
                         Text(
                             text = radiusLabel,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontFeatureSettings = "tnum"
+                            ),
                             color = if (cell.estimatedDistanceKm != null) colorScheme.primary else colorScheme.onSurfaceVariant,
                             maxLines = 1
                         )
@@ -775,9 +718,12 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         text = extraMeta.joinToString(" • "),
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 11.sp,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontFeatureSettings = "tnum"
+                        ),
                         color = colorScheme.onSurfaceVariant,
-                        fontFamily = FontFamily.Monospace,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -844,9 +790,12 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
                     }
                     Text(
                         text = radioDetails,
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 11.sp,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontFeatureSettings = "tnum"
+                        ),
                         color = colorScheme.onSurfaceVariant,
-                        fontFamily = FontFamily.Monospace,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -856,9 +805,12 @@ private fun NeighborCellItem(cell: CellTowerInfo) {
             Column(horizontalAlignment = Alignment.End) {
                 Text(
                     text = cell.signalDbm?.let { "$it dBm" } ?: "Signal N/A",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.titleSmall.copy(
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = JetBrainsMonoFontFamily,
+                        fontFeatureSettings = "tnum"
+                    ),
                     color = if (cell.signalDbm != null) colorScheme.primary else colorScheme.onSurfaceVariant
                 )
                 Text(
@@ -876,17 +828,18 @@ private fun CellMetricBox(label: String, value: String, subtext: String? = null)
     Column {
         Text(
             text = label,
-            fontSize = 9.sp,
+            style = TelemetryHeaderLabelStyle.copy(fontSize = 9.sp),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.04.sp,
             maxLines = 1
         )
         Text(
             text = value,
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontSize = 12.sp,
+                fontFamily = JetBrainsMonoFontFamily,
+                fontWeight = FontWeight.Bold,
+                fontFeatureSettings = "tnum"
+            ),
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis

@@ -108,8 +108,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             openCellIdApiKey = repository.getSavedOpenCellIdApiKey(),
             geofenceNotificationEnabled = repository.geofenceNotificationsEnabled,
             geofenceHysteresisMeters = repository.getSavedGeofenceHysteresis(),
-            geofenceAccuracyGateEnabled = repository.getSavedGeofenceAccuracyGate(),
-            themeMode = repository.getSavedThemeMode()
+            geofenceAccuracyGateEnabled = repository.getSavedGeofenceAccuracyGate()
         )
     )
     val settings: StateFlow<com.geotrace.model.TrackerSettings> = _settings.asStateFlow()
@@ -1237,11 +1236,6 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun toggleCellTowerPin(show: Boolean) {
         repository.saveShowCellTowerPin(show)
         _settings.value = _settings.value.copy(showCellTowerPin = show)
-    }
-
-    fun updateThemeMode(mode: com.geotrace.model.AppThemeMode) {
-        repository.saveThemeMode(mode)
-        _settings.value = _settings.value.copy(themeMode = mode)
     }
 
     fun updateOpenCellIdApiKey(apiKey: String) {

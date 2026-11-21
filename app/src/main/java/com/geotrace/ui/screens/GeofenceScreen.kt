@@ -36,7 +36,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
@@ -82,13 +81,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.geotrace.model.GeofenceCategory
 import com.geotrace.model.GeofenceZone
+import com.geotrace.ui.components.GeoTraceStatusBadge
+import com.geotrace.ui.components.GeoTraceTopBar
+import com.geotrace.ui.components.ScreenListContentPadding
+import com.geotrace.ui.components.StatusBadgeTone
+import com.geotrace.ui.components.adaptiveContentWidth
 import com.geotrace.ui.screens.devices.BackgroundLocationSettingsDialog
 import com.geotrace.ui.screens.devices.hasBackgroundLocationPermission
 import com.geotrace.ui.screens.devices.openAppLocationSettings
@@ -97,7 +100,9 @@ import com.geotrace.ui.screens.geofence.GeofencePresetsSubScreen
 import com.geotrace.ui.screens.geofence.GeofenceSubgroup
 import com.geotrace.ui.screens.geofence.GeofenceSubgroupCard
 import com.geotrace.ui.screens.geofence.GeofenceTransitionsSubScreen
+import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.ui.theme.TelemetryHeaderLabelStyle
 import com.geotrace.viewmodel.TrackerViewModel
 import java.util.Locale
 import java.util.UUID
@@ -326,74 +331,50 @@ fun GeofenceScreen(
     ) { selectedSubgroup ->
         when (selectedSubgroup) {
             null -> {
-                LazyColumn(
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(colorScheme.background),
-                    contentPadding = PaddingValues(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    contentAlignment = Alignment.TopCenter
                 ) {
-                    item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(
-                                onClick = onNavigateBack,
-                                modifier = Modifier
-                                    .size(48.dp)
-                                    .background(customColors.surfaceContainerLow, RoundedCornerShape(12.dp))
-                                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-                                    .testTag("geofence_back_btn")
-                            ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = "Back to Map",
-                                    tint = colorScheme.primary,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(12.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Geofencing & Safe Zones",
-                                    fontSize = 17.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = colorScheme.onBackground
-                                )
-                                Text(
-                                    text = "Perimeters, precision tuning & transition logs",
-                                    fontSize = 11.sp,
-                                    color = colorScheme.onSurfaceVariant
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(8.dp))
-
-                            Button(
-                                onClick = {
-                                    preloadedPreset = null
-                                    draftOverrides = null
-                                    showAddDialog = true
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = colorScheme.primary,
-                                    contentColor = colorScheme.onPrimary
-                                ),
-                                shape = RoundedCornerShape(18.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                modifier = Modifier
-                                    .height(48.dp)
-                                    .testTag("add_geofence_btn")
-                            ) {
-                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Add Zone", fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                            }
+                    LazyColumn(
+                        modifier = Modifier
+                            .adaptiveContentWidth()
+                            .fillMaxSize(),
+                        contentPadding = ScreenListContentPadding,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        item {
+                            GeoTraceTopBar(
+                                title = "Geofencing & Safe Zones",
+                                subtitle = "Perimeters, precision tuning & transition logs",
+                                backContentDescription = "Back to Map",
+                                backTestTag = "geofence_back_btn",
+                                onBack = onNavigateBack,
+                                trailingContent = {
+                                    Button(
+                                        onClick = {
+                                            preloadedPreset = null
+                                            draftOverrides = null
+                                            showAddDialog = true
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = colorScheme.primary,
+                                            contentColor = colorScheme.onPrimary
+                                        ),
+                                        shape = RoundedCornerShape(12.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .testTag("add_geofence_btn")
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Add Zone", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                    }
+                                }
+                            )
                         }
-                    }
 
                     // Compact 3-Stat Overview Card
                     item {
@@ -573,6 +554,7 @@ fun GeofenceScreen(
                                 onDelete = { pendingDeleteZone = zone }
                             )
                         }
+                    }
                     }
                 }
             }
@@ -814,30 +796,18 @@ private fun GeofenceZoneCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = when {
-                            !zone.isEnabled -> colorScheme.surfaceVariant
-                            zone.isInside -> colorScheme.tertiary.copy(alpha = 0.15f)
-                            else -> colorScheme.primary.copy(alpha = 0.12f)
+                    GeoTraceStatusBadge(
+                        text = when {
+                            !zone.isEnabled -> "OFF"
+                            zone.isInside -> "INSIDE ZONE"
+                            else -> "ACTIVE"
+                        },
+                        tone = when {
+                            !zone.isEnabled -> StatusBadgeTone.NEUTRAL
+                            zone.isInside -> StatusBadgeTone.NOMINAL
+                            else -> StatusBadgeTone.ACTIVE
                         }
-                    ) {
-                        Text(
-                            text = when {
-                                !zone.isEnabled -> "OFF"
-                                zone.isInside -> "🟢 INSIDE ZONE"
-                                else -> "ACTIVE"
-                            },
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = when {
-                                !zone.isEnabled -> colorScheme.onSurfaceVariant
-                                zone.isInside -> colorScheme.tertiary
-                                else -> colorScheme.primary
-                            },
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
+                    )
 
                     Switch(
                         checked = zone.isEnabled,
@@ -873,9 +843,12 @@ private fun GeofenceZoneCard(
                     val lonDir = if (zone.longitude >= 0) "E" else "W"
                     Text(
                         text = "Coord: ${String.format(Locale.US, "%.4f", kotlin.math.abs(zone.latitude))}°$latDir, ${String.format(Locale.US, "%.4f", kotlin.math.abs(zone.longitude))}°$lonDir",
-                        fontSize = 10.sp,
-                        color = colorScheme.onSurfaceVariant,
-                        fontFamily = FontFamily.Monospace
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 10.sp,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontFeatureSettings = "tnum"
+                        ),
+                        color = colorScheme.onSurfaceVariant
                     )
                     val triggersLabel = listOfNotNull(
                         if (zone.alertOnEntry) "Entry Alert" else null,
@@ -1117,7 +1090,8 @@ private fun GeofenceEditDialog(
                                 colors = FilterChipDefaults.filterChipColors(
                                     selectedContainerColor = colorScheme.primary.copy(alpha = 0.15f),
                                     selectedLabelColor = colorScheme.primary
-                                )
+                                ),
+                                modifier = Modifier.heightIn(min = 44.dp)
                             )
                         }
                     }
@@ -1142,9 +1116,12 @@ private fun GeofenceEditDialog(
                                 )
                                 Text(
                                     text = "${radius.toInt()} meters",
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.titleSmall.copy(
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontFamily = JetBrainsMonoFontFamily,
+                                        fontFeatureSettings = "tnum"
+                                    ),
                                     color = colorScheme.primary
                                 )
                             }
@@ -1163,15 +1140,17 @@ private fun GeofenceEditDialog(
                             // Quick radius increment buttons
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
                                 listOf(50f, 100f, 250f, 500f).forEach { r ->
                                     OutlinedButton(
                                         onClick = { radius = r },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        modifier = Modifier.heightIn(min = 34.dp)
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .heightIn(min = 44.dp)
                                     ) {
-                                        Text("${r.toInt()}m", fontSize = 10.sp)
+                                        Text("${r.toInt()}m", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                                     }
                                 }
                             }
@@ -1224,14 +1203,14 @@ private fun GeofenceEditDialog(
                                                 )
                                             )
                                         },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                                         modifier = Modifier
-                                            .heightIn(min = 34.dp)
+                                            .heightIn(min = 44.dp)
                                             .testTag("pick_geofence_map_btn")
                                     ) {
-                                        Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(13.dp))
+                                        Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(14.dp))
                                         Spacer(modifier = Modifier.width(3.dp))
-                                        Text("Pick on Map", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        Text("Pick on Map", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
 
@@ -1249,12 +1228,12 @@ private fun GeofenceEditDialog(
                                             lon = String.format(Locale.US, "%.5f", fix.longitude)
                                         }
                                     },
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                    modifier = Modifier.heightIn(min = 34.dp)
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    modifier = Modifier.heightIn(min = 44.dp)
                                 ) {
-                                    Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(13.dp))
+                                    Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(14.dp))
                                     Spacer(modifier = Modifier.width(3.dp))
-                                    Text("Use GPS Fix", fontSize = 10.sp)
+                                    Text("Use GPS Fix", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                                 }
                             }
                         }
@@ -1390,7 +1369,9 @@ private fun GeofenceEditDialog(
                     contentColor = colorScheme.onPrimary
                 ),
                 shape = RoundedCornerShape(10.dp),
-                modifier = Modifier.testTag("confirm_save_geofence_btn")
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .testTag("confirm_save_geofence_btn")
             ) {
                 Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(4.dp))
@@ -1398,7 +1379,10 @@ private fun GeofenceEditDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
                 Text("Cancel", color = colorScheme.onSurfaceVariant)
             }
         },
@@ -1411,15 +1395,17 @@ private fun StatBox(label: String, value: String, color: Color) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = label,
-            fontSize = 9.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.Bold
+            style = TelemetryHeaderLabelStyle.copy(fontSize = 9.sp),
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Text(
             text = value,
-            fontSize = 18.sp,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.ExtraBold,
+            style = MaterialTheme.typography.titleMedium.copy(
+                fontSize = 18.sp,
+                fontFamily = JetBrainsMonoFontFamily,
+                fontWeight = FontWeight.ExtraBold,
+                fontFeatureSettings = "tnum"
+            ),
             color = color
         )
     }

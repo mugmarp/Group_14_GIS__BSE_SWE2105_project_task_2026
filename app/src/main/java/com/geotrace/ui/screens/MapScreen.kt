@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -87,15 +88,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.geotrace.model.CoordinateFormat
@@ -107,7 +110,12 @@ import com.geotrace.model.TrackingMode
 import com.geotrace.ui.components.MapViewComposable
 import com.geotrace.ui.components.OfflineMapsDialog
 import com.geotrace.ui.components.PlaceSearchDialog
+import com.geotrace.ui.components.adaptiveContentWidth
+import com.geotrace.ui.theme.InterFontFamily
+import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.ui.theme.TelemetryHeaderLabelStyle
+import com.geotrace.ui.theme.TelemetryScalarStyle
 import com.geotrace.viewmodel.GroupViewModel
 import com.geotrace.viewmodel.TrackerViewModel
 import java.text.SimpleDateFormat
@@ -420,159 +428,175 @@ fun MapScreen(
             }
         )
 
+        // Subtle Top Status Edge Scrim for clean legibility over bright map tiles
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .height(24.dp)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            colorScheme.surface.copy(alpha = 0.72f),
+                            Color.Transparent
+                        )
+                    )
+                )
+        )
+
         // Top Instrument & Telemetry HUD Cluster
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
+                .adaptiveContentWidth()
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 8.dp)
+                .padding(top = 8.dp)
         ) {
             Surface(
-                shape = RoundedCornerShape(22.dp),
+                shape = RoundedCornerShape(20.dp),
                 color = colorScheme.surface,
                 shadowElevation = 3.dp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(22.dp))
+                    .padding(horizontal = 14.dp)
+                    .clip(RoundedCornerShape(20.dp))
                     .animateContentSize()
-                    .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(22.dp))
+                    .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(20.dp))
                     .testTag("telemetry_hud_card")
             ) {
-                Column {
-                    // Top Accent Line (Telemetry Tier Indicator)
+                Column(
+                    modifier = Modifier.padding(
+                        horizontal = 12.dp,
+                        vertical = if (isHeaderExpanded) 12.dp else 8.dp
+                    )
+                ) {
                     val accentLineColor = when {
                         activeSession?.isPaused == true -> customColors.warning
                         activeSession != null -> colorScheme.error
                         currentLocation != null -> colorScheme.tertiary
                         else -> customColors.warning
                     }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(3.dp)
-                            .background(accentLineColor)
-                    )
+                    val compactSpeed = (currentLocation?.speed ?: 0f) * settings.speedUnit.multiplier
 
-                    Column(
-                        modifier = Modifier.padding(
-                            horizontal = 12.dp,
-                            vertical = if (isHeaderExpanded) 12.dp else 7.dp
-                        )
+                    // Title Bar (single slim bar when collapsed; full header when expanded)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val compactSpeed = (currentLocation?.speed ?: 0f) * settings.speedUnit.multiplier
-                        // Title Bar (single slim bar when collapsed; full header when expanded)
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { isHeaderExpanded = !isHeaderExpanded },
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
+                            Box(
                                 modifier = Modifier
-                                    .weight(1f)
-                                    .clickable { isHeaderExpanded = !isHeaderExpanded },
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(accentLineColor)
+                                    .size(9.dp)
+                                    .clip(CircleShape)
+                                    .background(accentLineColor)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.padding(end = 8.dp)) {
+                                Text(
+                                    text = if (isHeaderExpanded) "GeoTrace Live Telemetry" else "GeoTrace",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(modifier = Modifier.padding(end = 8.dp)) {
-                                    Text(
-                                        text = if (isHeaderExpanded) "GeoTrace Live Telemetry" else "GeoTrace",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = if (!isHeaderExpanded) {
-                                            // Collapsed HUD: show live sensor telemetry (speed, accuracy, trackpoints) — never duplicate bottom pill timer/distance
-                                            val fixText = if (currentLocation != null) {
-                                                "${String.format(Locale.US, "%.1f", compactSpeed)} ${settings.speedUnit.label} • ±${currentLocation?.accuracy?.toInt()}m"
-                                            } else {
-                                                "Awaiting fix"
-                                            }
-                                            when {
-                                                activeSession?.isPaused == true -> "PAUSED • $fixText"
-                                                activeSession != null -> "$fixText • ${trailPoints.size} pts"
-                                                else -> fixText
-                                            }
+                                Text(
+                                    text = if (!isHeaderExpanded) {
+                                        val fixText = if (currentLocation != null) {
+                                            "${String.format(Locale.US, "%.1f", compactSpeed)} ${settings.speedUnit.label} • ±${currentLocation?.accuracy?.toInt()}m"
                                         } else {
-                                            when {
-                                                activeSession?.isPaused == true -> "PAUSED • ${activeSession?.name}"
-                                                activeSession != null -> "RECORDING • ${activeSession?.name}"
-                                                trackingMode == TrackingMode.POWER_SAVER -> "CELLULAR ONLY • BASE STATION TELEMETRY"
-                                                currentLocation?.provider == "cellular" -> "CELLULAR FIX • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
-                                                currentLocation != null -> "POSITION LOCKED • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
-                                                else -> "STANDBY • AWAITING LOCATION FIX"
-                                            }
-                                        },
-                                        fontSize = if (isHeaderExpanded) 9.sp else 10.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontFamily = if (isHeaderExpanded) FontFamily.Default else FontFamily.Monospace,
-                                        letterSpacing = 0.03.sp,
-                                        color = if (trackingMode == TrackingMode.POWER_SAVER && isHeaderExpanded) Color(0xFFD97706) else accentLineColor,
-                                        maxLines = 1,
-                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                if (!isHeaderExpanded) {
-                                    Surface(
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = customColors.surfaceContainerLow,
-                                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
-                                        modifier = Modifier
-                                            .height(40.dp)
-                                            .clickable { isHeaderExpanded = true }
-                                            .testTag("toggle_header_btn")
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 10.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = "HUD",
-                                                fontSize = 10.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                color = colorScheme.primary
-                                            )
-                                            Spacer(modifier = Modifier.width(2.dp))
-                                            Icon(
-                                                imageVector = Icons.Default.KeyboardArrowDown,
-                                                contentDescription = "Expand Telemetry HUD",
-                                                tint = colorScheme.primary,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                            "Awaiting fix"
                                         }
-                                    }
-                                }
-
-                                // Hamburger Menu on the RIGHT (44dp accessible target)
-                                IconButton(
-                                    onClick = onOpenMenu,
-                                    modifier = Modifier
-                                        .size(44.dp)
-                                        .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
-                                        .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
-                                        .testTag("menu_btn")
-                                ) {
-                                    Icon(
-                                        Icons.Default.Menu,
-                                        contentDescription = "Open Application Menu",
-                                        tint = colorScheme.primary,
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
+                                        when {
+                                            activeSession?.isPaused == true -> "PAUSED • $fixText"
+                                            activeSession != null -> "$fixText • ${trailPoints.size} pts"
+                                            else -> fixText
+                                        }
+                                    } else {
+                                        when {
+                                            activeSession?.isPaused == true -> "PAUSED • ${activeSession?.name}"
+                                            activeSession != null -> "RECORDING • ${activeSession?.name}"
+                                            trackingMode == TrackingMode.POWER_SAVER -> "CELLULAR ONLY • BASE STATION TELEMETRY"
+                                            currentLocation?.provider == "cellular" -> "CELLULAR FIX • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
+                                            currentLocation != null -> "POSITION LOCKED • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
+                                            else -> "STANDBY • AWAITING LOCATION FIX"
+                                        }
+                                    },
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = if (isHeaderExpanded) 9.5.sp else 10.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontFamily = if (isHeaderExpanded) InterFontFamily else JetBrainsMonoFontFamily,
+                                        fontFeatureSettings = if (isHeaderExpanded) null else "tnum",
+                                        letterSpacing = 0.03.sp
+                                    ),
+                                    color = if (trackingMode == TrackingMode.POWER_SAVER && isHeaderExpanded) customColors.warning else accentLineColor,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         }
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (isHeaderExpanded) colorScheme.primary.copy(alpha = 0.12f) else customColors.surfaceContainerLow,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isHeaderExpanded) colorScheme.primary.copy(alpha = 0.45f)
+                                    else colorScheme.outlineVariant.copy(alpha = 0.7f)
+                                ),
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { isHeaderExpanded = !isHeaderExpanded }
+                                    .testTag("toggle_header_btn")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "HUD",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = colorScheme.primary
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Icon(
+                                        imageVector = if (isHeaderExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                        contentDescription = if (isHeaderExpanded) "Collapse Telemetry HUD" else "Expand Telemetry HUD",
+                                        tint = colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+
+                            IconButton(
+                                onClick = onOpenMenu,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
+                                    .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
+                                    .testTag("menu_btn")
+                            ) {
+                                Icon(
+                                    Icons.Default.Menu,
+                                    contentDescription = "Open Application Menu",
+                                    tint = colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
 
                         // Animated Collapsible Body
                         AnimatedVisibility(
@@ -649,12 +673,15 @@ fun MapScreen(
                                                 } else {
                                                     "--.-----°, --.-----°"
                                                 },
-                                                fontSize = 11.sp,
-                                                fontFamily = FontFamily.Monospace,
-                                                fontWeight = FontWeight.SemiBold,
+                                                style = MaterialTheme.typography.bodySmall.copy(
+                                                    fontSize = 11.sp,
+                                                    fontFamily = JetBrainsMonoFontFamily,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    fontFeatureSettings = "tnum"
+                                                ),
                                                 color = if (vectorCoordsCopied) colorScheme.primary else colorScheme.onSurface,
                                                 maxLines = 1,
-                                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                                overflow = TextOverflow.Ellipsis
                                             )
                                         }
                                         if (hasFix) {
@@ -664,7 +691,7 @@ fun MapScreen(
                                                     color = if (vectorCoordsCopied) colorScheme.primary else colorScheme.surface
                                                 ) {
                                                     Row(
-                                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                                                         verticalAlignment = Alignment.CenterVertically
                                                     ) {
                                                         Icon(
@@ -695,14 +722,14 @@ fun MapScreen(
                                                         }
                                                     },
                                                     modifier = Modifier
-                                                        .size(40.dp)
+                                                        .size(48.dp)
                                                         .testTag("share_vector_coord_btn")
                                                 ) {
                                                     Icon(
                                                         imageVector = Icons.Default.Share,
                                                         contentDescription = "Share Coordinates",
                                                         tint = colorScheme.onSurfaceVariant,
-                                                        modifier = Modifier.size(16.dp)
+                                                        modifier = Modifier.size(17.dp)
                                                     )
                                                 }
                                             }
@@ -712,7 +739,7 @@ fun MapScreen(
 
                                 Spacer(modifier = Modifier.height(8.dp))
 
-                                // 4 Tabular Telemetry Scalar Metrics with Responsive Weighted Alignment
+                                // 4 Tabular Telemetry Scalar Metrics with Consistent 3-Row Vertical Alignment
                                 val convertedSpeed = (currentLocation?.speed ?: 0f) * settings.speedUnit.multiplier
                                 Row(
                                     modifier = Modifier
@@ -732,7 +759,7 @@ fun MapScreen(
                                             subtitle = currentLocation?.gaitLabel ?: "Stationary"
                                         )
                                     }
-                                    Box(modifier = Modifier.width(1.dp).height(32.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
+                                    Box(modifier = Modifier.width(1.dp).height(36.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
                                     Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
                                         val pace = activeSession?.avgPaceMinPerKm?.takeIf { it != "--:--" }
                                             ?: currentLocation?.paceMinPerKm?.takeIf { it != "--:--" }
@@ -741,20 +768,20 @@ fun MapScreen(
                                             value = activeSession?.formattedDistance ?: "0 m",
                                             unit = "",
                                             valueColor = colorScheme.secondary,
-                                            subtitle = pace
+                                            subtitle = pace ?: "No pace"
                                         )
                                     }
-                                    Box(modifier = Modifier.width(1.dp).height(32.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
+                                    Box(modifier = Modifier.width(1.dp).height(36.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
                                     Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
                                         TelemetryMetric(
                                             label = "ACCURACY",
                                             value = if (currentLocation != null) "±${currentLocation?.accuracy?.toInt()}m" else "--",
                                             unit = "",
                                             valueColor = if ((currentLocation?.accuracy ?: 99f) <= 10f) colorScheme.tertiary else customColors.warning,
-                                            subtitle = currentLocation?.provider?.uppercase()
+                                            subtitle = currentLocation?.provider?.uppercase() ?: "Standby"
                                         )
                                     }
-                                    Box(modifier = Modifier.width(1.dp).height(32.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
+                                    Box(modifier = Modifier.width(1.dp).height(36.dp).background(colorScheme.outlineVariant.copy(alpha = 0.4f)))
                                     Box(modifier = Modifier.weight(1f).padding(start = 6.dp)) {
                                         TelemetryMetric(
                                             label = "TRACKPOINTS",
@@ -787,12 +814,12 @@ fun MapScreen(
                                             shape = RoundedCornerShape(10.dp),
                                             modifier = Modifier
                                                 .weight(1f)
-                                                .height(40.dp)
+                                                .heightIn(min = 48.dp)
                                                 .testTag("drop_waypoint_hud_btn")
                                         ) {
                                             Icon(Icons.Default.Flag, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(6.dp))
-                                            Text("Pin Waypoint", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                            Text("Pin Waypoint", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                                         }
 
                                         val isPaused = activeSession?.isPaused == true
@@ -807,7 +834,7 @@ fun MapScreen(
                                             ),
                                             modifier = Modifier
                                                 .weight(1f)
-                                                .height(40.dp)
+                                                .heightIn(min = 48.dp)
                                                 .testTag("pause_resume_hud_btn")
                                         ) {
                                             Icon(
@@ -818,14 +845,14 @@ fun MapScreen(
                                             Spacer(modifier = Modifier.width(6.dp))
                                             Text(
                                                 text = if (isPaused) "Resume Trail" else "Pause Trail",
-                                                fontSize = 11.sp,
+                                                fontSize = 12.sp,
                                                 fontWeight = FontWeight.Bold
                                             )
                                         }
                                     }
                                 } else if (!isPickingGeofenceCenter) {
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    FilledTonalButton(
+                                    Button(
                                         onClick = {
                                             if (!com.geotrace.service.LocationForegroundService.hasLocationPermission(context)) {
                                                 Toast.makeText(context, "Grant Location permission to record a field trail.", Toast.LENGTH_SHORT).show()
@@ -835,61 +862,23 @@ fun MapScreen(
                                                 showStartDialog = true
                                             }
                                         },
-                                        shape = RoundedCornerShape(10.dp),
+                                        shape = RoundedCornerShape(12.dp),
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .height(40.dp)
+                                            .heightIn(min = 48.dp)
                                             .testTag("start_track_hud_btn")
                                     ) {
-                                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                                         Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Record Field Trail", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(top = 8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Surface(
-                                        shape = RoundedCornerShape(12.dp),
-                                        color = customColors.surfaceContainerLow,
-                                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
-                                        modifier = Modifier
-                                            .clickable { isHeaderExpanded = false }
-                                            .testTag("toggle_header_btn")
-                                    ) {
-                                        Row(
-                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.Center
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.KeyboardArrowUp,
-                                                contentDescription = "Collapse Telemetry HUD",
-                                                tint = colorScheme.primary,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(6.dp))
-                                            Text(
-                                                text = "HIDE HUD",
-                                                fontSize = 10.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                letterSpacing = 0.06.sp,
-                                                color = colorScheme.primary
-                                            )
-                                        }
+                                        Text("Record Field Trail", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
                             }
                         }
                     }
-                }
             }
 
-            // Quick Floating Badges Row (Horizontally scrollable for small screens)
+            // Quick Floating Badges Row (Edge-to-edge scroll with clean 14dp leading/trailing gutter; zero clipping)
             val badgesScrollState = rememberScrollState()
             Row(
                 modifier = Modifier
@@ -899,6 +888,49 @@ fun MapScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                Spacer(modifier = Modifier.width(6.dp))
+
+                // Primary Record Trail Quick Pill (shown ONLY when HUD is collapsed so it never duplicates HUD CTA)
+                if (!isHeaderExpanded && activeSession == null && !isPickingGeofenceCenter) {
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = colorScheme.primary,
+                        shadowElevation = 3.dp,
+                        modifier = Modifier
+                            .heightIn(min = 40.dp)
+                            .clip(RoundedCornerShape(20.dp))
+                            .clickable {
+                                if (!com.geotrace.service.LocationForegroundService.hasLocationPermission(context)) {
+                                    Toast.makeText(context, "Grant Location permission to record a field trail.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+                                    sessionNameInput = "Field Trail $timeStr"
+                                    showStartDialog = true
+                                }
+                            }
+                            .testTag("start_track_btn")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.PlayArrow,
+                                contentDescription = "Start Trail Recording",
+                                tint = colorScheme.onPrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "Record Trail",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onPrimary
+                            )
+                        }
+                    }
+                }
+
                 // Place & Coordinate Search Pill
                 Surface(
                     shape = RoundedCornerShape(20.dp),
@@ -909,6 +941,8 @@ fun MapScreen(
                         if (selectedSearchPin != null) colorScheme.primary else colorScheme.outlineVariant
                     ),
                     modifier = Modifier
+                        .heightIn(min = 40.dp)
+                        .clip(RoundedCornerShape(20.dp))
                         .clickable {
                             viewModel.refreshSearchNetworkStatus()
                             viewModel.updateSearchQuery(searchQuery, deviceSearchTargets)
@@ -918,7 +952,7 @@ fun MapScreen(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp)
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Search,
@@ -933,7 +967,7 @@ fun MapScreen(
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurface,
                             maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.widthIn(max = if (selectedSearchPin != null) 124.dp else 72.dp)
                         )
                     }
@@ -946,12 +980,14 @@ fun MapScreen(
                     shadowElevation = 3.dp,
                     border = BorderStroke(1.dp, colorScheme.outlineVariant),
                     modifier = Modifier
+                        .heightIn(min = 40.dp)
+                        .clip(RoundedCornerShape(20.dp))
                         .clickable { showProfileDialog = true }
                         .testTag("floating_profile_pill")
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                     ) {
                         val profile = getProfileInfo(trackingMode, colorScheme)
                         Icon(profile.icon, contentDescription = null, tint = profile.badgeColor, modifier = Modifier.size(15.dp))
@@ -965,7 +1001,7 @@ fun MapScreen(
                         Spacer(modifier = Modifier.width(6.dp))
                         Surface(
                             shape = RoundedCornerShape(4.dp),
-                            color = profile.badgeColor.copy(alpha = 0.12f)
+                            color = profile.badgeColor.copy(alpha = 0.14f)
                         ) {
                             Text(
                                 text = profile.power,
@@ -980,16 +1016,17 @@ fun MapScreen(
                     }
                 }
 
-                // Floating Devices / Tracking Group & Off-Grid P2P Pill (shown only when groups, fleet, or P2P are active — bottom bar already houses Devices)
+                // Floating Devices / Tracking Group & Off-Grid P2P Pill (opaque composited container over surface)
                 if (hasQuickLocateTargets || activeGroup != null || isP2PEnabled) {
+                    val chipContainerColor = when {
+                        activeGroup != null -> colorScheme.primaryContainer.copy(alpha = 0.42f).compositeOver(colorScheme.surface)
+                        deduplicatedPersonalDevices.isNotEmpty() -> colorScheme.secondaryContainer.copy(alpha = 0.42f).compositeOver(colorScheme.surface)
+                        isP2PEnabled -> colorScheme.tertiaryContainer.copy(alpha = 0.42f).compositeOver(colorScheme.surface)
+                        else -> colorScheme.surface
+                    }
                     Surface(
                         shape = RoundedCornerShape(20.dp),
-                        color = when {
-                            activeGroup != null -> colorScheme.primaryContainer.copy(alpha = 0.5f)
-                            deduplicatedPersonalDevices.isNotEmpty() -> colorScheme.secondaryContainer.copy(alpha = 0.5f)
-                            isP2PEnabled -> colorScheme.tertiaryContainer.copy(alpha = 0.55f)
-                            else -> colorScheme.surface
-                        },
+                        color = chipContainerColor,
                         shadowElevation = 3.dp,
                         border = BorderStroke(
                             1.dp,
@@ -1001,6 +1038,8 @@ fun MapScreen(
                             }
                         ),
                         modifier = Modifier
+                            .heightIn(min = 40.dp)
+                            .clip(RoundedCornerShape(20.dp))
                             .clickable {
                                 if (hasQuickLocateTargets) {
                                     showDevicesSheet = true
@@ -1012,7 +1051,7 @@ fun MapScreen(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                         ) {
                             Icon(
                                 Icons.Default.Group,
@@ -1048,51 +1087,11 @@ fun MapScreen(
                                 Spacer(modifier = Modifier.width(5.dp))
                                 Text(
                                     text = "GHOST",
-                                    fontSize = 8.sp,
+                                    fontSize = 8.5.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = Color(0xFFD97706)
+                                    color = customColors.warning
                                 )
                             }
-                        }
-                    }
-                }
-
-                // Option 1 On-Demand Trail Recorder Chip (replaces permanent standby bottom bar)
-                if (activeSession == null && !isPickingGeofenceCenter) {
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = colorScheme.surface,
-                        shadowElevation = 3.dp,
-                        border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.55f)),
-                        modifier = Modifier
-                            .clickable {
-                                if (!com.geotrace.service.LocationForegroundService.hasLocationPermission(context)) {
-                                    Toast.makeText(context, "Grant Location permission to record a field trail.", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    val timeStr = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
-                                    sessionNameInput = "Field Trail $timeStr"
-                                    showStartDialog = true
-                                }
-                            }
-                            .testTag("start_track_btn")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.PlayArrow,
-                                contentDescription = "Start Trail Recording",
-                                tint = colorScheme.primary,
-                                modifier = Modifier.size(15.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Record Trail",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = colorScheme.primary
-                            )
                         }
                     }
                 }
@@ -1104,16 +1103,18 @@ fun MapScreen(
                     } else 0
                     Surface(
                         shape = RoundedCornerShape(20.dp),
-                        color = colorScheme.primaryContainer.copy(alpha = 0.7f),
+                        color = colorScheme.primaryContainer.copy(alpha = 0.65f).compositeOver(colorScheme.surface),
                         shadowElevation = 3.dp,
                         border = BorderStroke(1.dp, colorScheme.primary),
                         modifier = Modifier
+                            .heightIn(min = 40.dp)
+                            .clip(RoundedCornerShape(20.dp))
                             .clickable { showOfflineMapsDialog = true }
                             .testTag("offline_caching_chip")
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
                         ) {
                             Icon(
                                 Icons.Default.CloudDownload,
@@ -1136,29 +1137,32 @@ fun MapScreen(
                 val activeZone = geofenceZones.firstOrNull { it.isEnabled && it.isInside }
                 if (activeZone != null) {
                     val isHotspot = activeZone.category == com.geotrace.model.GeofenceCategory.BODA_HOTSPOT
+                    val zoneTint = if (isHotspot) customColors.warning else colorScheme.tertiary
                     Surface(
                         shape = RoundedCornerShape(20.dp),
-                        color = if (isHotspot) customColors.warning.copy(alpha = 0.14f) else colorScheme.tertiary.copy(alpha = 0.14f),
+                        color = zoneTint.copy(alpha = 0.16f).compositeOver(colorScheme.surface),
                         shadowElevation = 3.dp,
-                        border = BorderStroke(1.dp, if (isHotspot) customColors.warning else colorScheme.tertiary),
-                        modifier = Modifier.testTag("active_geofence_chip")
+                        border = BorderStroke(1.dp, zoneTint),
+                        modifier = Modifier
+                            .heightIn(min = 40.dp)
+                            .testTag("active_geofence_chip")
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
                         ) {
                             Box(
                                 modifier = Modifier
                                     .size(7.dp)
                                     .clip(CircleShape)
-                                    .background(if (isHotspot) customColors.warning else colorScheme.tertiary)
+                                    .background(zoneTint)
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = activeZone.name,
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (isHotspot) customColors.warning else colorScheme.tertiary
+                                color = zoneTint
                             )
                         }
                     }
@@ -1170,26 +1174,28 @@ fun MapScreen(
                         shape = RoundedCornerShape(20.dp),
                         color = colorScheme.surface,
                         shadowElevation = 3.dp,
-                        border = BorderStroke(1.dp, Color(0xFFD97706).copy(alpha = 0.55f)),
+                        border = BorderStroke(1.dp, customColors.warning.copy(alpha = 0.55f)),
                         modifier = Modifier
+                            .heightIn(min = 40.dp)
+                            .clip(RoundedCornerShape(20.dp))
                             .clickable {
                                 viewModel.toggleCellTowerPin(false)
-                                android.widget.Toast.makeText(
+                                Toast.makeText(
                                     context,
                                     "Cell tower pin hidden — restore in Layers",
-                                    android.widget.Toast.LENGTH_SHORT
+                                    Toast.LENGTH_SHORT
                                 ).show()
                             }
                             .testTag("cell_tower_status_chip")
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
                         ) {
                             Icon(
                                 Icons.Default.CellTower,
                                 contentDescription = null,
-                                tint = Color(0xFFD97706),
+                                tint = customColors.warning,
                                 modifier = Modifier.size(13.dp)
                             )
                             Spacer(modifier = Modifier.width(5.dp))
@@ -1197,11 +1203,13 @@ fun MapScreen(
                                 text = "Tower ±${cellTowerLocation?.rangeMeters?.toInt()}m",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = Color(0xFFD97706)
+                                color = customColors.warning
                             )
                         }
                     }
                 }
+
+                Spacer(modifier = Modifier.width(6.dp))
             }
 
             if (isPickingGeofenceCenter) {
@@ -1211,7 +1219,9 @@ fun MapScreen(
                     color = colorScheme.tertiaryContainer,
                     shadowElevation = 4.dp,
                     border = BorderStroke(1.5.dp, colorScheme.tertiary),
-                    modifier = Modifier.testTag("map_pick_geofence_banner")
+                    modifier = Modifier
+                        .padding(horizontal = 14.dp)
+                        .testTag("map_pick_geofence_banner")
                 ) {
                     Row(
                         modifier = Modifier
@@ -1239,11 +1249,13 @@ fun MapScreen(
                                 viewModel.cancelMapPick()
                                 onReturnToGeofence?.invoke()
                             },
-                            modifier = Modifier.testTag("cancel_map_pick_btn")
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("cancel_map_pick_btn")
                         ) {
                             Text(
                                 text = "Cancel",
-                                fontSize = 11.sp,
+                                fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = colorScheme.error
                             )
@@ -1281,12 +1293,12 @@ fun MapScreen(
                     Spacer(modifier = Modifier.width(7.dp))
                     Text(
                         text = "${session.formatDuration(liveRecordingNowMs)} • ${session.formattedDistance}",
-                        fontSize = 12.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = accentPillColor,
+                        style = TelemetryScalarStyle.copy(
+                            fontSize = 12.sp,
+                            color = accentPillColor
+                        ),
                         maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
@@ -1295,27 +1307,27 @@ fun MapScreen(
                             if (isPaused) viewModel.resumeTracking() else viewModel.pauseTracking()
                         },
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(48.dp)
                             .testTag("pause_resume_pill_btn")
                     ) {
                         Icon(
                             imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
                             contentDescription = if (isPaused) "Resume Recording" else "Pause Recording",
                             tint = if (isPaused) colorScheme.tertiary else colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(19.dp)
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                     Button(
                         onClick = { viewModel.stopTracking() },
                         modifier = Modifier
-                            .height(36.dp)
+                            .heightIn(min = 44.dp)
                             .testTag("stop_track_btn"),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = colorScheme.error,
                             contentColor = colorScheme.onError
                         ),
                         shape = RoundedCornerShape(18.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 0.dp)
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 0.dp)
                     ) {
                         Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(15.dp))
                         Spacer(modifier = Modifier.width(4.dp))
@@ -1610,7 +1622,9 @@ fun MapScreen(
         ) {
             Column(
                 modifier = Modifier
+                    .adaptiveContentWidth()
                     .fillMaxWidth()
+                    .align(Alignment.CenterHorizontally)
                     .verticalScroll(rememberScrollState())
                     .navigationBarsPadding()
                     .padding(horizontal = 18.dp, vertical = 8.dp),
@@ -1639,7 +1653,9 @@ fun MapScreen(
                             showDevicesSheet = false
                             onNavigateToGroups?.invoke()
                         },
-                        modifier = Modifier.testTag("manage_groups_from_sheet_btn")
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("manage_groups_from_sheet_btn")
                     ) {
                         Text("Manage", fontWeight = FontWeight.Bold)
                     }
@@ -1660,7 +1676,7 @@ fun MapScreen(
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = customColors.surfaceContainerLow,
-                        border = BorderStroke(1.dp, if (isOffline) Color(0xFFD97706).copy(alpha = 0.5f) else colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                        border = BorderStroke(1.dp, if (isOffline) customColors.warning.copy(alpha = 0.5f) else colorScheme.outlineVariant.copy(alpha = 0.6f)),
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
@@ -1679,10 +1695,10 @@ fun MapScreen(
                                         )
                                     )
                                 } else {
-                                    android.widget.Toast.makeText(
+                                    Toast.makeText(
                                         context,
                                         "Waiting for ${member.displayName}'s location sync...",
-                                        android.widget.Toast.LENGTH_SHORT
+                                        Toast.LENGTH_SHORT
                                     ).show()
                                 }
                             }
@@ -1717,7 +1733,7 @@ fun MapScreen(
                                 Text(
                                     text = if (isOffline) "$distStr • Offline • ${member.batteryPercent}%" else "$distStr • Live • ${member.batteryPercent}%",
                                     fontSize = 11.sp,
-                                    color = if (isOffline) Color(0xFFD97706) else colorScheme.onSurfaceVariant
+                                    color = if (isOffline) customColors.warning else colorScheme.onSurfaceVariant
                                 )
                             }
                             Icon(
@@ -1746,7 +1762,7 @@ fun MapScreen(
                     Surface(
                         shape = RoundedCornerShape(14.dp),
                         color = customColors.surfaceContainerLow,
-                        border = BorderStroke(1.dp, if (devStale) Color(0xFFD97706).copy(alpha = 0.5f) else Color(0xFF7C3AED).copy(alpha = 0.45f)),
+                        border = BorderStroke(1.dp, if (devStale) customColors.warning.copy(alpha = 0.5f) else customColors.fleetAccent.copy(alpha = 0.45f)),
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
@@ -1764,10 +1780,10 @@ fun MapScreen(
                                         )
                                     )
                                 } else {
-                                    android.widget.Toast.makeText(
+                                    Toast.makeText(
                                         context,
                                         "Waiting for ${device.deviceName.ifBlank { "device" }} location sync...",
-                                        android.widget.Toast.LENGTH_SHORT
+                                        Toast.LENGTH_SHORT
                                     ).show()
                                 }
                             }
@@ -1781,7 +1797,7 @@ fun MapScreen(
                                 modifier = Modifier
                                     .size(34.dp)
                                     .clip(CircleShape)
-                                    .background(Color(0xFF7C3AED)),
+                                    .background(customColors.fleetAccent),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
@@ -1802,7 +1818,7 @@ fun MapScreen(
                                 Text(
                                     text = "$distStr • $devFreshness • ${device.batteryPercent}%",
                                     fontSize = 11.sp,
-                                    color = if (devStale) Color(0xFFD97706) else colorScheme.onSurfaceVariant
+                                    color = if (devStale) customColors.warning else colorScheme.onSurfaceVariant
                                 )
                             }
                             Icon(
@@ -2018,41 +2034,34 @@ private fun TelemetryMetric(
     Column {
         Text(
             text = label,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.04.sp,
+            style = TelemetryHeaderLabelStyle,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1
         )
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
                 text = value,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold,
-                color = valueColor,
-                fontFamily = FontFamily.Monospace,
+                style = TelemetryScalarStyle.copy(color = valueColor),
                 maxLines = 1
             )
             if (unit.isNotBlank()) {
                 Spacer(modifier = Modifier.width(2.dp))
                 Text(
                     text = unit,
-                    fontSize = 9.sp,
+                    fontSize = 10.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1
                 )
             }
         }
-        if (!subtitle.isNullOrBlank()) {
-            Text(
-                text = subtitle,
-                fontSize = 8.5.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-            )
-        }
+        Text(
+            text = subtitle?.takeIf { it.isNotBlank() } ?: " ",
+            fontSize = 9.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 

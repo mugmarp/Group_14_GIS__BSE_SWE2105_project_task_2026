@@ -54,7 +54,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -66,6 +65,7 @@ import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineMapRegion
 import com.geotrace.service.OfflineMapManager
+import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.TrackerViewModel
 import org.osmdroid.util.BoundingBox
@@ -258,8 +258,11 @@ fun OfflineMapsDialog(
                                 ) {
                                     Text(
                                         text = "${progress.completedTiles} / ${progress.totalTiles} tiles (Zoom ${progress.currentZoom})",
-                                        fontSize = 11.sp,
-                                        fontFamily = FontFamily.Monospace,
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontSize = 11.sp,
+                                            fontFamily = JetBrainsMonoFontFamily,
+                                            fontFeatureSettings = "tnum"
+                                        ),
                                         color = colorScheme.onSurfaceVariant,
                                         modifier = Modifier.weight(1f)
                                     )

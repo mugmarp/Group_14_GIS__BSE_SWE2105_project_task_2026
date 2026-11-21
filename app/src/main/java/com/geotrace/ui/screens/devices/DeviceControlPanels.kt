@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -28,7 +29,6 @@ import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -62,8 +62,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.sp
 import com.geotrace.model.Group
 import com.geotrace.model.MemberLocation
 import com.geotrace.model.P2PMeshState
+import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
 import com.google.firebase.auth.FirebaseUser
 
@@ -191,6 +192,8 @@ fun ThisDeviceCompactCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .clickable { expanded = !expanded },
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -236,7 +239,7 @@ fun ThisDeviceCompactCard(
                         )
                     }
 
-                    if (currentUser != null || isP2PEnabled) {
+                    if (currentUser != null) {
                         IconButton(
                             onClick = onSyncNow,
                             enabled = !isSyncing,
@@ -464,20 +467,27 @@ fun DevicesSubTabBar(
                     color = if (isSelected) colorScheme.primary else colorScheme.surface.copy(alpha = 0.0f),
                     modifier = Modifier
                         .weight(1f)
+                        .heightIn(min = 48.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .clickable { onSelectTab(tab) }
                         .testTag(tab.testTag)
                 ) {
-                    Text(
-                        text = if (count > 0) "${tab.label} ($count)" else tab.label,
-                        fontSize = 12.sp,
-                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                        color = if (isSelected) colorScheme.onPrimary else colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(vertical = 11.dp, horizontal = 4.dp)
-                    )
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 12.dp)
+                    ) {
+                        Text(
+                            text = if (count > 0) "${tab.label} ($count)" else tab.label,
+                            fontSize = 12.sp,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
+                            color = if (isSelected) colorScheme.onPrimary else colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         }
@@ -596,9 +606,12 @@ fun ActiveGroupHeroCard(
                             )
                             Text(
                                 text = activeGroup.inviteCode,
-                                fontSize = 16.sp,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontSize = 16.sp,
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFeatureSettings = "tnum"
+                                ),
                                 color = colorScheme.primary
                             )
                         }
@@ -961,12 +974,33 @@ fun AuthGateCard(
                 color = colorScheme.onSurface
             )
             Text(
-                text = "Sign in with Google to track all your phones and tablets on one map, ring misplaced devices remotely, and share tracking groups.",
+                text = "Sync your devices on one map, ring misplaced hardware remotely, and share live groups.",
                 fontSize = 12.sp,
                 color = colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
             )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(vertical = 4.dp)
+            ) {
+                listOf("Fleet Sync", "Remote Ring", "Group Sharing").forEach { tag ->
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = LocalCustomColors.current.surfaceContainerLow,
+                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.55f))
+                    ) {
+                        Text(
+                            text = tag,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(10.dp))
 
             Button(
@@ -987,7 +1021,20 @@ fun AuthGateCard(
                     )
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Surface(
+                            shape = CircleShape,
+                            color = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = "G",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = colorScheme.primary
+                                )
+                            }
+                        }
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("Sign in with Google", fontWeight = FontWeight.Bold)
                     }
@@ -995,7 +1042,10 @@ fun AuthGateCard(
             }
 
             Spacer(modifier = Modifier.height(6.dp))
-            TextButton(onClick = onJumpToP2PClick) {
+            TextButton(
+                onClick = onJumpToP2PClick,
+                modifier = Modifier.heightIn(min = 48.dp)
+            ) {
                 Text("Offline? Use P2P Radar without signing in", fontSize = 12.sp)
             }
         }

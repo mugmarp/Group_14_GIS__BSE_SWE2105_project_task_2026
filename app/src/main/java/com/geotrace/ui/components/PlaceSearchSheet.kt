@@ -62,7 +62,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -72,6 +71,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.geotrace.model.SearchPlaceResult
 import com.geotrace.model.SearchResultSource
+import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
 import java.util.Locale
 
@@ -387,9 +387,12 @@ private fun SearchResultRow(
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = if (dist < 1000.0) "${dist.toInt()}m" else String.format(Locale.US, "%.1fkm", dist / 1000.0),
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 10.sp,
+                    fontFamily = JetBrainsMonoFontFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFeatureSettings = "tnum"
+                ),
                 color = colorScheme.onSurfaceVariant
             )
         }

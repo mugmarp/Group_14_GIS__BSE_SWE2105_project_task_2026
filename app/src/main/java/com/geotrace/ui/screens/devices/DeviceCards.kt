@@ -42,7 +42,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,6 +52,7 @@ import com.geotrace.model.MemberLocation
 import com.geotrace.model.P2PPeer
 import com.geotrace.model.PersonalDevice
 import com.geotrace.model.SpeedUnit
+import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
 import java.util.Locale
 
@@ -204,16 +204,22 @@ fun MemberCard(
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = "${member.batteryPercent}% • ${formatTrackingModeLabel(member.trackingMode)} • ",
-                        fontSize = 10.sp,
-                        color = colorScheme.onSurfaceVariant,
-                        fontFamily = FontFamily.Monospace
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontFeatureSettings = "tnum"
+                        ),
+                        color = colorScheme.onSurfaceVariant
                     )
                     Text(
                         text = freshnessText,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (isStale) customColors.warning else successColor,
-                        fontFamily = FontFamily.Monospace
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontFeatureSettings = "tnum"
+                        ),
+                        color = if (isStale) customColors.warning else successColor
                     )
                 }
             }
@@ -354,16 +360,22 @@ fun PersonalDeviceCard(
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             text = "${device.batteryPercent}% • ${formatTrackingModeLabel(device.trackingMode)} • ",
-                            fontSize = 10.sp,
-                            color = colorScheme.onSurfaceVariant,
-                            fontFamily = FontFamily.Monospace
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontFeatureSettings = "tnum"
+                            ),
+                            color = colorScheme.onSurfaceVariant
                         )
                         Text(
                             text = freshnessText,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isStale) customColors.warning else successColor,
-                            fontFamily = FontFamily.Monospace
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontFeatureSettings = "tnum"
+                            ),
+                            color = if (isStale) customColors.warning else successColor
                         )
                     }
                 }
@@ -524,10 +536,13 @@ fun P2PPeerCard(
                     )
                     Text(
                         text = "Battery: ${peer.batteryPercent}% • Direct BLE/Wi-Fi • $ageText",
-                        fontSize = 10.sp,
-                        color = if (isStale) customColors.warning else successColor,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontFeatureSettings = "tnum"
+                        ),
+                        color = if (isStale) customColors.warning else successColor
                     )
                 }
             }

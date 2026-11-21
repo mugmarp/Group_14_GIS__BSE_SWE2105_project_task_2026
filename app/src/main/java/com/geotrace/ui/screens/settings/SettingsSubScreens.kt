@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.ExpandLess
@@ -43,6 +44,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -50,6 +52,9 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -64,30 +69,38 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.geotrace.BuildConfig
+import com.geotrace.model.AppThemeMode
 import com.geotrace.model.CoordinateFormat
-import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineMapRegion
 import com.geotrace.model.SpeedUnit
 import com.geotrace.model.TrackerSettings
 import com.geotrace.service.GeofenceApiStatus
 import com.geotrace.service.LocationForegroundService
 import com.geotrace.service.UpdateStatus
+import com.geotrace.ui.components.GeoTraceTopBar
+import com.geotrace.ui.components.HeadingUpToggleRow
+import com.geotrace.ui.components.ScreenListContentPadding
+import com.geotrace.ui.components.TileLayerPickerList
+import com.geotrace.ui.components.adaptiveContentWidth
 import com.geotrace.ui.screens.devices.hasBackgroundLocationPermission
 import com.geotrace.ui.screens.devices.isIgnoringBatteryOptimizations
 import com.geotrace.ui.screens.devices.openAppNotificationSettings
 import com.geotrace.ui.screens.devices.openBatteryOptimizationSettings
+import com.geotrace.ui.screens.formatCoordinates
+import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
 import com.geotrace.viewmodel.GroupViewModel
 import com.geotrace.viewmodel.TrackerViewModel
 import kotlinx.coroutines.launch
 import java.util.Locale
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun UnitsDisplaySettingsPage(
     viewModel: TrackerViewModel,
@@ -97,62 +110,58 @@ internal fun UnitsDisplaySettingsPage(
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
 
-    LazyColumn(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colorScheme.background),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentAlignment = Alignment.TopCenter
     ) {
-        item {
-            SettingsHeaderBar(
-                title = SettingsCategory.UNITS_DISPLAY.title,
-                subtitle = SettingsCategory.UNITS_DISPLAY.subtitle,
-                backContentDescription = "Back to Settings Hub",
-                backTestTag = "settings_sub_back_btn",
-                onBack = onBack
-            )
-        }
+        LazyColumn(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxSize(),
+            contentPadding = ScreenListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item {
+                GeoTraceTopBar(
+                    title = SettingsCategory.UNITS_DISPLAY.title,
+                    subtitle = SettingsCategory.UNITS_DISPLAY.subtitle,
+                    backContentDescription = "Back to Settings Hub",
+                    backTestTag = "settings_sub_back_btn",
+                    onBack = onBack
+                )
+            }
 
-        item {
-            SettingsSectionCard(
-                title = "Units & Coordinate Formats",
-                icon = Icons.Default.Speed
-            ) {
+            item {
+                SettingsSectionCard(
+                    title = "Units & Coordinate Formats",
+                    icon = Icons.Default.Speed
+                ) {
                 Text(
-                    text = "Velocity Scalar Unit:",
+                    text = "Velocity Scalar Unit",
                     color = colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    SpeedUnit.entries.forEach { unit ->
-                        val isSelected = settings.speedUnit == unit
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (isSelected) colorScheme.primary else colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                            border = BorderStroke(
-                                1.dp,
-                                if (isSelected) colorScheme.primary else colorScheme.outlineVariant
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 48.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { viewModel.updateSpeedUnit(unit) }
+                    val units = SpeedUnit.entries
+                    units.forEachIndexed { index, unit ->
+                        SegmentedButton(
+                            selected = settings.speedUnit == unit,
+                            onClick = { viewModel.updateSpeedUnit(unit) },
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = units.size),
+                            modifier = Modifier.heightIn(min = 48.dp)
                         ) {
-                            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 12.dp)) {
-                                Text(
-                                    text = unit.label,
-                                    color = if (isSelected) colorScheme.onPrimary else colorScheme.onSurface,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                            Text(
+                                text = unit.label,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
                         }
                     }
                 }
@@ -160,75 +169,98 @@ internal fun UnitsDisplaySettingsPage(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Text(
-                    text = "Coordinate Presentation:",
+                    text = "Coordinate Presentation",
                     color = colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    CoordinateFormat.entries.forEach { fmt ->
-                        val isSelected = settings.coordinateFormat == fmt
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (isSelected) colorScheme.primary else colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                            border = BorderStroke(
-                                1.dp,
-                                if (isSelected) colorScheme.primary else colorScheme.outlineVariant
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 48.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { viewModel.updateCoordinateFormat(fmt) }
+                    val formats = CoordinateFormat.entries
+                    formats.forEachIndexed { index, fmt ->
+                        SegmentedButton(
+                            selected = settings.coordinateFormat == fmt,
+                            onClick = { viewModel.updateCoordinateFormat(fmt) },
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = formats.size),
+                            modifier = Modifier.heightIn(min = 48.dp)
                         ) {
-                            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 12.dp, horizontal = 8.dp)) {
-                                Text(
-                                    text = if (fmt == CoordinateFormat.DECIMAL) "DD (0.334°)" else "DMS (0°20'N)",
-                                    color = if (isSelected) colorScheme.onPrimary else colorScheme.onSurface,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
+                            Text(
+                                text = if (fmt == CoordinateFormat.DECIMAL) "Decimal (DD)" else "DMS (Deg/Min)",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Sample: ${formatCoordinates(0.33400, 32.56750, settings.coordinateFormat)}",
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = JetBrainsMonoFontFamily,
+                        fontFeatureSettings = "tnum"
+                    ),
+                    color = colorScheme.onSurfaceVariant
+                )
             }
         }
 
         item {
             SettingsSectionCard(
-                title = "Hardware Screen Behavior",
-                icon = Icons.Default.Power
+                title = "Appearance & Hardware Screen",
+                icon = Icons.Default.BrightnessHigh
             ) {
+                Text(
+                    text = "Display Theme",
+                    color = colorScheme.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    val modes = AppThemeMode.entries
+                    modes.forEachIndexed { index, mode ->
+                        val label = when (mode) {
+                            AppThemeMode.LIGHT -> "Daylight"
+                            AppThemeMode.DARK -> "Night"
+                            AppThemeMode.SYSTEM -> "System"
+                        }
+                        SegmentedButton(
+                            selected = settings.themeMode == mode,
+                            onClick = { viewModel.updateThemeMode(mode) },
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("theme_mode_${mode.name.lowercase()}")
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+
+                HorizontalDivider(
+                    color = colorScheme.outlineVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(vertical = 12.dp)
+                )
+
                 SettingToggleRow(
                     title = "Keep Screen Active During Recording",
                     description = "Prevents display sleep during active field tracking sessions",
                     checked = settings.keepScreenOn,
                     onCheckedChange = { viewModel.toggleKeepScreenOn(it) }
                 )
-                Spacer(modifier = Modifier.height(8.dp))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(customColors.surfaceContainerLow, RoundedCornerShape(10.dp))
-                        .padding(10.dp)
-                ) {
-                    Text(
-                        text = if (settings.keepScreenOn) {
-                            "Wake lock active: live HUD stays illuminated while recording a trail."
-                        } else {
-                            "System timeout active: screen sleeps normally while background GPS continues."
-                        },
-                        color = colorScheme.onSurfaceVariant,
-                        fontSize = 11.sp,
-                        lineHeight = 15.sp
-                    )
-                }
             }
+        }
         }
     }
 }
@@ -245,88 +277,45 @@ internal fun MapLayersSettingsPage(
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
 
-    LazyColumn(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colorScheme.background),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentAlignment = Alignment.TopCenter
     ) {
-        item {
-            SettingsHeaderBar(
-                title = SettingsCategory.MAP_LAYERS.title,
-                subtitle = SettingsCategory.MAP_LAYERS.subtitle,
-                backContentDescription = "Back to Settings Hub",
-                backTestTag = "settings_sub_back_btn",
-                onBack = onBack
-            )
-        }
+        LazyColumn(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxSize(),
+            contentPadding = ScreenListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item {
+                GeoTraceTopBar(
+                    title = SettingsCategory.MAP_LAYERS.title,
+                    subtitle = SettingsCategory.MAP_LAYERS.subtitle,
+                    backContentDescription = "Back to Settings Hub",
+                    backTestTag = "settings_sub_back_btn",
+                    onBack = onBack
+                )
+            }
 
-        item {
-            SettingsSectionCard(
-                title = "Cartographic Tile Layer Sources",
-                icon = Icons.Default.Layers
-            ) {
+            item {
+                SettingsSectionCard(
+                    title = "Cartographic Tile Layer Sources",
+                    icon = Icons.Default.Layers
+                ) {
                 Text(
-                    text = "Select the active base map renderer for the live map viewport:",
+                    text = "Select the active base map renderer for the live map viewport",
                     color = colorScheme.onSurfaceVariant,
                     fontSize = 12.sp
                 )
                 Spacer(modifier = Modifier.height(10.dp))
 
-                MapTileType.entries.forEach { tileType ->
-                    val isSelected = settings.mapTileType == tileType
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (isSelected) colorScheme.primary.copy(alpha = 0.09f) else customColors.surfaceContainerLow,
-                        border = BorderStroke(
-                            if (isSelected) 1.5.dp else 1.dp,
-                            if (isSelected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.6f)
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable { viewModel.updateMapTileType(tileType) }
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = tileType.label,
-                                    color = if (isSelected) colorScheme.primary else colorScheme.onSurface,
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = tileType.description,
-                                    color = colorScheme.onSurfaceVariant,
-                                    fontSize = 11.sp,
-                                    lineHeight = 14.sp
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = if (isSelected) colorScheme.primary else colorScheme.surface,
-                                border = if (isSelected) null else BorderStroke(1.dp, colorScheme.outlineVariant)
-                            ) {
-                                Text(
-                                    text = if (isSelected) "Active" else "Select",
-                                    color = if (isSelected) colorScheme.onPrimary else colorScheme.onSurface,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
-                                )
-                            }
-                        }
-                    }
-                }
+                TileLayerPickerList(
+                    selectedTileType = settings.mapTileType,
+                    onSelectTileType = { viewModel.updateMapTileType(it) }
+                )
             }
         }
 
@@ -338,7 +327,6 @@ internal fun MapLayersSettingsPage(
                 Surface(
                     shape = RoundedCornerShape(12.dp),
                     color = customColors.surfaceContainerLow,
-                    border = BorderStroke(1.dp, colorScheme.outlineVariant),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Row(
@@ -407,22 +395,20 @@ internal fun MapLayersSettingsPage(
                     onCheckedChange = { viewModel.toggleFollowUser(it) }
                 )
 
-                HorizontalDivider(
-                    color = colorScheme.outlineVariant.copy(alpha = 0.6f),
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
+                Spacer(modifier = Modifier.height(10.dp))
 
-                SettingToggleRow(
-                    title = "Auto Heading-Up Map Rotation",
-                    description = "Rotates the map to match your compass or travel direction while following (two-finger twist always works)",
+                HeadingUpToggleRow(
                     checked = settings.autoRotateHeadingUp,
-                    onCheckedChange = { viewModel.toggleAutoRotateHeadingUp(it) }
+                    onCheckedChange = { viewModel.toggleAutoRotateHeadingUp(it) },
+                    testTag = "settings_heading_up_switch"
                 )
             }
+        }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun MotionFilteringSettingsPage(
     viewModel: TrackerViewModel,
@@ -434,66 +420,63 @@ internal fun MotionFilteringSettingsPage(
     val jitterCount by viewModel.filteredJitterCount.collectAsState()
     val jitterMeters by viewModel.filteredJitterMeters.collectAsState()
 
-    LazyColumn(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colorScheme.background),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentAlignment = Alignment.TopCenter
     ) {
-        item {
-            SettingsHeaderBar(
-                title = SettingsCategory.MOTION_FILTERING.title,
-                subtitle = SettingsCategory.MOTION_FILTERING.subtitle,
-                backContentDescription = "Back to Settings Hub",
-                backTestTag = "settings_sub_back_btn",
-                onBack = onBack
-            )
-        }
+        LazyColumn(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxSize(),
+            contentPadding = ScreenListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item {
+                GeoTraceTopBar(
+                    title = SettingsCategory.MOTION_FILTERING.title,
+                    subtitle = SettingsCategory.MOTION_FILTERING.subtitle,
+                    backContentDescription = "Back to Settings Hub",
+                    backTestTag = "settings_sub_back_btn",
+                    onBack = onBack
+                )
+            }
 
-        item {
-            SettingsSectionCard(
-                title = "Motion Thresholds & Jitter Filtering",
-                icon = Icons.Default.Tune
-            ) {
+            item {
+                SettingsSectionCard(
+                    title = "Motion Thresholds & Jitter Filtering",
+                    icon = Icons.Default.Tune
+                ) {
                 Text(
-                    text = "Stationary Deadband Filter (${settings.stationaryJitterThresholdMeters}m):",
+                    text = "Stationary Deadband Filter (${settings.stationaryJitterThresholdMeters}m)",
                     color = colorScheme.onSurfaceVariant,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    listOf(
-                        1.5f to "1.5m (Balanced)",
-                        3.0f to "3.0m (Aggressive)",
+                    val deadbandOptions = listOf(
+                        1.5f to "1.5m Balanced",
+                        3.0f to "3.0m Strict",
                         0f to "Off (Raw)"
-                    ).forEach { (threshold, label) ->
-                        val isSelected = settings.stationaryJitterThresholdMeters == threshold
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = if (isSelected) colorScheme.primary else colorScheme.surfaceVariant.copy(alpha = 0.45f),
-                            border = BorderStroke(
-                                1.dp,
-                                if (isSelected) colorScheme.primary else colorScheme.outlineVariant
-                            ),
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 48.dp)
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { viewModel.updateJitterThreshold(threshold) }
+                    )
+                    deadbandOptions.forEachIndexed { index, (threshold, label) ->
+                        SegmentedButton(
+                            selected = settings.stationaryJitterThresholdMeters == threshold,
+                            onClick = { viewModel.updateJitterThreshold(threshold) },
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = deadbandOptions.size),
+                            modifier = Modifier.heightIn(min = 48.dp)
                         ) {
-                            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(vertical = 10.dp, horizontal = 4.dp)) {
-                                Text(
-                                    text = label,
-                                    color = if (isSelected) colorScheme.onPrimary else colorScheme.onSurface,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
+                            Text(
+                                text = label,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
@@ -521,15 +504,17 @@ internal fun MotionFilteringSettingsPage(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Filtered Stationary Spikes:",
+                                text = "Filtered Stationary Spikes",
                                 fontSize = 12.sp,
                                 color = colorScheme.onSurface
                             )
                             Text(
                                 text = "$jitterCount spikes (${String.format(Locale.US, "%.1f", jitterMeters)} m)",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontFamily = FontFamily.Monospace,
+                                style = MaterialTheme.typography.titleSmall.copy(
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontFeatureSettings = "tnum"
+                                ),
                                 color = colorScheme.primary
                             )
                         }
@@ -543,6 +528,7 @@ internal fun MotionFilteringSettingsPage(
                     }
                 }
             }
+        }
         }
     }
 }
@@ -565,28 +551,34 @@ internal fun CellularEngineSettingsPage(
         mutableStateOf(hasCustomOverride)
     }
 
-    LazyColumn(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colorScheme.background),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentAlignment = Alignment.TopCenter
     ) {
-        item {
-            SettingsHeaderBar(
-                title = SettingsCategory.CELLULAR_ENGINE.title,
-                subtitle = SettingsCategory.CELLULAR_ENGINE.subtitle,
-                backContentDescription = "Back to Settings Hub",
-                backTestTag = "settings_sub_back_btn",
-                onBack = onBack
-            )
-        }
+        LazyColumn(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxSize(),
+            contentPadding = ScreenListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item {
+                GeoTraceTopBar(
+                    title = SettingsCategory.CELLULAR_ENGINE.title,
+                    subtitle = SettingsCategory.CELLULAR_ENGINE.subtitle,
+                    backContentDescription = "Back to Settings Hub",
+                    backTestTag = "settings_sub_back_btn",
+                    onBack = onBack
+                )
+            }
 
-        item {
-            SettingsSectionCard(
-                title = "Cellular Positioning & OpenCellID",
-                icon = Icons.Default.CellTower
-            ) {
+            item {
+                SettingsSectionCard(
+                    title = "Cellular Positioning & OpenCellID",
+                    icon = Icons.Default.CellTower
+                ) {
                 SettingToggleRow(
                     title = "Show Serving Cell Tower Pin on Map",
                     description = "Renders approximate serving mast and radius ring when GPS lock drops",
@@ -795,6 +787,7 @@ internal fun CellularEngineSettingsPage(
                 }
             }
         }
+        }
     }
 }
 
@@ -819,28 +812,34 @@ internal fun ProtectionAlertsSettingsPage(
     val hasBgPerm = remember(permissionRefreshTick) { hasBackgroundLocationPermission(context) }
     val isBatteryUnrestricted = remember(permissionRefreshTick) { isIgnoringBatteryOptimizations(context) }
 
-    LazyColumn(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colorScheme.background),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentAlignment = Alignment.TopCenter
     ) {
-        item {
-            SettingsHeaderBar(
-                title = SettingsCategory.PROTECTION_ALERTS.title,
-                subtitle = SettingsCategory.PROTECTION_ALERTS.subtitle,
-                backContentDescription = "Back to Settings Hub",
-                backTestTag = "settings_sub_back_btn",
-                onBack = onBack
-            )
-        }
+        LazyColumn(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxSize(),
+            contentPadding = ScreenListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item {
+                GeoTraceTopBar(
+                    title = SettingsCategory.PROTECTION_ALERTS.title,
+                    subtitle = SettingsCategory.PROTECTION_ALERTS.subtitle,
+                    backContentDescription = "Back to Settings Hub",
+                    backTestTag = "settings_sub_back_btn",
+                    onBack = onBack
+                )
+            }
 
-        item {
-            SettingsSectionCard(
-                title = "24/7 Background Protection",
-                icon = Icons.Default.Security
-            ) {
+            item {
+                SettingsSectionCard(
+                    title = "24/7 Background Protection",
+                    icon = Icons.Default.Security
+                ) {
                 if (groupViewModel == null) {
                     Text(
                         text = "Sign in on the Devices tab to arm 24/7 anti-theft device sync and remote alarm controls.",
@@ -1049,6 +1048,7 @@ internal fun ProtectionAlertsSettingsPage(
                 }
             }
         }
+        }
     }
 }
 
@@ -1062,28 +1062,34 @@ internal fun UpdatesInfoSettingsPage(
     val updateStatus by viewModel.updateStatus.collectAsState()
     val scope = rememberCoroutineScope()
 
-    LazyColumn(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(colorScheme.background),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        contentAlignment = Alignment.TopCenter
     ) {
-        item {
-            SettingsHeaderBar(
-                title = SettingsCategory.UPDATES_INFO.title,
-                subtitle = SettingsCategory.UPDATES_INFO.subtitle,
-                backContentDescription = "Back to Settings Hub",
-                backTestTag = "settings_sub_back_btn",
-                onBack = onBack
-            )
-        }
+        LazyColumn(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxSize(),
+            contentPadding = ScreenListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item {
+                GeoTraceTopBar(
+                    title = SettingsCategory.UPDATES_INFO.title,
+                    subtitle = SettingsCategory.UPDATES_INFO.subtitle,
+                    backContentDescription = "Back to Settings Hub",
+                    backTestTag = "settings_sub_back_btn",
+                    onBack = onBack
+                )
+            }
 
-        item {
-            SettingsSectionCard(
-                title = "App Version & GitHub Releases",
-                icon = Icons.Default.SystemUpdate
-            ) {
+            item {
+                SettingsSectionCard(
+                    title = "App Version & GitHub Releases",
+                    icon = Icons.Default.SystemUpdate
+                ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -1097,10 +1103,13 @@ internal fun UpdatesInfoSettingsPage(
                         )
                         Text(
                             text = "v${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
-                            color = colorScheme.onSurface,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = FontFamily.Monospace
+                            style = MaterialTheme.typography.titleSmall.copy(
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = JetBrainsMonoFontFamily,
+                                fontFeatureSettings = "tnum"
+                            ),
+                            color = colorScheme.onSurface
                         )
                     }
 
@@ -1214,8 +1223,11 @@ internal fun UpdatesInfoSettingsPage(
                                 )
                                 Text(
                                     text = "${status.progressPercent}%",
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace,
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontSize = 11.sp,
+                                        fontFamily = JetBrainsMonoFontFamily,
+                                        fontFeatureSettings = "tnum"
+                                    ),
                                     color = colorScheme.primary
                                 )
                             }
@@ -1308,6 +1320,7 @@ internal fun UpdatesInfoSettingsPage(
                     lineHeight = 17.sp
                 )
             }
+        }
         }
     }
 }

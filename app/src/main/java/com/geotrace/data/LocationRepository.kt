@@ -3,6 +3,7 @@ package com.geotrace.data
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
+import com.geotrace.model.AppThemeMode
 import com.geotrace.model.CellTowerInfo
 import com.geotrace.model.CoordinateFormat
 import com.geotrace.model.GeofenceAlert
@@ -130,16 +131,16 @@ class LocationRepository(private val context: Context) {
         prefs.edit().putBoolean("keep_screen_on", keepOn).apply()
     }
 
-    fun getSavedThemeMode(): com.geotrace.model.AppThemeMode {
-        val raw = prefs.getString("app_theme_mode", null) ?: return com.geotrace.model.AppThemeMode.LIGHT
+    fun getSavedThemeMode(): AppThemeMode {
+        val raw = prefs.getString("app_theme_mode", null) ?: return AppThemeMode.LIGHT
         return try {
-            com.geotrace.model.AppThemeMode.valueOf(raw)
+            AppThemeMode.valueOf(raw)
         } catch (_: Exception) {
-            com.geotrace.model.AppThemeMode.LIGHT
+            AppThemeMode.LIGHT
         }
     }
 
-    fun saveThemeMode(mode: com.geotrace.model.AppThemeMode) {
+    fun saveThemeMode(mode: AppThemeMode) {
         prefs.edit().putString("app_theme_mode", mode.name).apply()
     }
 
@@ -187,19 +188,6 @@ class LocationRepository(private val context: Context) {
     fun saveGeofenceAccuracyGate(enabled: Boolean) {
         geofenceAccuracyGateEnabled = enabled
         prefs.edit().putBoolean("geofence_accuracy_gate", enabled).apply()
-    }
-
-    fun getSavedThemeMode(): AppThemeMode {
-        val raw = prefs.getString("app_theme_mode", null) ?: return AppThemeMode.LIGHT
-        return try {
-            AppThemeMode.valueOf(raw)
-        } catch (_: Exception) {
-            AppThemeMode.LIGHT
-        }
-    }
-
-    fun saveThemeMode(mode: AppThemeMode) {
-        prefs.edit().putString("app_theme_mode", mode.name).apply()
     }
 
     private fun loadInitialTrackingMode(): TrackingMode {

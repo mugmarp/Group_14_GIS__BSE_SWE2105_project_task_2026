@@ -128,13 +128,14 @@ fun GeoTraceTopBar(
     onBack: (() -> Unit)? = null,
     backContentDescription: String = "Back",
     backTestTag: String? = null,
+    modifier: Modifier = Modifier,
     trailingContent: (@Composable RowScope.() -> Unit)? = null
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
 
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -307,6 +308,7 @@ fun HeadingUpToggleRow(
         ),
         modifier = modifier
             .fillMaxWidth()
+            .heightIn(min = 56.dp)
             .clip(RoundedCornerShape(12.dp))
             .clickable { onCheckedChange(!checked) }
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
@@ -322,7 +324,7 @@ fun HeadingUpToggleRow(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(34.dp)
+                        .size(36.dp)
                         .clip(CircleShape)
                         .background(
                             if (checked) colorScheme.primary.copy(alpha = 0.14f)
@@ -337,8 +339,8 @@ fun HeadingUpToggleRow(
                         modifier = Modifier.size(18.dp)
                     )
                 }
-                Spacer(modifier = Modifier.width(10.dp))
-                Column {
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Heading-Up Map Rotation",
                         style = MaterialTheme.typography.titleSmall,
@@ -365,3 +367,86 @@ fun HeadingUpToggleRow(
         }
     }
 }
+
+@Composable
+fun SharedMapOverlayToggleRow(
+    title: String,
+    description: String,
+    icon: ImageVector,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    testTag: String? = null
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = if (checked) colorScheme.primary.copy(alpha = 0.08f) else customColors.surfaceContainerLow,
+        border = BorderStroke(
+            1.dp,
+            if (checked) colorScheme.primary.copy(alpha = 0.4f) else colorScheme.outlineVariant.copy(alpha = 0.55f)
+        ),
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { onCheckedChange(!checked) }
+            .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (checked) colorScheme.primary.copy(alpha = 0.14f)
+                            else colorScheme.surface
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = if (checked) colorScheme.primary else colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleSmall,
+                        color = colorScheme.onSurface
+                    )
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = colorScheme.onPrimary,
+                    checkedTrackColor = colorScheme.primary,
+                    uncheckedThumbColor = colorScheme.outline,
+                    uncheckedTrackColor = colorScheme.surfaceVariant
+                )
+            )
+        }
+    }
+}
+

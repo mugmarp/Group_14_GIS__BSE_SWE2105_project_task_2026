@@ -15,6 +15,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -65,6 +66,9 @@ import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MemberLocation
 import com.geotrace.model.PersonalDevice
 import com.geotrace.model.SpeedUnit
+import com.geotrace.ui.components.GeoTraceTopBar
+import com.geotrace.ui.components.ScreenListContentPadding
+import com.geotrace.ui.components.adaptiveContentWidth
 import com.geotrace.ui.screens.devices.AccountProfileStrip
 import com.geotrace.ui.screens.devices.ActiveGroupHeroCard
 import com.geotrace.ui.screens.devices.AuthGateCard
@@ -301,28 +305,26 @@ fun GroupScreen(
         missingP2PRadioPermissions(context).isNotEmpty()
     }
 
-    LazyColumn(
+    Box(
         modifier = modifier
             .fillMaxSize()
-            .background(colorScheme.background)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+            .background(colorScheme.background),
+        contentAlignment = Alignment.TopCenter
     ) {
-        item {
-            Column(modifier = Modifier.padding(vertical = 2.dp)) {
-                Text(
-                    text = "Devices & Tracking Groups",
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colorScheme.onBackground
-                )
-                Text(
-                    text = "Shared cloud groups, personal device fleet & off-grid P2P radar",
-                    fontSize = 12.sp,
-                    color = colorScheme.onSurfaceVariant
+        LazyColumn(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxSize(),
+            contentPadding = ScreenListContentPadding,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                GeoTraceTopBar(
+                    title = "Devices & Tracking Groups",
+                    subtitle = "Shared cloud groups, personal device fleet & off-grid P2P radar",
+                    onBack = null
                 )
             }
-        }
 
         if (isGhostMode) {
             item {
@@ -816,6 +818,7 @@ fun GroupScreen(
                     }
                 }
             }
+        }
         }
     }
 

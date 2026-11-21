@@ -2,7 +2,6 @@ package com.geotrace.ui.screens.settings
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,14 +17,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -40,7 +36,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.ui.components.GeoTraceStatusBadge
+import com.geotrace.ui.components.StatusBadgeTone
+import com.geotrace.ui.components.adaptiveContentWidth
 
 enum class SettingsCategory(
     val title: String,
@@ -48,7 +46,7 @@ enum class SettingsCategory(
 ) {
     UNITS_DISPLAY(
         title = "Units & Screen Display",
-        subtitle = "Velocity units, DD/DMS coordinate format & wake lock"
+        subtitle = "Velocity units, coordinates, theme & wake lock"
     ),
     MAP_LAYERS(
         title = "Map Layers & Offline Cache",
@@ -73,61 +71,12 @@ enum class SettingsCategory(
 }
 
 @Composable
-internal fun SettingsHeaderBar(
-    title: String,
-    subtitle: String,
-    backContentDescription: String,
-    backTestTag: String,
-    onBack: () -> Unit
-) {
-    val colorScheme = MaterialTheme.colorScheme
-    val customColors = LocalCustomColors.current
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        IconButton(
-            onClick = onBack,
-            modifier = Modifier
-                .size(48.dp)
-                .background(customColors.surfaceContainerLow, RoundedCornerShape(12.dp))
-                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-                .testTag(backTestTag)
-        ) {
-            Icon(
-                Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = backContentDescription,
-                tint = colorScheme.primary,
-                modifier = Modifier.size(20.dp)
-            )
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-                color = colorScheme.onBackground,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = subtitle,
-                fontSize = 12.sp,
-                color = colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
-
-@Composable
 internal fun SettingsSubgroupHubCard(
     title: String,
     subtitle: String,
     badgeText: String,
-    badgeColor: Color,
+    badgeTone: StatusBadgeTone,
+    iconTint: Color,
     icon: ImageVector,
     testTag: String,
     onClick: () -> Unit
@@ -135,6 +84,7 @@ internal fun SettingsSubgroupHubCard(
     val colorScheme = MaterialTheme.colorScheme
     Card(
         modifier = Modifier
+            .adaptiveContentWidth()
             .fillMaxWidth()
             .heightIn(min = 72.dp)
             .clip(RoundedCornerShape(16.dp))
@@ -153,13 +103,13 @@ internal fun SettingsSubgroupHubCard(
             Box(
                 modifier = Modifier
                     .size(42.dp)
-                    .background(badgeColor.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
+                    .background(iconTint.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
-                    tint = badgeColor,
+                    tint = iconTint,
                     modifier = Modifier.size(22.dp)
                 )
             }
@@ -184,19 +134,10 @@ internal fun SettingsSubgroupHubCard(
                 )
             }
             Spacer(modifier = Modifier.width(8.dp))
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = badgeColor.copy(alpha = 0.12f)
-            ) {
-                Text(
-                    text = badgeText,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = badgeColor,
-                    maxLines = 1,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                )
-            }
+            GeoTraceStatusBadge(
+                text = badgeText,
+                tone = badgeTone
+            )
             Spacer(modifier = Modifier.width(4.dp))
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -217,7 +158,9 @@ internal fun SettingsSectionCard(
 ) {
     val colorScheme = MaterialTheme.colorScheme
     Card(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .adaptiveContentWidth()
+            .fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
         border = BorderStroke(1.dp, colorScheme.outlineVariant)

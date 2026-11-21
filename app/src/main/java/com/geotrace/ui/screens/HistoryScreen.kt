@@ -28,7 +28,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -68,7 +67,6 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -80,7 +78,13 @@ import com.geotrace.model.CoordinateFormat
 import com.geotrace.model.SpeedUnit
 import com.geotrace.model.TrackingSession
 import com.geotrace.model.TrailWaypoint
+import com.geotrace.ui.components.GeoTraceTopBar
+import com.geotrace.ui.components.ScreenListContentPadding
+import com.geotrace.ui.components.adaptiveContentWidth
+import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
+import com.geotrace.ui.theme.TelemetryHeaderLabelStyle
+import com.geotrace.ui.theme.TelemetryScalarStyle
 import com.geotrace.viewmodel.TrackerViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -189,47 +193,24 @@ fun HistoryScreen(
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(colorScheme.background)
+            .background(colorScheme.background),
+        contentAlignment = Alignment.TopCenter
     ) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxSize(),
+            contentPadding = ScreenListContentPadding,
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             // Header
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (onNavigateBack != null) {
-                        IconButton(onClick = onNavigateBack, modifier = Modifier.size(48.dp)) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back to Live Map",
-                                tint = colorScheme.onSurface
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(4.dp))
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Recorded Trails & Telemetry",
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = colorScheme.onBackground,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = "SQLite tracks with GPX, KML, CSV & GeoJSON exports",
-                            fontSize = 11.sp,
-                            color = colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
+                GeoTraceTopBar(
+                    title = "Recorded Trails & Telemetry",
+                    subtitle = "SQLite tracks with GPX, KML, CSV & GeoJSON exports",
+                    onBack = onNavigateBack,
+                    backContentDescription = "Back to Live Map"
+                )
             }
 
             if (sessions.isEmpty()) {
@@ -457,9 +438,12 @@ fun HistoryScreen(
                     )
                     Text(
                         text = payload.suggestedFileName,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 11.sp,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontFeatureSettings = "tnum"
+                        ),
                         color = colorScheme.primary,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -483,9 +467,11 @@ fun HistoryScreen(
                     ) {
                         Text(
                             text = previewSnippet,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 10.sp,
+                                fontFamily = JetBrainsMonoFontFamily
+                            ),
                             color = colorScheme.primary,
-                            fontSize = 10.sp,
-                            fontFamily = FontFamily.Monospace,
                             modifier = Modifier
                                 .verticalScroll(previewScroll)
                                 .padding(10.dp)
@@ -646,8 +632,11 @@ private fun TrailWaypointsDialog(
                                         Spacer(modifier = Modifier.height(2.dp))
                                         Text(
                                             text = formatCoordinates(wp.latitude, wp.longitude, coordinateFormat),
-                                            fontSize = 10.sp,
-                                            fontFamily = FontFamily.Monospace,
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontSize = 10.sp,
+                                                fontFamily = JetBrainsMonoFontFamily,
+                                                fontFeatureSettings = "tnum"
+                                            ),
                                             color = colorScheme.primary,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
@@ -1018,17 +1007,13 @@ private fun MetricItem(label: String, value: String, color: Color, subtitle: Str
     Column {
         Text(
             text = label,
-            fontSize = 8.5.sp,
+            style = TelemetryHeaderLabelStyle.copy(fontSize = 8.5.sp),
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.04.sp,
             maxLines = 1
         )
         Text(
             text = value,
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
-            fontWeight = FontWeight.Bold,
+            style = TelemetryScalarStyle.copy(fontSize = 12.sp),
             color = color,
             maxLines = 1
         )

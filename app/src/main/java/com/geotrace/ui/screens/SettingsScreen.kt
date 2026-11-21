@@ -16,15 +16,15 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -36,6 +36,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -48,7 +49,11 @@ import com.geotrace.model.CoordinateFormat
 import com.geotrace.model.MapFocusTarget
 import com.geotrace.service.LocationForegroundService
 import com.geotrace.service.UpdateStatus
+import com.geotrace.ui.components.GeoTraceTopBar
 import com.geotrace.ui.components.OfflineMapsDialog
+import com.geotrace.ui.components.ScreenListContentPadding
+import com.geotrace.ui.components.StatusBadgeTone
+import com.geotrace.ui.components.adaptiveContentWidth
 import com.geotrace.ui.screens.devices.BackgroundLocationSettingsDialog
 import com.geotrace.ui.screens.devices.hasBackgroundLocationPermission
 import com.geotrace.ui.screens.devices.openAppLocationSettings
@@ -57,7 +62,6 @@ import com.geotrace.ui.screens.settings.MapLayersSettingsPage
 import com.geotrace.ui.screens.settings.MotionFilteringSettingsPage
 import com.geotrace.ui.screens.settings.ProtectionAlertsSettingsPage
 import com.geotrace.ui.screens.settings.SettingsCategory
-import com.geotrace.ui.screens.settings.SettingsHeaderBar
 import com.geotrace.ui.screens.settings.SettingsSubgroupHubCard
 import com.geotrace.ui.screens.settings.UnitsDisplaySettingsPage
 import com.geotrace.ui.screens.settings.UpdatesInfoSettingsPage
@@ -204,40 +208,62 @@ fun SettingsScreen(
                     BuildConfig.OPENCELLID_API_KEY.isNotBlank() -> "Secret Active"
                     else -> "Fallback"
                 }
+                val cellKeyTone = when {
+                    settings.openCellIdApiKey.isNotBlank() -> StatusBadgeTone.ACTIVE
+                    BuildConfig.OPENCELLID_API_KEY.isNotBlank() -> StatusBadgeTone.NOMINAL
+                    else -> StatusBadgeTone.WARNING
+                }
                 val protectionBadge = when {
                     !isProtectionEnabled -> "OFF"
                     isProtectionPaused -> "Paused"
                     isProtectionRunning -> "Active"
                     else -> "Standby"
                 }
+                val protectionTone = when {
+                    !isProtectionEnabled -> StatusBadgeTone.NEUTRAL
+                    isProtectionPaused -> StatusBadgeTone.WARNING
+                    isProtectionRunning -> StatusBadgeTone.NOMINAL
+                    else -> StatusBadgeTone.NEUTRAL
+                }
                 val updateBadge = when (updateStatus) {
                     is UpdateStatus.UpdateAvailable -> "Update Ready"
                     else -> "v${BuildConfig.VERSION_NAME}"
                 }
+                val updateTone = when (updateStatus) {
+                    is UpdateStatus.UpdateAvailable -> StatusBadgeTone.ACTIVE
+                    else -> StatusBadgeTone.NEUTRAL
+                }
 
-                LazyColumn(
+                Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(colorScheme.background),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    contentAlignment = Alignment.TopCenter
                 ) {
-                    item {
-                        SettingsHeaderBar(
-                            title = "Telemetry & System Settings",
-                            subtitle = "Choose a category below to configure preferences",
-                            backContentDescription = "Back to Live Map",
-                            backTestTag = "settings_back_btn",
-                            onBack = onNavigateBack
-                        )
-                    }
+                    LazyColumn(
+                        modifier = Modifier
+                            .adaptiveContentWidth()
+                            .fillMaxSize(),
+                        contentPadding = ScreenListContentPadding,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        item {
+                            GeoTraceTopBar(
+                                title = "Telemetry & System Settings",
+                                subtitle = "Choose a category below to configure preferences",
+                                backContentDescription = "Back to Live Map",
+                                backTestTag = "settings_back_btn",
+                                onBack = onNavigateBack
+                            )
+                        }
 
                     item {
                         SettingsSubgroupHubCard(
                             title = SettingsCategory.UNITS_DISPLAY.title,
                             subtitle = SettingsCategory.UNITS_DISPLAY.subtitle,
                             badgeText = "${settings.speedUnit.label} • $coordBadge",
-                            badgeColor = colorScheme.primary,
+                            badgeTone = StatusBadgeTone.ACTIVE,
+                            iconTint = colorScheme.primary,
                             icon = Icons.Default.Speed,
                             testTag = "settings_group_units_display",
                             onClick = { activeCategory = SettingsCategory.UNITS_DISPLAY }
@@ -249,7 +275,8 @@ fun SettingsScreen(
                             title = SettingsCategory.MAP_LAYERS.title,
                             subtitle = SettingsCategory.MAP_LAYERS.subtitle,
                             badgeText = "${settings.mapTileType.label.substringBefore(" ")} • ${String.format(Locale.US, "%.1f", offlineCacheSizeMb)} MB",
-                            badgeColor = colorScheme.secondary,
+                            badgeTone = StatusBadgeTone.ACTIVE,
+                            iconTint = colorScheme.secondary,
                             icon = Icons.Default.Layers,
                             testTag = "settings_group_map_layers",
                             onClick = { activeCategory = SettingsCategory.MAP_LAYERS }
@@ -261,7 +288,8 @@ fun SettingsScreen(
                             title = SettingsCategory.MOTION_FILTERING.title,
                             subtitle = SettingsCategory.MOTION_FILTERING.subtitle,
                             badgeText = deadbandBadge,
-                            badgeColor = colorScheme.tertiary,
+                            badgeTone = if (settings.stationaryJitterThresholdMeters == 0f) StatusBadgeTone.NEUTRAL else StatusBadgeTone.NOMINAL,
+                            iconTint = colorScheme.tertiary,
                             icon = Icons.Default.Tune,
                             testTag = "settings_group_motion_filtering",
                             onClick = { activeCategory = SettingsCategory.MOTION_FILTERING }
@@ -273,7 +301,8 @@ fun SettingsScreen(
                             title = SettingsCategory.CELLULAR_ENGINE.title,
                             subtitle = SettingsCategory.CELLULAR_ENGINE.subtitle,
                             badgeText = cellKeyBadge,
-                            badgeColor = colorScheme.secondary,
+                            badgeTone = cellKeyTone,
+                            iconTint = colorScheme.secondary,
                             icon = Icons.Default.CellTower,
                             testTag = "settings_group_cellular_engine",
                             onClick = { activeCategory = SettingsCategory.CELLULAR_ENGINE }
@@ -285,7 +314,8 @@ fun SettingsScreen(
                             title = SettingsCategory.PROTECTION_ALERTS.title,
                             subtitle = SettingsCategory.PROTECTION_ALERTS.subtitle,
                             badgeText = protectionBadge,
-                            badgeColor = colorScheme.tertiary,
+                            badgeTone = protectionTone,
+                            iconTint = colorScheme.tertiary,
                             icon = Icons.Default.Security,
                             testTag = "settings_group_protection_alerts",
                             onClick = { activeCategory = SettingsCategory.PROTECTION_ALERTS }
@@ -297,11 +327,13 @@ fun SettingsScreen(
                             title = SettingsCategory.UPDATES_INFO.title,
                             subtitle = SettingsCategory.UPDATES_INFO.subtitle,
                             badgeText = updateBadge,
-                            badgeColor = colorScheme.primary,
-                            icon = Icons.Default.Power,
+                            badgeTone = updateTone,
+                            iconTint = colorScheme.primary,
+                            icon = Icons.Default.SystemUpdate,
                             testTag = "settings_group_updates_info",
                             onClick = { activeCategory = SettingsCategory.UPDATES_INFO }
                         )
+                    }
                     }
                 }
             }

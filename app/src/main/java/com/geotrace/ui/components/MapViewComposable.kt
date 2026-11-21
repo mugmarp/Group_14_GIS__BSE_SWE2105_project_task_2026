@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,13 +40,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.GpsNotFixed
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MyLocation
@@ -60,7 +60,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -75,6 +74,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
@@ -93,6 +94,7 @@ import com.geotrace.model.LocationPoint
 import com.geotrace.service.normalizeHeadingDegrees
 import com.geotrace.service.rememberCompassHeadingDegrees
 import com.geotrace.service.shortestAngleDeltaDegrees
+import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
 import androidx.compose.runtime.rememberUpdatedState
 import org.osmdroid.events.MapEventsReceiver
@@ -1436,7 +1438,9 @@ fun MapViewComposable(
                     map.invalidate()
                 }
             },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+                .fillMaxSize()
+                .clipToBounds()
         )
 
         // Unified Bottom-Start Marker Inspect / Search Pin / Inspected Trail / Target Focus Card (single contextual card, zero overlap)
@@ -1543,13 +1547,13 @@ fun MapViewComposable(
                                     isInspectingHistoryTrail -> onClearInspectedTrail?.invoke()
                                 }
                             },
-                            modifier = Modifier.size(38.dp)
+                            modifier = Modifier.size(48.dp)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "Dismiss Details",
                                 tint = colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
@@ -1562,7 +1566,7 @@ fun MapViewComposable(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 7.dp),
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -1571,7 +1575,8 @@ fun MapViewComposable(
                                     shape = RoundedCornerShape(8.dp),
                                     color = if (inspectCoordsCopied) colorScheme.tertiary.copy(alpha = 0.14f) else colorScheme.primary.copy(alpha = 0.10f),
                                     modifier = Modifier
-                                        .height(32.dp)
+                                        .heightIn(min = 44.dp)
+                                        .clip(RoundedCornerShape(8.dp))
                                         .clickable {
                                             com.geotrace.ui.screens.copyCoordinatesWithFeedback(
                                                 context = context,
@@ -1587,7 +1592,7 @@ fun MapViewComposable(
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 10.dp)
+                                        modifier = Modifier.padding(horizontal = 12.dp)
                                     ) {
                                         Icon(
                                             imageVector = if (inspectCoordsCopied) Icons.Default.Check else Icons.Default.ContentCopy,
@@ -1609,7 +1614,8 @@ fun MapViewComposable(
                                     color = customColors.surfaceContainerLow,
                                     border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.65f)),
                                     modifier = Modifier
-                                        .height(32.dp)
+                                        .heightIn(min = 44.dp)
+                                        .clip(RoundedCornerShape(8.dp))
                                         .clickable {
                                             com.geotrace.ui.screens.shareCoordinatesIntent(
                                                 context = context,
@@ -1623,7 +1629,7 @@ fun MapViewComposable(
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 10.dp)
+                                        modifier = Modifier.padding(horizontal = 12.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Share,
@@ -1646,7 +1652,8 @@ fun MapViewComposable(
                                     shape = RoundedCornerShape(8.dp),
                                     color = colorScheme.secondary.copy(alpha = 0.12f),
                                     modifier = Modifier
-                                        .height(32.dp)
+                                        .heightIn(min = 44.dp)
+                                        .clip(RoundedCornerShape(8.dp))
                                         .clickable {
                                             droppedInspectPin = null
                                             onRecenterSelf?.invoke()
@@ -1664,7 +1671,7 @@ fun MapViewComposable(
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 10.dp)
+                                        modifier = Modifier.padding(horizontal = 12.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.MyLocation,
@@ -1855,180 +1862,56 @@ fun MapViewComposable(
             ) {
                 Column(
                     modifier = Modifier
+                        .adaptiveContentWidth()
                         .fillMaxWidth()
+                        .align(Alignment.CenterHorizontally)
                         .verticalScroll(rememberScrollState())
                         .navigationBarsPadding()
                         .padding(horizontal = 18.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
                         text = "Map Layers & GIS Overlays",
-                        fontSize = 16.sp,
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = colorScheme.onSurface
                     )
                     Text(
                         text = "Select basemap source and RF overlays",
-                        fontSize = 11.sp,
+                        style = MaterialTheme.typography.bodySmall,
                         color = colorScheme.onSurfaceVariant
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(2.dp))
 
-                    com.geotrace.model.MapTileType.values().forEach { tileType ->
-                        val isSelected = settings.mapTileType == tileType
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isSelected) colorScheme.primary.copy(alpha = 0.12f) else customColors.surfaceContainerLow,
-                            border = androidx.compose.foundation.BorderStroke(
-                                1.dp,
-                                if (isSelected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.5f)
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    onSelectTileLayer(tileType)
-                                    showLayerMenu = false
-                                }
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Layers,
-                                        contentDescription = null,
-                                        tint = if (isSelected) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column {
-                                        Text(
-                                            text = tileType.label,
-                                            fontSize = 13.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold,
-                                            color = if (isSelected) colorScheme.primary else colorScheme.onSurface
-                                        )
-                                        Text(
-                                            text = tileType.description,
-                                            fontSize = 11.sp,
-                                            color = colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                if (isSelected) {
-                                    Icon(
-                                        imageVector = Icons.Default.CheckCircle,
-                                        contentDescription = "Selected",
-                                        tint = colorScheme.primary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            }
+                    TileLayerPickerList(
+                        selectedTileType = settings.mapTileType,
+                        onSelectTileType = { tileType ->
+                            onSelectTileLayer(tileType)
+                            showLayerMenu = false
                         }
+                    )
+
+                    if (onToggleAutoRotateHeadingUp != null || onToggleCellTowerPin != null) {
+                        HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
                     }
 
                     if (onToggleAutoRotateHeadingUp != null) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (settings.autoRotateHeadingUp) colorScheme.primary.copy(alpha = 0.08f) else customColors.surfaceContainerLow,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onToggleAutoRotateHeadingUp(!settings.autoRotateHeadingUp) }
-                                .testTag("heading_up_layer_toggle")
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Explore,
-                                        contentDescription = null,
-                                        tint = if (settings.autoRotateHeadingUp) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column {
-                                        Text(
-                                            text = "Heading-Up Map Rotation",
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = colorScheme.onSurface
-                                        )
-                                        Text(
-                                            text = "Auto-rotate map with compass & direction of travel",
-                                            fontSize = 11.sp,
-                                            color = colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                Switch(
-                                    checked = settings.autoRotateHeadingUp,
-                                    onCheckedChange = { onToggleAutoRotateHeadingUp(it) }
-                                )
-                            }
-                        }
+                        HeadingUpToggleRow(
+                            checked = settings.autoRotateHeadingUp,
+                            onCheckedChange = { onToggleAutoRotateHeadingUp(it) },
+                            testTag = "heading_up_layer_toggle"
+                        )
                     }
 
                     if (onToggleCellTowerPin != null) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        if (onToggleAutoRotateHeadingUp == null) {
-                            HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (settings.showCellTowerPin) colorScheme.primary.copy(alpha = 0.08f) else customColors.surfaceContainerLow,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onToggleCellTowerPin(!settings.showCellTowerPin) }
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.SatelliteAlt,
-                                        contentDescription = null,
-                                        tint = if (settings.showCellTowerPin) colorScheme.primary else colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column {
-                                        Text(
-                                            text = "Serving Cell Tower Overlay",
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = colorScheme.onSurface
-                                        )
-                                        Text(
-                                            text = "Show OpenCellID mast pin & RF signal ray",
-                                            fontSize = 11.sp,
-                                            color = colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                Switch(
-                                    checked = settings.showCellTowerPin,
-                                    onCheckedChange = { onToggleCellTowerPin(it) }
-                                )
-                            }
-                        }
+                        SharedMapOverlayToggleRow(
+                            title = "Serving Cell Tower Overlay",
+                            description = "Show OpenCellID mast pin & RF signal ray",
+                            icon = Icons.Default.SatelliteAlt,
+                            checked = settings.showCellTowerPin,
+                            onCheckedChange = { onToggleCellTowerPin(it) },
+                            testTag = "cell_tower_layer_toggle"
+                        )
                     }
 
                     if (onOpenOfflineMaps != null) {
@@ -2038,6 +1921,8 @@ fun MapViewComposable(
                             border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.45f)),
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .heightIn(min = 56.dp)
+                                .clip(RoundedCornerShape(12.dp))
                                 .clickable {
                                     showLayerMenu = false
                                     onOpenOfflineMaps()
@@ -2046,28 +1931,41 @@ fun MapViewComposable(
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.CloudDownload,
-                                    contentDescription = "Offline Maps Manager",
-                                    tint = colorScheme.tertiary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column {
-                                    Text(
-                                        text = if (offlineRegionsCount > 0) "Offline Maps ($offlineRegionsCount saved)" else "Download Offline Maps",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = colorScheme.tertiary
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CloudDownload,
+                                        contentDescription = "Offline Maps Manager",
+                                        tint = colorScheme.tertiary,
+                                        modifier = Modifier.size(19.dp)
                                     )
-                                    Text(
-                                        text = "Cache Satellite, Hybrid or Topo tiles for offline field work",
-                                        fontSize = 11.sp,
-                                        color = colorScheme.onSurfaceVariant
-                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = if (offlineRegionsCount > 0) "Offline Maps ($offlineRegionsCount saved)" else "Download Offline Maps",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.tertiary
+                                        )
+                                        Text(
+                                            text = "Cache Satellite, Hybrid or Topo tiles for offline field work",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                                    contentDescription = null,
+                                    tint = colorScheme.tertiary,
+                                    modifier = Modifier.size(20.dp)
+                                )
                             }
                         }
                     }
@@ -2213,38 +2111,42 @@ private fun MapScaleBarPill(
         ) {
             Text(
                 text = bestLabel,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 10.sp,
+                    fontFamily = JetBrainsMonoFontFamily,
+                    fontWeight = FontWeight.SemiBold,
+                    fontFeatureSettings = "tnum"
+                ),
                 color = colorScheme.onSurface
             )
             Spacer(modifier = Modifier.height(2.dp))
             val tickColor = colorScheme.onSurface
+            val strokePx = with(density) { 2.dp.toPx() }
             Canvas(
                 modifier = Modifier
                     .width(barWidthDp)
                     .height(5.dp)
             ) {
-                val stroke = 2.2f
-                val bottom = size.height - 1f
+                val bottom = size.height - strokePx * 0.5f
                 drawLine(
                     color = tickColor,
                     start = Offset(0f, 0f),
                     end = Offset(0f, bottom),
-                    strokeWidth = stroke,
+                    strokeWidth = strokePx,
                     cap = StrokeCap.Round
                 )
                 drawLine(
                     color = tickColor,
                     start = Offset(0f, bottom),
                     end = Offset(size.width, bottom),
-                    strokeWidth = stroke,
+                    strokeWidth = strokePx,
                     cap = StrokeCap.Round
                 )
                 drawLine(
                     color = tickColor,
                     start = Offset(size.width, 0f),
                     end = Offset(size.width, bottom),
-                    strokeWidth = stroke,
+                    strokeWidth = strokePx,
                     cap = StrokeCap.Round
                 )
             }
