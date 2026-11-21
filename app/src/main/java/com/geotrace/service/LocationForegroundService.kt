@@ -152,6 +152,7 @@ class LocationForegroundService : Service() {
         }
 
         fun stopTrackingOrDowngrade(context: Context) {
+            if (!isServiceActive) return
             val intent = Intent(context, LocationForegroundService::class.java).apply {
                 action = ACTION_STOP
             }
@@ -223,6 +224,16 @@ class LocationForegroundService : Service() {
         }
 
         fun stopProtectionMode(context: Context, disablePreference: Boolean = true) {
+            if (!isServiceActive) {
+                if (disablePreference) {
+                    (context.applicationContext as? LocationTrackerApp)
+                        ?.groupRepository
+                        ?.setBackgroundProtectionEnabled(false)
+                }
+                _isProtectionPausedFlow.value = false
+                _isProtectionRunningFlow.value = false
+                return
+            }
             val intent = Intent(context, LocationForegroundService::class.java).apply {
                 action = ACTION_STOP_PROTECTION
                 putExtra(EXTRA_PERSIST_DISABLE, disablePreference)
@@ -230,7 +241,12 @@ class LocationForegroundService : Service() {
             try {
                 context.startService(intent)
             } catch (_: Exception) {
-                // Service wasn't running
+                // Service wasn't running or app is in background stop window
+                if (disablePreference) {
+                    (context.applicationContext as? LocationTrackerApp)
+                        ?.groupRepository
+                        ?.setBackgroundProtectionEnabled(false)
+                }
             }
         }
 
@@ -270,6 +286,7 @@ class LocationForegroundService : Service() {
     private var isRecordingSession: Boolean = false
     private var isProtectionActive: Boolean = false
     private var isProtectionPaused: Boolean = false
+    private var latestStartId: Int = 0
     @Volatile
     private var lastCloudSyncMs: Long = 0L
     @Volatile
@@ -296,6 +313,7 @@ class LocationForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        latestStartId = startId
         val app = application as LocationTrackerApp
         val repo = app.repository
         val groupRepo = app.groupRepository
@@ -482,7 +500,9 @@ class LocationForegroundService : Service() {
             }
             ACTION_RESUME -> {
                 // Satisfy startForegroundService contract synchronously before DB I/O
-                ensureForeground(buildStatusNotification(currentMode))
+                if (!ensureForeground(buildStatusNotification(currentMode))) {
+                    return START_NOT_STICKY
+                }
                 serviceScope.launch {
                     val resumed = repo.resumeCurrentSession()
                     if (resumed != null) {
@@ -564,7 +584,7 @@ class LocationForegroundService : Service() {
             groupRepo.ensurePersonalDevicesListenerActive()
         }
         releaseWakeLock()
-        ensureForeground(buildStatusNotification(mode))
+        if (!ensureForeground(buildStatusNotification(mode))) return
         requestLocationUpdates(mode)
         startPeriodicCellDiagnostics()
         stopProtectionHeartbeat()
@@ -577,7 +597,7 @@ class LocationForegroundService : Service() {
         val groupRepo = app.groupRepository
 
         currentMode = repo.trackingMode.value
-        ensureForeground(buildStatusNotification(currentMode))
+        if (!ensureForeground(buildStatusNotification(currentMode))) return
         releaseWakeLock()
         stopCellDiagnostics()
         if (currentMode == TrackingMode.POWER_SAVER) {
@@ -629,9 +649,9 @@ class LocationForegroundService : Service() {
         }
     }
 
-    private fun ensureForeground(notification: Notification) {
+    private fun ensureForeground(notification: Notification): Boolean {
         if (!isForegroundStarted) {
-            try {
+            return try {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     startForeground(
                         NOTIFICATION_ID,
@@ -644,6 +664,7 @@ class LocationForegroundService : Service() {
                 isForegroundStarted = true
                 lastNotificationUpdateMs = System.currentTimeMillis()
                 syncProtectionRuntimeState()
+                true
             } catch (e: Exception) {
                 Log.e(TAG, "startForeground failed: ${e.message}")
                 isForegroundStarted = false
@@ -651,7 +672,8 @@ class LocationForegroundService : Service() {
                 isProtectionActive = false
                 isProtectionPaused = false
                 syncProtectionRuntimeState()
-                stopSelf()
+                if (latestStartId > 0) stopSelf(latestStartId) else stopSelf()
+                false
             }
         } else {
             try {
@@ -662,6 +684,7 @@ class LocationForegroundService : Service() {
             } catch (e: Exception) {
                 Log.w(TAG, "notify failed: ${e.message}")
             }
+            return true
         }
     }
 
@@ -1387,7 +1410,12 @@ class LocationForegroundService : Service() {
         quickFixCancellation = null
         osQuickFixCancellation?.cancel()
         osQuickFixCancellation = null
-        locationCallback?.let { fusedLocationClient.removeLocationUpdates(it) }
+        locationCallback?.let { cb ->
+            try {
+                fusedLocationClient.removeLocationUpdates(cb)
+            } catch (_: Exception) {
+            }
+        }
         locationCallback = null
         networkLocationListener?.let { listener ->
             try {
@@ -1409,9 +1437,16 @@ class LocationForegroundService : Service() {
         isForegroundStarted = false
         syncProtectionRuntimeState()
         if (wasForeground) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            try {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } catch (_: Exception) {
+            }
         }
-        stopSelf()
+        if (latestStartId > 0) {
+            stopSelfResult(latestStartId)
+        } else {
+            stopSelf()
+        }
     }
 
     override fun onDestroy() {

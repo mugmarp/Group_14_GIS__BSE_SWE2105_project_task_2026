@@ -166,9 +166,10 @@ fun ThisDeviceCompactCard(
 
     val badgeLabel = when {
         isGhostMode -> "GHOST"
+        currentUser == null -> "OFFLINE"
         isProtectionPaused -> "PAUSED"
-        isBackgroundProtectionEnabled && currentUser != null && isProtectionServiceRunning -> "24/7"
-        isBackgroundProtectionEnabled && currentUser != null -> "ARMED"
+        isBackgroundProtectionEnabled && isProtectionServiceRunning -> "24/7"
+        isBackgroundProtectionEnabled -> "ARMED"
         else -> "STANDBY"
     }
     val badgeBg = when {
@@ -348,8 +349,8 @@ fun ThisDeviceCompactCard(
                                 )
                                 Text(
                                     text = when {
+                                        currentUser == null -> "Requires Google Sign-In for cloud sync & Remote Ring"
                                         !isBackgroundProtectionEnabled -> "Only syncs & rings while app is open"
-                                        currentUser == null -> "Armed • Sign in to activate"
                                         isProtectionPaused -> "Paused • Background location sync stopped until resumed"
                                         !isProtectionServiceRunning -> "Service standby • Tap Resume or check Location permission"
                                         !hasNotificationPermission -> "Running • Allow Notifications for persistent status bar badge"
@@ -362,7 +363,7 @@ fun ThisDeviceCompactCard(
                             }
                         }
                         Switch(
-                            checked = isBackgroundProtectionEnabled,
+                            checked = isBackgroundProtectionEnabled && currentUser != null,
                             onCheckedChange = onToggleBackgroundProtection,
                             colors = SwitchDefaults.colors(checkedThumbColor = colorScheme.tertiary),
                             modifier = Modifier.testTag("background_protection_switch")

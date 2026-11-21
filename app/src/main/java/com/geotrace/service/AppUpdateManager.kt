@@ -9,6 +9,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.geotrace.BuildConfig
 import kotlinx.coroutines.CoroutineScope
@@ -239,11 +240,12 @@ class AppUpdateManager(private val context: Context) {
             }
             activeReceiver = receiver
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                appContext.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
-            } else {
-                appContext.registerReceiver(receiver, filter)
-            }
+            ContextCompat.registerReceiver(
+                appContext,
+                receiver,
+                filter,
+                ContextCompat.RECEIVER_EXPORTED
+            )
 
             progressJob = scope.launch {
                 val query = DownloadManager.Query().setFilterById(downloadId)

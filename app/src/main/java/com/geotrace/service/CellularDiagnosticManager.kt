@@ -164,7 +164,9 @@ class CellularDiagnosticManager(private val context: Context) {
                     signalDbm = dbm,
                     signalLevel = signal.level.coerceIn(0, 4),
                     isRegistered = info.isRegistered,
-                    operatorName = identity.operatorAlphaLong?.toString(),
+                    operatorName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        identity.operatorAlphaLong?.toString()
+                    } else null,
                     timingAdvance = timingAdvance,
                     estimatedDistanceKm = calculateEstimatedDistance(dbm, timingAdvance),
                     pci = pci,
@@ -207,7 +209,9 @@ class CellularDiagnosticManager(private val context: Context) {
                     signalDbm = dbm,
                     signalLevel = signal.level.coerceIn(0, 4),
                     isRegistered = info.isRegistered,
-                    operatorName = identity.operatorAlphaLong?.toString(),
+                    operatorName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        identity.operatorAlphaLong?.toString()
+                    } else null,
                     estimatedDistanceKm = calculateEstimatedDistance(dbm, null),
                     pci = bsic,
                     earfcn = arfcn
@@ -247,7 +251,9 @@ class CellularDiagnosticManager(private val context: Context) {
                     signalDbm = dbm,
                     signalLevel = signal.level.coerceIn(0, 4),
                     isRegistered = info.isRegistered,
-                    operatorName = identity.operatorAlphaLong?.toString(),
+                    operatorName = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                        identity.operatorAlphaLong?.toString()
+                    } else null,
                     estimatedDistanceKm = calculateEstimatedDistance(dbm, null),
                     pci = psc,
                     earfcn = uarfcn

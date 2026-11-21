@@ -47,7 +47,10 @@ fun openAppLocationSettings(context: Context) {
     ).apply {
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
-    context.startActivity(intent)
+    try {
+        context.startActivity(intent)
+    } catch (_: Exception) {
+    }
 }
 
 fun openAppNotificationSettings(context: Context) {

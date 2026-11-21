@@ -71,7 +71,7 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
                 _mapFocusTarget.value = null
                 repository.clearSyncStateOnSignOut()
             }
-            if (locationRepository.activeSession.value == null) {
+            if (locationRepository.activeSession.value == null && LocationForegroundService.isServiceActive) {
                 LocationForegroundService.stopProtectionMode(
                     getApplication(),
                     disablePreference = false
@@ -489,18 +489,18 @@ class GroupViewModel(application: Application) : AndroidViewModel(application) {
 
     fun toggleBackgroundProtection(enabled: Boolean) {
         val context = getApplication<Application>()
+        if (enabled && auth.currentUser == null) {
+            _statusMessage.value = "Sign in with Google to activate 24/7 Background Protection."
+            return
+        }
         repository.setBackgroundProtectionEnabled(enabled)
         if (enabled) {
-            if (auth.currentUser != null) {
-                val started = LocationForegroundService.startProtectionMode(context, forceResume = true)
-                val hasNotif = LocationForegroundService.hasNotificationPermission(context)
-                _statusMessage.value = when {
-                    !started -> "24/7 Protection saved — grant Location permission to start background listener."
-                    !hasNotif -> "24/7 Protection active — allow Notifications in Settings to keep status bar badge visible."
-                    else -> "24/7 Protection ON: Persistent status bar indicator & background sync active."
-                }
-            } else {
-                _statusMessage.value = "24/7 Protection enabled — sign in with Google to activate."
+            val started = LocationForegroundService.startProtectionMode(context, forceResume = true)
+            val hasNotif = LocationForegroundService.hasNotificationPermission(context)
+            _statusMessage.value = when {
+                !started -> "24/7 Protection saved — grant Location permission to start background listener."
+                !hasNotif -> "24/7 Protection active — allow Notifications in Settings to keep status bar badge visible."
+                else -> "24/7 Protection ON: Persistent status bar indicator & background sync active."
             }
         } else {
             LocationForegroundService.stopProtectionMode(context, disablePreference = true)

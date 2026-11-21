@@ -440,3 +440,43 @@ fun BackgroundLocationSettingsDialog(
         }
     )
 }
+
+@Composable
+fun ProtectionSignInRequiredDialog(
+    isSigningIn: Boolean,
+    onSignInClick: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    AlertDialog(
+        onDismissRequest = { if (!isSigningIn) onDismiss() },
+        shape = RoundedCornerShape(24.dp),
+        title = { Text("Sign In for 24/7 Protection", fontWeight = FontWeight.Bold) },
+        text = {
+            Text(
+                "24/7 Background Protection syncs this device with your private fleet and listens for Remote Ring alerts.\n\nSign in with Google to activate it. Map viewing, trail recording, geofences, and Off-Grid P2P continue working without an account.",
+                fontSize = 13.sp,
+                color = colorScheme.onSurfaceVariant
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onSignInClick,
+                enabled = !isSigningIn,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.testTag("protection_sign_in_btn")
+            ) {
+                Text(if (isSigningIn) "Signing in..." else "Sign in with Google")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isSigningIn,
+                shape = RoundedCornerShape(14.dp)
+            ) {
+                Text("Not Now")
+            }
+        }
+    )
+}

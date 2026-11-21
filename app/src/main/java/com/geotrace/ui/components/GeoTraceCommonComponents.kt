@@ -1,6 +1,7 @@
 package com.geotrace.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -41,10 +43,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -286,6 +298,264 @@ fun TileLayerPickerList(
                         modifier = Modifier.size(20.dp)
                     )
                 }
+            }
+        }
+    }
+}
+
+private fun MapTileType.compactLabel(): String = when (this) {
+    MapTileType.STANDARD -> "OSM Streets"
+    MapTileType.SATELLITE -> "Satellite"
+    MapTileType.HYBRID -> "Sat + Labels"
+    MapTileType.TOPO -> "Topo Relief"
+    MapTileType.HUMANITARIAN -> "Humanitarian"
+}
+
+@Composable
+fun TileLayerPickerGrid(
+    selectedTileType: MapTileType,
+    onSelectTileType: (MapTileType) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val rows = MapTileType.entries.chunked(3)
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        rows.forEach { rowItems ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                rowItems.forEach { tileType ->
+                    BasemapSwatchTile(
+                        tileType = tileType,
+                        isSelected = selectedTileType == tileType,
+                        onClick = { onSelectTileType(tileType) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                repeat(3 - rowItems.size) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BasemapSwatchTile(
+    tileType: MapTileType,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(role = Role.RadioButton, onClick = onClick)
+            .semantics { selected = isSelected }
+            .padding(vertical = 2.dp)
+            .testTag("tile_layer_${tileType.name.lowercase()}")
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(62.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(customColors.surfaceContainerLow)
+                .border(
+                    width = if (isSelected) 2.5.dp else 1.dp,
+                    color = if (isSelected) colorScheme.primary else colorScheme.outlineVariant.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(16.dp)
+                )
+        ) {
+            BasemapMiniPreview(
+                tileType = tileType,
+                modifier = Modifier.fillMaxSize()
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(6.dp)
+                    .size(22.dp)
+                    .clip(RoundedCornerShape(7.dp))
+                    .background(
+                        if (isSelected) colorScheme.primary
+                        else colorScheme.surface.copy(alpha = 0.88f)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = tileType.icon(),
+                    contentDescription = null,
+                    tint = if (isSelected) colorScheme.onPrimary else colorScheme.onSurface,
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+            if (isSelected) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(5.dp)
+                        .size(18.dp)
+                        .clip(CircleShape)
+                        .background(colorScheme.primary),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = "Active layer",
+                        tint = colorScheme.onPrimary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(5.dp))
+        Text(
+            text = tileType.compactLabel(),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+            color = if (isSelected) colorScheme.primary else colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun BasemapMiniPreview(
+    tileType: MapTileType,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        when (tileType) {
+            MapTileType.STANDARD -> {
+                drawRect(Color(0xFFEAF1EE))
+                // Park & water blocks
+                drawRoundRect(
+                    color = Color(0xFFC7E4C8),
+                    topLeft = Offset(w * 0.08f, h * 0.12f),
+                    size = Size(w * 0.34f, h * 0.36f),
+                    cornerRadius = CornerRadius(6f, 6f)
+                )
+                drawPath(
+                    path = Path().apply {
+                        moveTo(0f, h * 0.72f)
+                        quadraticTo(w * 0.45f, h * 0.56f, w, h * 0.68f)
+                        lineTo(w, h)
+                        lineTo(0f, h)
+                        close()
+                    },
+                    color = Color(0xFFB5DAF2)
+                )
+                // Arterial roads
+                drawLine(Color.White, Offset(0f, h * 0.34f), Offset(w, h * 0.22f), strokeWidth = 5.5f)
+                drawLine(Color.White, Offset(w * 0.56f, 0f), Offset(w * 0.48f, h), strokeWidth = 5.5f)
+                drawLine(Color(0xFFF6C873), Offset(0f, h * 0.58f), Offset(w, h * 0.42f), strokeWidth = 4.5f)
+            }
+            MapTileType.SATELLITE -> {
+                drawRect(Color(0xFF283C31))
+                drawPath(
+                    path = Path().apply {
+                        moveTo(0f, 0f)
+                        lineTo(w * 0.58f, 0f)
+                        lineTo(w * 0.42f, h * 0.62f)
+                        lineTo(0f, h * 0.48f)
+                        close()
+                    },
+                    color = Color(0xFF395240)
+                )
+                drawPath(
+                    path = Path().apply {
+                        moveTo(w * 0.52f, h * 0.45f)
+                        lineTo(w, h * 0.32f)
+                        lineTo(w, h)
+                        lineTo(w * 0.36f, h)
+                        close()
+                    },
+                    color = Color(0xFF4F664C)
+                )
+                drawLine(Color(0xFF7B8575), Offset(0f, h * 0.68f), Offset(w, h * 0.26f), strokeWidth = 4.5f)
+                drawLine(Color(0xFF1F2F28), Offset(w * 0.2f, 0f), Offset(w * 0.72f, h), strokeWidth = 3f)
+            }
+            MapTileType.HYBRID -> {
+                drawRect(Color(0xFF2B4138))
+                drawPath(
+                    path = Path().apply {
+                        moveTo(0f, h * 0.2f)
+                        lineTo(w * 0.65f, 0f)
+                        lineTo(w * 0.48f, h * 0.7f)
+                        lineTo(0f, h * 0.6f)
+                        close()
+                    },
+                    color = Color(0xFF3D594A)
+                )
+                // Overlay bright vector roads + label pill
+                drawLine(Color(0xFFFFD56B), Offset(0f, h * 0.62f), Offset(w, h * 0.30f), strokeWidth = 4.5f)
+                drawLine(Color(0xFFE6F0EC), Offset(w * 0.34f, 0f), Offset(w * 0.62f, h), strokeWidth = 3f)
+                drawRoundRect(
+                    color = Color(0xE614201C),
+                    topLeft = Offset(w * 0.48f, h * 0.16f),
+                    size = Size(w * 0.40f, h * 0.18f),
+                    cornerRadius = CornerRadius(6f, 6f)
+                )
+            }
+            MapTileType.TOPO -> {
+                drawRect(Color(0xFFF3EFE4))
+                val contourStroke = Stroke(width = 2.4f, cap = StrokeCap.Round)
+                drawPath(
+                    path = Path().apply {
+                        moveTo(0f, h * 0.28f)
+                        cubicTo(w * 0.35f, h * 0.08f, w * 0.65f, h * 0.45f, w, h * 0.22f)
+                    },
+                    color = Color(0xFFB3946B),
+                    style = contourStroke
+                )
+                drawPath(
+                    path = Path().apply {
+                        moveTo(0f, h * 0.54f)
+                        cubicTo(w * 0.35f, h * 0.34f, w * 0.65f, h * 0.70f, w, h * 0.48f)
+                    },
+                    color = Color(0xFF9C7B52),
+                    style = contourStroke
+                )
+                drawPath(
+                    path = Path().apply {
+                        moveTo(0f, h * 0.80f)
+                        cubicTo(w * 0.38f, h * 0.60f, w * 0.68f, h * 0.90f, w, h * 0.72f)
+                    },
+                    color = Color(0xFF7CA47B),
+                    style = contourStroke
+                )
+            }
+            MapTileType.HUMANITARIAN -> {
+                drawRect(Color(0xFFF8F1E7))
+                // High-contrast urban building footprints & emergency corridors
+                drawRoundRect(
+                    color = Color(0xFFE4D5C3),
+                    topLeft = Offset(w * 0.10f, h * 0.14f),
+                    size = Size(w * 0.26f, h * 0.28f),
+                    cornerRadius = CornerRadius(4f, 4f)
+                )
+                drawRoundRect(
+                    color = Color(0xFFE4D5C3),
+                    topLeft = Offset(w * 0.60f, h * 0.52f),
+                    size = Size(w * 0.28f, h * 0.30f),
+                    cornerRadius = CornerRadius(4f, 4f)
+                )
+                drawLine(Color(0xFFD9644A), Offset(0f, h * 0.46f), Offset(w, h * 0.34f), strokeWidth = 5f)
+                drawLine(Color(0xFFFFFFFF), Offset(w * 0.46f, 0f), Offset(w * 0.42f, h), strokeWidth = 5f)
+                drawLine(Color(0xFFB98E68), Offset(w * 0.46f, 0f), Offset(w * 0.42f, h), strokeWidth = 1.8f)
             }
         }
     }

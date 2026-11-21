@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -1570,17 +1571,22 @@ fun MapViewComposable(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
                                 .padding(horizontal = 12.dp, vertical = 6.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             if (hasInspectCoords) {
                                 Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = if (inspectCoordsCopied) colorScheme.tertiary.copy(alpha = 0.14f) else colorScheme.primary.copy(alpha = 0.10f),
+                                    shape = CircleShape,
+                                    color = if (inspectCoordsCopied) colorScheme.tertiary.copy(alpha = 0.14f) else colorScheme.primary.copy(alpha = 0.12f),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        1.dp,
+                                        if (inspectCoordsCopied) colorScheme.tertiary.copy(alpha = 0.4f) else colorScheme.primary.copy(alpha = 0.28f)
+                                    ),
                                     modifier = Modifier
-                                        .heightIn(min = 44.dp)
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .heightIn(min = 48.dp)
+                                        .clip(CircleShape)
                                         .clickable {
                                             com.geotrace.ui.screens.copyCoordinatesWithFeedback(
                                                 context = context,
@@ -1596,7 +1602,7 @@ fun MapViewComposable(
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 12.dp)
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                                     ) {
                                         Icon(
                                             imageVector = if (inspectCoordsCopied) Icons.Default.Check else Icons.Default.ContentCopy,
@@ -1607,19 +1613,21 @@ fun MapViewComposable(
                                         Spacer(modifier = Modifier.width(5.dp))
                                         Text(
                                             text = if (inspectCoordsCopied) "Copied" else "Copy",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            softWrap = false,
                                             color = if (inspectCoordsCopied) colorScheme.tertiary else colorScheme.primary
                                         )
                                     }
                                 }
                                 Surface(
-                                    shape = RoundedCornerShape(12.dp),
+                                    shape = CircleShape,
                                     color = customColors.surfaceContainerLow,
-                                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.65f)),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f)),
                                     modifier = Modifier
-                                        .heightIn(min = 44.dp)
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .heightIn(min = 48.dp)
+                                        .clip(CircleShape)
                                         .clickable {
                                             com.geotrace.ui.screens.shareCoordinatesIntent(
                                                 context = context,
@@ -1633,7 +1641,7 @@ fun MapViewComposable(
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 12.dp)
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Share,
@@ -1644,8 +1652,10 @@ fun MapViewComposable(
                                         Spacer(modifier = Modifier.width(5.dp))
                                         Text(
                                             text = "Share",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            softWrap = false,
                                             color = colorScheme.onSurfaceVariant
                                         )
                                     }
@@ -1653,11 +1663,12 @@ fun MapViewComposable(
                             }
                             if (showRecenterAction) {
                                 Surface(
-                                    shape = RoundedCornerShape(12.dp),
+                                    shape = CircleShape,
                                     color = colorScheme.secondary.copy(alpha = 0.12f),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.28f)),
                                     modifier = Modifier
-                                        .heightIn(min = 44.dp)
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .heightIn(min = 48.dp)
+                                        .clip(CircleShape)
                                         .clickable {
                                             droppedInspectPin = null
                                             onRecenterSelf?.invoke()
@@ -1675,7 +1686,7 @@ fun MapViewComposable(
                                 ) {
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(horizontal = 12.dp)
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.MyLocation,
@@ -1686,8 +1697,10 @@ fun MapViewComposable(
                                         Spacer(modifier = Modifier.width(5.dp))
                                         Text(
                                             text = "Re-center",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            softWrap = false,
                                             color = colorScheme.secondary
                                         )
                                     }
@@ -1871,23 +1884,50 @@ fun MapViewComposable(
                         .align(Alignment.CenterHorizontally)
                         .verticalScroll(rememberScrollState())
                         .navigationBarsPadding()
-                        .padding(horizontal = 18.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .padding(horizontal = 18.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Map Layers & GIS Overlays",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Basemap source & field RF overlays",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = colorScheme.onSurfaceVariant
+                            )
+                        }
+                        IconButton(
+                            onClick = { showLayerMenu = false },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("close_layer_sheet_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close map layers",
+                                tint = colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
                     Text(
-                        text = "Map Layers & GIS Overlays",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.onSurface
-                    )
-                    Text(
-                        text = "Select basemap source and RF overlays",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = "BASEMAP",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 0.8.sp,
                         color = colorScheme.onSurfaceVariant
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
 
-                    TileLayerPickerList(
+                    TileLayerPickerGrid(
                         selectedTileType = settings.mapTileType,
                         onSelectTileType = { tileType ->
                             onSelectTileLayer(tileType)
@@ -1895,8 +1935,15 @@ fun MapViewComposable(
                         }
                     )
 
-                    if (onToggleAutoRotateHeadingUp != null || onToggleCellTowerPin != null) {
+                    if (onToggleAutoRotateHeadingUp != null || onToggleCellTowerPin != null || onOpenOfflineMaps != null) {
                         HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
+                        Text(
+                            text = "GIS OVERLAYS & OFFLINE",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 0.8.sp,
+                            color = colorScheme.onSurfaceVariant
+                        )
                     }
 
                     if (onToggleAutoRotateHeadingUp != null) {

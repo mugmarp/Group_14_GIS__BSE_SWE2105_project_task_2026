@@ -86,6 +86,7 @@ import com.geotrace.ui.screens.devices.P2PPeerCard
 import com.geotrace.ui.screens.devices.P2PRadarControlCard
 import com.geotrace.ui.screens.devices.PendingMemberCard
 import com.geotrace.ui.screens.devices.PersonalDeviceCard
+import com.geotrace.ui.screens.devices.ProtectionSignInRequiredDialog
 import com.geotrace.ui.screens.devices.RemoveDeviceDialog
 import com.geotrace.ui.screens.devices.RemoveGroupMemberDialog
 import com.geotrace.ui.screens.devices.RenameDeviceDialog
@@ -145,6 +146,8 @@ fun GroupScreen(
     var showSignOutConfirmDialog by remember { mutableStateOf(false) }
     var showBgSettingsDialog by remember { mutableStateOf(false) }
     var showP2PPermissionSettingsDialog by remember { mutableStateOf(false) }
+    var showProtectionSignInDialog by remember { mutableStateOf(false) }
+    var isProtectionPermInFlight by remember { mutableStateOf(false) }
     var groupPendingDelete by remember { mutableStateOf<Group?>(null) }
     var groupPendingLeave by remember { mutableStateOf<Group?>(null) }
     var devicePendingRemoval by remember { mutableStateOf<PersonalDevice?>(null) }
@@ -160,6 +163,7 @@ fun GroupScreen(
     androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                isProtectionPermInFlight = false
                 permissionRefreshTick++
                 groupViewModel.ensureProtectionStartedIfEligible(refreshNotification = true)
             }
@@ -171,6 +175,7 @@ fun GroupScreen(
     val bgLocationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
+        isProtectionPermInFlight = false
         permissionRefreshTick++
         if (!granted && !hasBackgroundLocationPermission(context)) {
             showBgSettingsDialog = true
@@ -180,16 +185,22 @@ fun GroupScreen(
     val protectionPermissionsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
+        isProtectionPermInFlight = false
         permissionRefreshTick++
         val hasLocation = (grants[Manifest.permission.ACCESS_FINE_LOCATION] == true) ||
             (grants[Manifest.permission.ACCESS_COARSE_LOCATION] == true) ||
             com.geotrace.service.LocationForegroundService.hasLocationPermission(context)
         if (hasLocation) {
+            if (groupViewModel.currentUser.value == null) {
+                showProtectionSignInDialog = true
+                return@rememberLauncherForActivityResult
+            }
             groupViewModel.toggleBackgroundProtection(true)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !hasBackgroundLocationPermission(context)) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     showBgSettingsDialog = true
                 } else {
+                    isProtectionPermInFlight = true
                     bgLocationPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
                 }
             }
@@ -353,12 +364,15 @@ fun GroupScreen(
                 onSyncNow = { groupViewModel.syncNow() },
                 onToggleGhostMode = { groupViewModel.toggleGhostMode() },
                 onToggleBackgroundProtection = { enable ->
-                    if (!enable) {
+                    if (currentUser == null) {
+                        showProtectionSignInDialog = true
+                    } else if (!enable) {
                         groupViewModel.toggleBackgroundProtection(false)
-                    } else {
+                    } else if (!isProtectionPermInFlight) {
                         val needed = mutableListOf<String>()
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                        if (!com.geotrace.service.LocationForegroundService.hasLocationPermission(context)) {
                             needed.add(Manifest.permission.ACCESS_FINE_LOCATION)
+                            needed.add(Manifest.permission.ACCESS_COARSE_LOCATION)
                         }
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -366,6 +380,7 @@ fun GroupScreen(
                             needed.add(Manifest.permission.POST_NOTIFICATIONS)
                         }
                         if (needed.isNotEmpty()) {
+                            isProtectionPermInFlight = true
                             protectionPermissionsLauncher.launch(needed.toTypedArray())
                         } else {
                             groupViewModel.toggleBackgroundProtection(true)
@@ -373,6 +388,7 @@ fun GroupScreen(
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                                     showBgSettingsDialog = true
                                 } else {
+                                    isProtectionPermInFlight = true
                                     bgLocationPermissionLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
                                 }
                             }
@@ -962,6 +978,28 @@ fun GroupScreen(
                     Text("Cancel")
                 }
             }
+        )
+    }
+
+    if (showProtectionSignInDialog) {
+        ProtectionSignInRequiredDialog(
+            isSigningIn = isAuthSigningIn,
+            onSignInClick = {
+                isAuthSigningIn = true
+                performGoogleSignIn(
+                    context = context,
+                    scope = scope,
+                    onSuccess = {
+                        isAuthSigningIn = false
+                        showProtectionSignInDialog = false
+                    },
+                    onError = { err ->
+                        isAuthSigningIn = false
+                        Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                    }
+                )
+            },
+            onDismiss = { showProtectionSignInDialog = false }
         )
     }
 

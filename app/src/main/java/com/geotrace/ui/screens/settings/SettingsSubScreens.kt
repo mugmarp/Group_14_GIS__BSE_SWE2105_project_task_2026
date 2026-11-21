@@ -802,6 +802,7 @@ internal fun ProtectionAlertsSettingsPage(
     permissionRefreshTick: Int,
     onRequestGeofencePermissions: () -> Unit,
     onRequestProtectionPermissions: () -> Unit,
+    onRequestProtectionSignIn: () -> Unit,
     onRequestBgLocationDialog: () -> Unit,
     onBack: () -> Unit
 ) {
@@ -857,17 +858,19 @@ internal fun ProtectionAlertsSettingsPage(
                     SettingToggleRow(
                         title = "Enable 24/7 Device Protection",
                         description = when {
+                            currentUser == null -> "Sign in with Google to activate cloud heartbeat & Remote Ring"
                             !isProtectionEnabled -> "Only syncs location & Remote Ring while app is open"
-                            currentUser == null -> "Armed — sign in on Devices tab to activate cloud heartbeat"
                             isProtectionPaused -> "Paused — background telemetry stopped until resumed"
                             !isProtectionRunning -> "Standby — tap Start below or grant Location permission"
                             !hasNotifPerm -> "Running — allow Notifications for persistent status bar badge"
                             !hasBgPerm -> "Active — grant 'Allow all the time' location for reboot auto-start"
                             else -> "Active — persistent notification, cloud heartbeat & Remote Ring running"
                         },
-                        checked = isProtectionEnabled,
+                        checked = isProtectionEnabled && currentUser != null,
                         onCheckedChange = { enable ->
-                            if (enable && !hasLocPerm) {
+                            if (currentUser == null) {
+                                onRequestProtectionSignIn()
+                            } else if (enable && !hasLocPerm) {
                                 onRequestProtectionPermissions()
                             } else {
                                 groupViewModel.toggleBackgroundProtection(enable)
@@ -878,6 +881,26 @@ internal fun ProtectionAlertsSettingsPage(
                         },
                         testTag = "settings_background_protection_switch"
                     )
+
+                    if (currentUser == null) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        FilledTonalButton(
+                            onClick = onRequestProtectionSignIn,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                                .testTag("settings_protection_sign_in_btn")
+                        ) {
+                            Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Sign in with Google to Activate",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
 
                     if (isProtectionEnabled && currentUser != null) {
                         Spacer(modifier = Modifier.height(10.dp))
@@ -914,7 +937,7 @@ internal fun ProtectionAlertsSettingsPage(
                         }
                     }
 
-                    if (isProtectionEnabled && !hasNotifPerm) {
+                    if (isProtectionEnabled && currentUser != null && !hasNotifPerm) {
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = { openAppNotificationSettings(context) },
@@ -930,7 +953,7 @@ internal fun ProtectionAlertsSettingsPage(
                         }
                     }
 
-                    if (isProtectionEnabled && !hasBgPerm && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    if (isProtectionEnabled && currentUser != null && !hasBgPerm && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         Spacer(modifier = Modifier.height(8.dp))
                         OutlinedButton(
                             onClick = onRequestBgLocationDialog,
@@ -943,7 +966,7 @@ internal fun ProtectionAlertsSettingsPage(
                         }
                     }
 
-                    if (isProtectionEnabled) {
+                    if (isProtectionEnabled && currentUser != null) {
                         Spacer(modifier = Modifier.height(10.dp))
                         Surface(
                             shape = RoundedCornerShape(14.dp),
