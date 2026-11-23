@@ -314,7 +314,7 @@ fun OfflineMapsDialog(
 
                     if (progress.errorMessage != null) {
                         Surface(
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(16.dp),
                             color = colorScheme.errorContainer,
                             border = BorderStroke(1.dp, colorScheme.error),
                             modifier = Modifier.fillMaxWidth()

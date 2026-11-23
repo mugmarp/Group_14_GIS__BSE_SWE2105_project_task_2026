@@ -496,7 +496,7 @@ fun MapScreen(
                             modifier = Modifier
                                 .weight(1f)
                                 .heightIn(min = 48.dp)
-                                .clip(RoundedCornerShape(14.dp))
+                                .clip(RoundedCornerShape(16.dp))
                                 .clickable { isHeaderExpanded = !isHeaderExpanded },
                             verticalAlignment = Alignment.CenterVertically
                         ) {

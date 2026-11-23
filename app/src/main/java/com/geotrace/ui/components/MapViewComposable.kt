@@ -2153,7 +2153,7 @@ private fun MapScaleBarPill(
 
     val barWidthDp = with(density) { bestPx.roundToInt().toDp() }
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(14.dp),
         color = colorScheme.surface.copy(alpha = 0.88f),
         shadowElevation = 2.dp,
         border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.65f)),
