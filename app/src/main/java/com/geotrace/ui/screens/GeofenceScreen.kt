@@ -36,6 +36,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
@@ -79,10 +81,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1008,6 +1015,9 @@ private fun GeofenceEditDialog(
     val isNotNullIsland = parsedLat != null && parsedLon != null && (parsedLat != 0.0 || parsedLon != 0.0)
     val areCoordsValid = isLatValid && isLonValid && isNotNullIsland
 
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -1029,7 +1039,20 @@ private fun GeofenceEditDialog(
                         value = name,
                         onValueChange = { name = it },
                         label = { Text("Zone Name") },
+                        supportingText = {
+                            Text(
+                                text = if (name.isBlank()) "Defaults to \"Safe Zone\" if left blank" else "Shown in perimeter alerts & map labels",
+                                fontSize = 10.sp
+                            )
+                        },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Words,
+                            imeAction = ImeAction.Next
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onNext = { focusManager.moveFocus(FocusDirection.Down) }
+                        ),
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1223,6 +1246,10 @@ private fun GeofenceEditDialog(
                                 label = { Text("Latitude") },
                                 isError = !isLatValid || !isNotNullIsland,
                                 singleLine = true,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                                keyboardActions = KeyboardActions(
+                                    onNext = { focusManager.moveFocus(FocusDirection.Right) }
+                                ),
                                 shape = RoundedCornerShape(16.dp),
                                 modifier = Modifier.weight(1f)
                             )
@@ -1232,6 +1259,10 @@ private fun GeofenceEditDialog(
                                 label = { Text("Longitude") },
                                 isError = !isLonValid || !isNotNullIsland,
                                 singleLine = true,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(
+                                    onDone = { keyboardController?.hide() }
+                                ),
                                 shape = RoundedCornerShape(16.dp),
                                 modifier = Modifier.weight(1f)
                             )

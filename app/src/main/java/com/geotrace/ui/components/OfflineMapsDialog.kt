@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -50,13 +52,17 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -106,12 +112,14 @@ fun OfflineMapsDialog(
         MapTileType.values().filter { it.supportsOfflineBulkDownload }
     }
 
-    var selectedType by remember {
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    var selectedType by rememberSaveable {
         mutableStateOf(
             if (settings.mapTileType.supportsOfflineBulkDownload) settings.mapTileType else MapTileType.HYBRID
         )
     }
-    var areaMode by remember {
+    var areaMode by rememberSaveable {
         mutableStateOf(
             when {
                 currentMapBounds != null -> OfflineAreaMode.VIEWPORT
@@ -120,9 +128,9 @@ fun OfflineMapsDialog(
             }
         )
     }
-    var detailTier by remember { mutableStateOf(OfflineDetailTier.STANDARD) }
-    var regionName by remember { mutableStateOf("") }
-    var showClearCacheConfirm by remember { mutableStateOf(false) }
+    var detailTier by rememberSaveable { mutableStateOf(OfflineDetailTier.STANDARD) }
+    var regionName by rememberSaveable { mutableStateOf("") }
+    var showClearCacheConfirm by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.refreshTileCacheSize()
@@ -446,6 +454,13 @@ fun OfflineMapsDialog(
                                 label = { Text("Region Name (Optional)") },
                                 placeholder = { Text(suggestedName) },
                                 singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    capitalization = KeyboardCapitalization.Words,
+                                    imeAction = ImeAction.Done
+                                ),
+                                keyboardActions = KeyboardActions(
+                                    onDone = { keyboardController?.hide() }
+                                ),
                                 enabled = !progress.isDownloading,
                                 shape = RoundedCornerShape(16.dp),
                                 modifier = Modifier.fillMaxWidth().testTag("offline_region_name_input")

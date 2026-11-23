@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -22,12 +24,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.geotrace.model.Group
@@ -42,6 +47,8 @@ fun CreateGroupDialog(
     onDismiss: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    var hasInteracted by rememberSaveable { mutableStateOf(false) }
+    val isMissingName = hasInteracted && groupName.isBlank()
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
@@ -56,9 +63,28 @@ fun CreateGroupDialog(
                 Spacer(modifier = Modifier.height(10.dp))
                 OutlinedTextField(
                     value = groupName,
-                    onValueChange = { onGroupNameChange(it.take(50)) },
+                    onValueChange = {
+                        hasInteracted = true
+                        onGroupNameChange(it.take(50))
+                    },
                     label = { Text("Group Name (e.g. Field Ops or Home Devices)") },
+                    isError = isMissingName,
+                    supportingText = {
+                        Text(
+                            text = if (isMissingName) "Group name is required." else "${groupName.length}/50 characters",
+                            fontSize = 11.sp
+                        )
+                    },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (groupName.isNotBlank()) onConfirm() else hasInteracted = true
+                        }
+                    ),
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth().testTag("group_name_input")
                 )
@@ -90,6 +116,8 @@ fun JoinGroupDialog(
     onDismiss: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    val trimmedLength = inviteCode.trim().length
+    val isTooShort = inviteCode.isNotEmpty() && trimmedLength < 4
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
@@ -106,7 +134,27 @@ fun JoinGroupDialog(
                     value = inviteCode,
                     onValueChange = { onInviteCodeChange(it.uppercase().take(12)) },
                     label = { Text("Invitation Code") },
+                    isError = isTooShort,
+                    supportingText = {
+                        Text(
+                            text = if (isTooShort) {
+                                "Enter at least 4 characters ($trimmedLength/4+)"
+                            } else {
+                                "6-character invite code from group creator"
+                            },
+                            fontSize = 11.sp
+                        )
+                    },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Characters,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (trimmedLength >= 4) onConfirm()
+                        }
+                    ),
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth().testTag("invite_code_input")
                 )
@@ -115,7 +163,7 @@ fun JoinGroupDialog(
         confirmButton = {
             Button(
                 onClick = onConfirm,
-                enabled = inviteCode.trim().length >= 4,
+                enabled = trimmedLength >= 4,
                 shape = CircleShape,
                 modifier = Modifier.testTag("confirm_join_group_btn")
             ) {
@@ -138,6 +186,8 @@ fun RenameDeviceDialog(
     onDismiss: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
+    var hasInteracted by rememberSaveable { mutableStateOf(false) }
+    val isMissingName = hasInteracted && callsign.isBlank()
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
@@ -152,9 +202,28 @@ fun RenameDeviceDialog(
                 Spacer(modifier = Modifier.height(10.dp))
                 OutlinedTextField(
                     value = callsign,
-                    onValueChange = { onCallsignChange(it.take(24)) },
+                    onValueChange = {
+                        hasInteracted = true
+                        onCallsignChange(it.take(24))
+                    },
                     label = { Text("Device Name (e.g. Spare Pixel or Study Tablet)") },
+                    isError = isMissingName,
+                    supportingText = {
+                        Text(
+                            text = if (isMissingName) "Device name cannot be empty." else "${callsign.length}/24 characters",
+                            fontSize = 11.sp
+                        )
+                    },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (callsign.isNotBlank()) onConfirm() else hasInteracted = true
+                        }
+                    ),
                     shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth().testTag("callsign_input")
                 )

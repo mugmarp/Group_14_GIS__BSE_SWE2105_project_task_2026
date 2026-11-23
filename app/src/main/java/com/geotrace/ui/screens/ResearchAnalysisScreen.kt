@@ -54,6 +54,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -116,11 +117,11 @@ fun ResearchAnalysisScreen(
     val filteredJitterCount: Int = viewModel?.filteredJitterCount?.collectAsState()?.value ?: 0
     val settings: TrackerSettings = viewModel?.settings?.collectAsState()?.value ?: TrackerSettings()
 
-    var selectedTech by remember { mutableStateOf(TechOption.GPS_FUSED) }
-    var selectedScenario by remember { mutableStateOf(FieldScenario.OUTDOOR_SURVEY) }
-    var expandOption1 by remember { mutableStateOf(false) }
-    var expandOption2 by remember { mutableStateOf(true) }
-    var expandLegal by remember { mutableStateOf(false) }
+    var selectedTech by rememberSaveable { mutableStateOf(TechOption.GPS_FUSED) }
+    var selectedScenario by rememberSaveable { mutableStateOf(FieldScenario.OUTDOOR_SURVEY) }
+    var expandOption1 by rememberSaveable { mutableStateOf(false) }
+    var expandOption2 by rememberSaveable { mutableStateOf(true) }
+    var expandLegal by rememberSaveable { mutableStateOf(false) }
 
     val servingCellInfo = rawCellTowers.firstOrNull { it.isRegistered } ?: rawCellTowers.firstOrNull()
     val mastOffsetMeters: Double? = remember(currentLocation, cellTowerLocation) {

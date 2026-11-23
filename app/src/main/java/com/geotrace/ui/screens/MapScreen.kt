@@ -82,12 +82,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
@@ -95,9 +99,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -233,16 +240,16 @@ fun MapScreen(
         }
     }
 
-    var showStartDialog by remember { mutableStateOf(false) }
-    var showWaypointDialog by remember { mutableStateOf(false) }
-    var waypointNameInput by remember { mutableStateOf("") }
-    var waypointNoteInput by remember { mutableStateOf("") }
-    var showProfileDialog by remember { mutableStateOf(false) }
-    var showOfflineMapsDialog by remember { mutableStateOf(false) }
-    var showDevicesSheet by remember { mutableStateOf(false) }
-    var showSearchDialog by remember { mutableStateOf(false) }
-    var sessionNameInput by remember { mutableStateOf("") }
-    var isHeaderExpanded by remember { mutableStateOf(false) }
+    var showStartDialog by rememberSaveable { mutableStateOf(false) }
+    var showWaypointDialog by rememberSaveable { mutableStateOf(false) }
+    var waypointNameInput by rememberSaveable { mutableStateOf("") }
+    var waypointNoteInput by rememberSaveable { mutableStateOf("") }
+    var showProfileDialog by rememberSaveable { mutableStateOf(false) }
+    var showOfflineMapsDialog by rememberSaveable { mutableStateOf(false) }
+    var showDevicesSheet by rememberSaveable { mutableStateOf(false) }
+    var showSearchDialog by rememberSaveable { mutableStateOf(false) }
+    var sessionNameInput by rememberSaveable { mutableStateOf("") }
+    var isHeaderExpanded by rememberSaveable { mutableStateOf(false) }
     var vectorCoordsCopied by remember { mutableStateOf(false) }
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var liveRecordingNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -1333,6 +1340,25 @@ fun MapScreen(
     // Drop Manual Waypoint (<wpt>) Dialog
     if (showWaypointDialog) {
         val loc = currentLocation
+        val focusManager = LocalFocusManager.current
+        val submitWaypoint = {
+            viewModel.dropWaypoint(waypointNameInput, waypointNoteInput) { wp ->
+                if (wp != null) {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Pinned ${wp.name}",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                } else {
+                    android.widget.Toast.makeText(
+                        context,
+                        "Cannot pin waypoint: no location fix available.",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+            showWaypointDialog = false
+        }
         AlertDialog(
             onDismissRequest = { showWaypointDialog = false },
             title = {
@@ -1358,7 +1384,17 @@ fun MapScreen(
                         value = waypointNameInput,
                         onValueChange = { waypointNameInput = it },
                         label = { Text("Waypoint Name", fontSize = 12.sp) },
+                        supportingText = {
+                            Text("Leave blank to auto-name (e.g. WPT-1)", fontSize = 11.sp)
+                        },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Words,
+                            imeAction = ImeAction.Next
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onNext = { focusManager.moveFocus(FocusDirection.Down) }
+                        ),
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1369,6 +1405,17 @@ fun MapScreen(
                         onValueChange = { waypointNoteInput = it },
                         label = { Text("Field Note (Optional)", fontSize = 12.sp) },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onDone = {
+                                if (loc != null) {
+                                    submitWaypoint()
+                                }
+                            }
+                        ),
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1378,24 +1425,7 @@ fun MapScreen(
             },
             confirmButton = {
                 Button(
-                    onClick = {
-                        viewModel.dropWaypoint(waypointNameInput, waypointNoteInput) { wp ->
-                            if (wp != null) {
-                                android.widget.Toast.makeText(
-                                    context,
-                                    "Pinned ${wp.name}",
-                                    android.widget.Toast.LENGTH_SHORT
-                                ).show()
-                            } else {
-                                android.widget.Toast.makeText(
-                                    context,
-                                    "Cannot pin waypoint: no location fix available.",
-                                    android.widget.Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        }
-                        showWaypointDialog = false
-                    },
+                    onClick = { submitWaypoint() },
                     enabled = loc != null,
                     shape = CircleShape,
                     modifier = Modifier.testTag("confirm_drop_waypoint_btn")
@@ -1498,6 +1528,14 @@ fun MapScreen(
 
     // Start Session Dialog (Level 3 Elevation)
     if (showStartDialog) {
+        val confirmStartSession = {
+            val name = sessionNameInput.ifBlank { "Field Trail" }
+            val started = viewModel.startTracking(name, trackingMode)
+            if (!started) {
+                Toast.makeText(context, "Location permission is required to record a trail.", Toast.LENGTH_SHORT).show()
+            }
+            showStartDialog = false
+        }
         AlertDialog(
             onDismissRequest = { showStartDialog = false },
             title = {
@@ -1520,7 +1558,17 @@ fun MapScreen(
                         value = sessionNameInput,
                         onValueChange = { sessionNameInput = it },
                         label = { Text("Session Identifier", fontSize = 12.sp) },
+                        supportingText = {
+                            Text("Defaults to \"Field Trail\" if left blank", fontSize = 11.sp)
+                        },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Words,
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onDone = { confirmStartSession() }
+                        ),
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1530,14 +1578,7 @@ fun MapScreen(
             },
             confirmButton = {
                 Button(
-                    onClick = {
-                        val name = sessionNameInput.ifBlank { "Field Trail" }
-                        val started = viewModel.startTracking(name, trackingMode)
-                        if (!started) {
-                            Toast.makeText(context, "Location permission is required to record a trail.", Toast.LENGTH_SHORT).show()
-                        }
-                        showStartDialog = false
-                    },
+                    onClick = { confirmStartSession() },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = colorScheme.primary,
                         contentColor = colorScheme.onPrimary

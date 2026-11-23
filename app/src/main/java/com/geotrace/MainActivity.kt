@@ -72,6 +72,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -187,8 +188,8 @@ fun MainAppScreen(
     val customColors = LocalCustomColors.current
     val scope = rememberCoroutineScope()
 
-    var currentScreen by remember { mutableStateOf(Screen.MAP) }
-    var showMenuSheet by remember { mutableStateOf(false) }
+    var currentScreen by rememberSaveable { mutableStateOf(Screen.MAP) }
+    var showMenuSheet by rememberSaveable { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     val currentLocation by viewModel.currentLocation.collectAsState()

@@ -1,14 +1,17 @@
 package com.geotrace.ui.screens
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.contract.ActivityResultContract
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,8 +30,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -36,6 +42,7 @@ import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -43,6 +50,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -59,6 +68,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,9 +76,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -77,6 +90,7 @@ import com.geotrace.data.export.ExportFormat
 import com.geotrace.data.export.TrackExporter
 import com.geotrace.model.CoordinateFormat
 import com.geotrace.model.SpeedUnit
+import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
 import com.geotrace.model.TrailWaypoint
 import com.geotrace.ui.components.GeoTraceTopBar
@@ -110,12 +124,16 @@ fun HistoryScreen(
 
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val coroutineScope = rememberCoroutineScope()
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
     val sessions by viewModel.allSessions.collectAsState()
     val settings by viewModel.settings.collectAsState()
     val exportingSessionId by viewModel.exportingSessionId.collectAsState()
+
+    var historyQuery by rememberSaveable { mutableStateOf("") }
+    var selectedModeFilter by rememberSaveable { mutableStateOf<TrackingMode?>(null) }
 
     val hasLiveActiveSession = remember(sessions) { sessions.any { it.isRecording && !it.isPaused } }
     var liveNowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -129,14 +147,29 @@ fun HistoryScreen(
     var pendingExport by remember { mutableStateOf<TrackerViewModel.ExportPayload?>(null) }
     var sessionToDelete by remember { mutableStateOf<TrackingSession?>(null) }
     var sessionToRename by remember { mutableStateOf<TrackingSession?>(null) }
-    var renameInput by remember { mutableStateOf("") }
+    var renameInput by rememberSaveable { mutableStateOf("") }
     var waypointDialogSession by remember { mutableStateOf<TrackingSession?>(null) }
     var sessionWaypoints by remember { mutableStateOf<List<TrailWaypoint>>(emptyList()) }
     var isLoadingWaypoints by remember { mutableStateOf(false) }
 
-    // Native Storage Access Framework (SAF) saver for direct Downloads / device storage saving with true file extension
+    val filteredSessions = remember(sessions, historyQuery, selectedModeFilter) {
+        val q = historyQuery.trim()
+        sessions.filter { s ->
+            val modeMatches = selectedModeFilter == null || s.trackingMode == selectedModeFilter
+            if (!modeMatches) {
+                false
+            } else if (q.isEmpty()) {
+                true
+            } else {
+                s.name.contains(q, ignoreCase = true) ||
+                    s.trackingMode.title.contains(q, ignoreCase = true)
+            }
+        }
+    }
+
+    // Native Storage Access Framework (SAF) saver with format-specific MIME type & suggested filename
     val saveDocumentLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("*/*")
+        contract = remember { CreateExportDocumentContract() }
     ) { uri ->
         val payload = pendingExport
         if (uri != null && payload != null) {
@@ -269,26 +302,212 @@ fun HistoryScreen(
                     }
                 }
             } else {
-                items(sessions, key = { it.id }) { session ->
-                    SessionHistoryCard(
-                        session = session,
-                        liveNowMs = liveNowMs,
-                        speedUnit = settings.speedUnit,
-                        isExporting = exportingSessionId == session.id,
-                        exportBusy = exportingSessionId != null,
-                        onViewOnMap = if (onViewTrailOnMap != null) {
-                            { onViewTrailOnMap(session) }
-                        } else null,
-                        onViewWaypoints = if (session.waypointCount > 0) {
-                            { openWaypointsDialog(session) }
-                        } else null,
-                        onExport = { format -> triggerExport(session, format) },
-                        onRename = {
-                            renameInput = session.name
-                            sessionToRename = session
-                        },
-                        onDeleteRequest = { sessionToDelete = session }
-                    )
+                // Aggregate Telemetry Totals & Search/Filter Controls
+                item(key = "history_summary_and_filters") {
+                    val totalDistMeters = remember(sessions) { sessions.sumOf { it.totalDistanceMeters } }
+                    val totalPoints = remember(sessions) { sessions.sumOf { it.pointCount } }
+                    val totalDurationSec = sessions.sumOf { it.currentDurationSeconds(liveNowMs) }
+                    val totalDistText = remember(totalDistMeters) {
+                        if (totalDistMeters >= 1000.0) {
+                            String.format(Locale.US, "%.2f km", totalDistMeters / 1000.0)
+                        } else {
+                            String.format(Locale.US, "%.0f m", totalDistMeters)
+                        }
+                    }
+                    val totalTimeText = remember(totalDurationSec) {
+                        val h = totalDurationSec / 3600
+                        val m = (totalDurationSec % 3600) / 60
+                        if (h > 0) "${h}h ${m}m" else "${m}m ${totalDurationSec % 60}s"
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                            border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(modifier = Modifier.weight(0.85f)) {
+                                    MetricItem("TRAILS", "${sessions.size}", colorScheme.primary)
+                                }
+                                Box(modifier = Modifier.width(1.dp).height(28.dp).background(colorScheme.outlineVariant.copy(alpha = 0.45f)))
+                                Box(modifier = Modifier.weight(1.1f).padding(start = 8.dp)) {
+                                    MetricItem("TOTAL DIST", totalDistText, colorScheme.secondary)
+                                }
+                                Box(modifier = Modifier.width(1.dp).height(28.dp).background(colorScheme.outlineVariant.copy(alpha = 0.45f)))
+                                Box(modifier = Modifier.weight(1.05f).padding(start = 8.dp)) {
+                                    MetricItem("TOTAL TIME", totalTimeText, colorScheme.onSurface)
+                                }
+                                Box(modifier = Modifier.width(1.dp).height(28.dp).background(colorScheme.outlineVariant.copy(alpha = 0.45f)))
+                                Box(modifier = Modifier.weight(0.95f).padding(start = 8.dp)) {
+                                    MetricItem("TRACKPTS", "$totalPoints", colorScheme.tertiary)
+                                }
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = historyQuery,
+                            onValueChange = { historyQuery = it },
+                            placeholder = { Text("Search trails by name or mode...", fontSize = 13.sp) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = null,
+                                    tint = colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            },
+                            trailingIcon = if (historyQuery.isNotEmpty()) {
+                                {
+                                    IconButton(onClick = { historyQuery = "" }) {
+                                        Icon(
+                                            Icons.Default.Close,
+                                            contentDescription = "Clear trail search",
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            } else null,
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(
+                                onSearch = { keyboardController?.hide() }
+                            ),
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("history_search_input")
+                        )
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val chipColors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = colorScheme.primary.copy(alpha = 0.16f),
+                                selectedLabelColor = colorScheme.primary
+                            )
+                            FilterChip(
+                                selected = selectedModeFilter == null,
+                                onClick = { selectedModeFilter = null },
+                                label = { Text("All (${sessions.size})", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                                shape = CircleShape,
+                                colors = chipColors,
+                                modifier = Modifier.heightIn(min = 44.dp)
+                            )
+                            FilterChip(
+                                selected = selectedModeFilter == TrackingMode.HIGH_ACCURACY,
+                                onClick = {
+                                    selectedModeFilter = if (selectedModeFilter == TrackingMode.HIGH_ACCURACY) null else TrackingMode.HIGH_ACCURACY
+                                },
+                                label = { Text("GPS", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                                shape = CircleShape,
+                                colors = chipColors,
+                                modifier = Modifier.heightIn(min = 44.dp)
+                            )
+                            FilterChip(
+                                selected = selectedModeFilter == TrackingMode.BALANCED,
+                                onClick = {
+                                    selectedModeFilter = if (selectedModeFilter == TrackingMode.BALANCED) null else TrackingMode.BALANCED
+                                },
+                                label = { Text("Balanced", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                                shape = CircleShape,
+                                colors = chipColors,
+                                modifier = Modifier.heightIn(min = 44.dp)
+                            )
+                            FilterChip(
+                                selected = selectedModeFilter == TrackingMode.POWER_SAVER,
+                                onClick = {
+                                    selectedModeFilter = if (selectedModeFilter == TrackingMode.POWER_SAVER) null else TrackingMode.POWER_SAVER
+                                },
+                                label = { Text("Cell Only", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                                shape = CircleShape,
+                                colors = chipColors,
+                                modifier = Modifier.heightIn(min = 44.dp)
+                            )
+                        }
+                    }
+                }
+
+                if (filteredSessions.isEmpty()) {
+                    item(key = "history_empty_filter") {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = CardDefaults.cardColors(containerColor = colorScheme.surface),
+                            border = BorderStroke(1.dp, colorScheme.outlineVariant)
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(24.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = null,
+                                    tint = colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(32.dp)
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = "No matching trails",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Try a different search keyword or reset the mode filter.",
+                                    fontSize = 12.sp,
+                                    color = colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center
+                                )
+                                Spacer(modifier = Modifier.height(12.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        historyQuery = ""
+                                        selectedModeFilter = null
+                                    },
+                                    shape = CircleShape,
+                                    modifier = Modifier.height(48.dp)
+                                ) {
+                                    Text("Clear Filters", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    items(filteredSessions, key = { it.id }) { session ->
+                        SessionHistoryCard(
+                            session = session,
+                            liveNowMs = liveNowMs,
+                            speedUnit = settings.speedUnit,
+                            isExporting = exportingSessionId == session.id,
+                            exportBusy = exportingSessionId != null,
+                            onViewOnMap = if (onViewTrailOnMap != null) {
+                                { onViewTrailOnMap(session) }
+                            } else null,
+                            onViewWaypoints = if (session.waypointCount > 0) {
+                                { openWaypointsDialog(session) }
+                            } else null,
+                            onExport = { format -> triggerExport(session, format) },
+                            onRename = {
+                                renameInput = session.name
+                                sessionToRename = session
+                            },
+                            onDeleteRequest = { sessionToDelete = session }
+                        )
+                    }
                 }
             }
         }
@@ -320,23 +539,49 @@ fun HistoryScreen(
     // Rename Trail Dialog
     if (sessionToRename != null) {
         val target = sessionToRename!!
+        var renameTouched by remember(target.id) { mutableStateOf(false) }
+        val isRenameMissing = renameTouched && renameInput.isBlank()
         AlertDialog(
             onDismissRequest = { sessionToRename = null },
             title = {
                 Text("Rename Trail", fontWeight = FontWeight.Bold, fontSize = 16.sp)
             },
             text = {
-                    OutlinedTextField(
-                        value = renameInput,
-                        onValueChange = { renameInput = it },
-                        label = { Text("Trail Name", fontSize = 12.sp) },
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("rename_trail_input")
-                    )
-                },
+                OutlinedTextField(
+                    value = renameInput,
+                    onValueChange = {
+                        renameTouched = true
+                        renameInput = it
+                    },
+                    label = { Text("Trail Name", fontSize = 12.sp) },
+                    isError = isRenameMissing,
+                    supportingText = {
+                        Text(
+                            text = if (isRenameMissing) "Trail name cannot be empty." else "Saved locally in trail history",
+                            fontSize = 11.sp
+                        )
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words,
+                        imeAction = ImeAction.Done
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (renameInput.isNotBlank()) {
+                                viewModel.renameSession(target.id, renameInput)
+                                sessionToRename = null
+                            } else {
+                                renameTouched = true
+                            }
+                        }
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("rename_trail_input")
+                )
+            },
             confirmButton = {
                 Button(
                     onClick = {
@@ -489,7 +734,7 @@ fun HistoryScreen(
                     ) {
                         OutlinedButton(
                             onClick = {
-                                saveDocumentLauncher.launch(payload.suggestedFileName)
+                                saveDocumentLauncher.launch(payload)
                             },
                             shape = CircleShape,
                             modifier = Modifier
@@ -1080,5 +1325,19 @@ private suspend fun shareExportFile(context: Context, payload: TrackerViewModel.
             Toast.LENGTH_SHORT
         ).show()
         false
+    }
+}
+
+private class CreateExportDocumentContract : ActivityResultContract<TrackerViewModel.ExportPayload, Uri?>() {
+    override fun createIntent(context: Context, input: TrackerViewModel.ExportPayload): Intent {
+        return Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = input.format.mimeType
+            putExtra(Intent.EXTRA_TITLE, input.suggestedFileName)
+        }
+    }
+
+    override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
+        return if (resultCode == Activity.RESULT_OK) intent?.data else null
     }
 }

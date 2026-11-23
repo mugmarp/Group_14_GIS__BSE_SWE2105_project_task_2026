@@ -24,6 +24,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.CellTower
@@ -64,13 +66,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -541,14 +546,15 @@ internal fun CellularEngineSettingsPage(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
     val hasDefaultSecret = BuildConfig.OPENCELLID_API_KEY.isNotBlank()
     val hasCustomOverride = settings.openCellIdApiKey.isNotBlank()
-    var apiKeyInput by remember(settings.openCellIdApiKey) {
+    var apiKeyInput by rememberSaveable(settings.openCellIdApiKey) {
         mutableStateOf(settings.openCellIdApiKey)
     }
-    var overrideExpanded by remember(hasCustomOverride) {
+    var overrideExpanded by rememberSaveable(hasCustomOverride) {
         mutableStateOf(hasCustomOverride)
     }
 
@@ -715,7 +721,31 @@ internal fun CellularEngineSettingsPage(
                                 onValueChange = { apiKeyInput = it },
                                 label = { Text("Custom Override Key (Optional)") },
                                 placeholder = { Text("Enter temporary OpenCellID key") },
+                                supportingText = {
+                                    Text(
+                                        text = if (apiKeyInput.isBlank()) {
+                                            "Enter your personal OpenCellID access token"
+                                        } else {
+                                            "Token length: ${apiKeyInput.trim().length} characters"
+                                        },
+                                        fontSize = 11.sp
+                                    )
+                                },
                                 singleLine = true,
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(
+                                    onDone = {
+                                        keyboardController?.hide()
+                                        if (apiKeyInput.trim().isNotBlank()) {
+                                            viewModel.updateOpenCellIdApiKey(apiKeyInput)
+                                            Toast.makeText(
+                                                context,
+                                                "OpenCellID override saved & refreshing",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
+                                    }
+                                ),
                                 shape = RoundedCornerShape(16.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
