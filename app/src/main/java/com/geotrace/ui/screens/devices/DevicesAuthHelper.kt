@@ -105,6 +105,8 @@ fun performGoogleSignIn(
         } catch (e: GetCredentialException) {
             Log.e("DevicesAuth", "CredentialManager failed (${e.type}): ${e.errorMessage}", e)
             onError("Google Sign-In failed (${e.type}): ${e.errorMessage ?: e.localizedMessage ?: "Unknown error"}")
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e("DevicesAuth", "Firebase Google Sign-In failed", e)
             onError(e.localizedMessage ?: "Google sign-in failed.")

@@ -372,7 +372,7 @@ fun SignOutConfirmDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 48.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .clickable { unlinkDevice = !unlinkDevice }
                         .testTag("sign_out_unlink_device_row"),
                     verticalAlignment = Alignment.CenterVertically

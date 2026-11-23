@@ -920,7 +920,7 @@ fun MapScreen(
 
                 // Place & Coordinate Search Pill
                 Surface(
-                    shape = RoundedCornerShape(20.dp),
+                    shape = CircleShape,
                     color = colorScheme.surface,
                     shadowElevation = 3.dp,
                     border = BorderStroke(
@@ -929,7 +929,7 @@ fun MapScreen(
                     ),
                     modifier = Modifier
                         .heightIn(min = 40.dp)
-                        .clip(RoundedCornerShape(20.dp))
+                        .clip(CircleShape)
                         .clickable {
                             viewModel.refreshSearchNetworkStatus()
                             viewModel.updateSearchQuery(searchQuery, deviceSearchTargets)
@@ -962,13 +962,13 @@ fun MapScreen(
 
                 // Floating Positioning Profile Pill
                 Surface(
-                    shape = RoundedCornerShape(20.dp),
+                    shape = CircleShape,
                     color = colorScheme.surface,
                     shadowElevation = 3.dp,
                     border = BorderStroke(1.dp, colorScheme.outlineVariant),
                     modifier = Modifier
                         .heightIn(min = 40.dp)
-                        .clip(RoundedCornerShape(20.dp))
+                        .clip(CircleShape)
                         .clickable { showProfileDialog = true }
                         .testTag("floating_profile_pill")
                 ) {
@@ -1012,7 +1012,7 @@ fun MapScreen(
                         else -> colorScheme.surface
                     }
                     Surface(
-                        shape = RoundedCornerShape(20.dp),
+                        shape = CircleShape,
                         color = chipContainerColor,
                         shadowElevation = 3.dp,
                         border = BorderStroke(
@@ -1026,7 +1026,7 @@ fun MapScreen(
                         ),
                         modifier = Modifier
                             .heightIn(min = 40.dp)
-                            .clip(RoundedCornerShape(20.dp))
+                            .clip(CircleShape)
                             .clickable {
                                 if (hasQuickLocateTargets) {
                                     showDevicesSheet = true
@@ -1089,13 +1089,13 @@ fun MapScreen(
                         ((offlineProgress.completedTiles * 100) / offlineProgress.totalTiles).coerceIn(0, 100)
                     } else 0
                     Surface(
-                        shape = RoundedCornerShape(20.dp),
+                        shape = CircleShape,
                         color = colorScheme.primaryContainer.copy(alpha = 0.65f).compositeOver(colorScheme.surface),
                         shadowElevation = 3.dp,
                         border = BorderStroke(1.dp, colorScheme.primary),
                         modifier = Modifier
                             .heightIn(min = 40.dp)
-                            .clip(RoundedCornerShape(20.dp))
+                            .clip(CircleShape)
                             .clickable { showOfflineMapsDialog = true }
                             .testTag("offline_caching_chip")
                     ) {
@@ -1126,7 +1126,7 @@ fun MapScreen(
                     val isHotspot = activeZone.category == com.geotrace.model.GeofenceCategory.BODA_HOTSPOT
                     val zoneTint = if (isHotspot) customColors.warning else colorScheme.tertiary
                     Surface(
-                        shape = RoundedCornerShape(20.dp),
+                        shape = CircleShape,
                         color = zoneTint.copy(alpha = 0.16f).compositeOver(colorScheme.surface),
                         shadowElevation = 3.dp,
                         border = BorderStroke(1.dp, zoneTint),
@@ -1158,13 +1158,13 @@ fun MapScreen(
                 // Cell Tower Pin Status Chip
                 if (settings.showCellTowerPin && cellTowerLocation != null) {
                     Surface(
-                        shape = RoundedCornerShape(20.dp),
+                        shape = CircleShape,
                         color = colorScheme.surface,
                         shadowElevation = 3.dp,
                         border = BorderStroke(1.dp, customColors.warning.copy(alpha = 0.55f)),
                         modifier = Modifier
                             .heightIn(min = 40.dp)
-                            .clip(RoundedCornerShape(20.dp))
+                            .clip(CircleShape)
                             .clickable {
                                 viewModel.toggleCellTowerPin(false)
                                 Toast.makeText(
@@ -1236,6 +1236,7 @@ fun MapScreen(
                                 viewModel.cancelMapPick()
                                 onReturnToGeofence?.invoke()
                             },
+                            shape = CircleShape,
                             modifier = Modifier
                                 .heightIn(min = 48.dp)
                                 .testTag("cancel_map_pick_btn")
