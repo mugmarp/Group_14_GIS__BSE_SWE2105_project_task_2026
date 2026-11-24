@@ -41,15 +41,23 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Directions
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.GpsNotFixed
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.LocalParking
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.SatelliteAlt
@@ -93,9 +101,12 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.geotrace.data.export.ImportedRoute
+import com.geotrace.model.ActiveGuideTarget
 import com.geotrace.model.LocationPoint
+import com.geotrace.model.ParkedSpot
 import com.geotrace.service.normalizeHeadingDegrees
-import com.geotrace.service.rememberCompassHeadingDegrees
+import com.geotrace.service.rememberCompassReading
 import com.geotrace.service.shortestAngleDeltaDegrees
 import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
@@ -164,6 +175,13 @@ private data class PeersLayerSig(
     val speedUnit: com.geotrace.model.SpeedUnit
 )
 
+private data class ReferenceRouteLayerSig(
+    val routeId: String?,
+    val pointsCount: Int,
+    val waypointsCount: Int,
+    val coordinateFormat: com.geotrace.model.CoordinateFormat
+)
+
 private data class UserTargetLayerSig(
     val currentLocation: LocationPoint?,
     val resolvedBearing: Float,
@@ -172,6 +190,8 @@ private data class UserTargetLayerSig(
     val focusedTarget: com.geotrace.model.MapFocusTarget?,
     val selectedSearchPin: com.geotrace.model.SearchPlaceResult?,
     val droppedInspectPin: GeoPoint?,
+    val parkedSpot: ParkedSpot?,
+    val activeGuideTarget: ActiveGuideTarget?,
     val userPinColorArgb: Int
 )
 
@@ -331,6 +351,16 @@ fun MapViewComposable(
     isMapPickMode: Boolean = false,
     onMapCoordinatePicked: ((Double, Double) -> Unit)? = null,
     onMapSingleTap: (() -> Unit)? = null,
+    importedRoute: ImportedRoute? = null,
+    lastHandledImportedRouteId: String? = null,
+    onMarkImportedRouteHandled: ((String) -> Unit)? = null,
+    parkedSpot: ParkedSpot? = null,
+    activeGuideTarget: ActiveGuideTarget? = null,
+    onSetGuideTarget: ((String, Double, Double, String) -> Unit)? = null,
+    onClearGuideTarget: (() -> Unit)? = null,
+    onSaveParkedSpot: ((Double, Double, String) -> Unit)? = null,
+    onClearParkedSpot: (() -> Unit)? = null,
+    onCompassStateChanged: ((Float?, Boolean) -> Unit)? = null,
     bottomOverlayPadding: Dp = 0.dp,
     modifier: Modifier = Modifier
 ) {
@@ -370,6 +400,7 @@ fun MapViewComposable(
     var localHandledFocusMs by remember(lastHandledFocusMs) { mutableStateOf(lastHandledFocusMs) }
     var localHandledSearchMs by remember(lastHandledSearchMs) { mutableStateOf(lastHandledSearchMs) }
     var localHandledTrailKey by remember(lastHandledInspectedTrail) { mutableStateOf(lastHandledInspectedTrail) }
+    var localHandledImportedRouteKey by remember(lastHandledImportedRouteId) { mutableStateOf(lastHandledImportedRouteId) }
     LaunchedEffect(inspectCoordsCopied, selectedMarkerInfo, focusedTarget?.id) {
         if (inspectCoordsCopied) {
             kotlinx.coroutines.delay(1600L)
@@ -377,15 +408,22 @@ fun MapViewComposable(
         }
     }
 
-    val compassHeading by rememberCompassHeadingDegrees(
+    val compassReading by rememberCompassReading(
         enabled = true,
-        highPrecision = settings.autoRotateHeadingUp
+        highPrecision = settings.autoRotateHeadingUp || activeGuideTarget != null,
+        latitude = currentLocation?.latitude,
+        longitude = currentLocation?.longitude,
+        altitudeMeters = currentLocation?.altitude ?: 0.0
     )
+    val compassHeading = compassReading.azimuthDegrees
+    LaunchedEffect(compassReading.azimuthDegrees, compassReading.isLowAccuracy) {
+        onCompassStateChanged?.invoke(compassReading.azimuthDegrees, compassReading.isLowAccuracy)
+    }
     val resolvedUserBearing = remember(currentLocation?.bearing, currentLocation?.speed, compassHeading) {
         val loc = currentLocation
         when {
             loc != null && loc.speed >= 1.5f && loc.bearing.isFinite() -> normalizeHeadingDegrees(loc.bearing)
-            compassHeading != null -> compassHeading!!
+            compassHeading != null -> compassHeading
             loc != null && loc.bearing.isFinite() -> normalizeHeadingDegrees(loc.bearing)
             else -> 0f
         }
@@ -517,6 +555,15 @@ fun MapViewComposable(
     val searchPinDrawable = remember(context) {
         createPinBadgeDrawable(context, "★", android.graphics.Color.parseColor("#0F766E"))
     }
+    val parkedPinDrawable = remember(context) {
+        createPinBadgeDrawable(context, "P", android.graphics.Color.parseColor("#B45309"))
+    }
+    val routeStartDrawable = remember(context) {
+        createPinBadgeDrawable(context, "A", android.graphics.Color.parseColor("#0D9488"))
+    }
+    val routeEndDrawable = remember(context) {
+        createPinBadgeDrawable(context, "B", android.graphics.Color.parseColor("#0F766E"))
+    }
 
     // Cache member & peer avatar drawables to prevent per-second Bitmap allocations
     val avatarDrawableCache = remember { mutableMapOf<String, android.graphics.drawable.Drawable>() }
@@ -598,6 +645,31 @@ fun MapViewComposable(
         onMarkInspectedTrailHandled?.invoke(key)
     }
 
+    // Zoom to newly imported GPX/KML/GeoJSON reference route once
+    LaunchedEffect(importedRoute?.id, mapViewRef) {
+        val map = mapViewRef ?: return@LaunchedEffect
+        val route = importedRoute ?: return@LaunchedEffect
+        if (route.id == localHandledImportedRouteKey) return@LaunchedEffect
+        val geoPts = route.points.map { GeoPoint(it.latitude, it.longitude) } +
+            route.waypoints.map { GeoPoint(it.latitude, it.longitude) }
+        if (geoPts.isEmpty()) return@LaunchedEffect
+        if (geoPts.size >= 2) {
+            val box = BoundingBox.fromGeoPointsSafe(geoPts)
+            map.post {
+                try {
+                    map.zoomToBoundingBox(box, true, 120)
+                } catch (_: Exception) {
+                    map.controller.animateTo(geoPts.first(), 15.5, 700L)
+                }
+            }
+        } else {
+            map.controller.animateTo(geoPts.first(), 16.5, 700L)
+        }
+        hasCenteredOnFirstFix = true
+        localHandledImportedRouteKey = route.id
+        onMarkImportedRouteHandled?.invoke(route.id)
+    }
+
     // Pan & zoom smoothly onto a requested remote device, group member, or P2P peer (only once per request)
     LaunchedEffect(focusedTarget?.requestedAtMs, mapViewRef) {
         val target = focusedTarget ?: return@LaunchedEffect
@@ -654,12 +726,14 @@ fun MapViewComposable(
     // Persistent differential FolderOverlay layers (zero full overlay clear/recreate churn per tick)
     val geofenceLayer = remember { FolderOverlay() }
     val cellTowerLayer = remember { FolderOverlay() }
+    val referenceRouteLayer = remember { FolderOverlay() }
     val trailLayer = remember { FolderOverlay() }
     val peersLayer = remember { FolderOverlay() }
     val userTargetLayer = remember { FolderOverlay() }
 
     val lastGeofenceSigHolder = remember { arrayOfNulls<GeofenceLayerSig>(1) }
     val lastCellSigHolder = remember { arrayOfNulls<CellLayerSig>(1) }
+    val lastReferenceRouteSigHolder = remember { arrayOfNulls<ReferenceRouteLayerSig>(1) }
     val lastTrailSigHolder = remember { arrayOfNulls<TrailLayerSig>(1) }
     val lastPeersSigHolder = remember { arrayOfNulls<PeersLayerSig>(1) }
     val lastUserTargetSigHolder = remember { arrayOfNulls<UserTargetLayerSig>(1) }
@@ -889,6 +963,7 @@ fun MapViewComposable(
                     map.overlays.clear()
                     map.overlays.add(geofenceLayer)
                     map.overlays.add(cellTowerLayer)
+                    map.overlays.add(referenceRouteLayer)
                     map.overlays.add(trailLayer)
                     map.overlays.add(peersLayer)
                     map.overlays.add(userTargetLayer)
@@ -907,6 +982,99 @@ fun MapViewComposable(
                 }
 
                 var anyLayerChanged = false
+
+                // 0b. Differential Imported GPX/KML/GeoJSON Reference Route Layer
+                val refSig = ReferenceRouteLayerSig(
+                    routeId = importedRoute?.id,
+                    pointsCount = importedRoute?.points?.size ?: 0,
+                    waypointsCount = importedRoute?.waypoints?.size ?: 0,
+                    coordinateFormat = settings.coordinateFormat
+                )
+                if (lastReferenceRouteSigHolder[0] != refSig) {
+                    lastReferenceRouteSigHolder[0] = refSig
+                    anyLayerChanged = true
+                    referenceRouteLayer.items.clear()
+
+                    val route = importedRoute
+                    if (route != null) {
+                        val routeTeal = android.graphics.Color.parseColor("#0D9488")
+                        if (route.points.size >= 2) {
+                            val refGeoPts = route.points.map { GeoPoint(it.latitude, it.longitude) }
+                            referenceRouteLayer.add(Polyline(map).apply {
+                                outlinePaint.color = routeTeal
+                                outlinePaint.strokeWidth = 8f
+                                outlinePaint.strokeCap = Paint.Cap.ROUND
+                                outlinePaint.strokeJoin = Paint.Join.ROUND
+                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(20f, 10f), 0f)
+                                setPoints(refGeoPts)
+                            })
+                            val first = route.points.first()
+                            val last = route.points.last()
+                            referenceRouteLayer.add(Marker(map).apply {
+                                position = GeoPoint(first.latitude, first.longitude)
+                                title = "${route.name} (Start)"
+                                snippet = "${route.sourceFormat} • ${route.formattedDistance}"
+                                infoWindow = null
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = routeStartDrawable
+                                setOnMarkerClickListener { m, _ ->
+                                    selectedMarkerInfo = MarkerInspectData(
+                                        title = m.title ?: route.name,
+                                        detail = m.snippet ?: "",
+                                        badge = "ROUTE START",
+                                        latitude = first.latitude,
+                                        longitude = first.longitude
+                                    )
+                                    true
+                                }
+                            })
+                            referenceRouteLayer.add(Marker(map).apply {
+                                position = GeoPoint(last.latitude, last.longitude)
+                                title = "${route.name} (Finish)"
+                                snippet = "${route.sourceFormat} • ${route.formattedDistance}"
+                                infoWindow = null
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = routeEndDrawable
+                                setOnMarkerClickListener { m, _ ->
+                                    selectedMarkerInfo = MarkerInspectData(
+                                        title = m.title ?: route.name,
+                                        detail = m.snippet ?: "",
+                                        badge = "ROUTE END",
+                                        latitude = last.latitude,
+                                        longitude = last.longitude
+                                    )
+                                    true
+                                }
+                            })
+                        }
+                        route.waypoints.forEachIndexed { idx, wp ->
+                            if (isValidCoordinate(wp.latitude, wp.longitude)) {
+                                val badgeIcon = waypointDrawableCache.getOrPut(1000 + idx + 1) {
+                                    createPinBadgeDrawable(context, "R${idx + 1}", routeTeal)
+                                }
+                                referenceRouteLayer.add(Marker(map).apply {
+                                    position = GeoPoint(wp.latitude, wp.longitude)
+                                    title = wp.name
+                                    val coordStr = com.geotrace.ui.screens.formatCoordinates(wp.latitude, wp.longitude, settings.coordinateFormat)
+                                    snippet = if (wp.note.isNotBlank()) "${wp.note} • $coordStr" else coordStr
+                                    infoWindow = null
+                                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                    icon = badgeIcon
+                                    setOnMarkerClickListener { m, _ ->
+                                        selectedMarkerInfo = MarkerInspectData(
+                                            title = m.title ?: wp.name,
+                                            detail = m.snippet ?: "",
+                                            badge = "ROUTE WPT",
+                                            latitude = wp.latitude,
+                                            longitude = wp.longitude
+                                        )
+                                        true
+                                    }
+                                })
+                            }
+                        }
+                    }
+                }
 
                 // 1. Differential Trail & Waypoint Layer
                 val trailSig = TrailLayerSig(
@@ -1326,6 +1494,8 @@ fun MapViewComposable(
                     focusedTarget = focusedTarget,
                     selectedSearchPin = selectedSearchPin,
                     droppedInspectPin = droppedInspectPin,
+                    parkedSpot = parkedSpot,
+                    activeGuideTarget = activeGuideTarget,
                     userPinColorArgb = userPinColor.toArgb()
                 )
                 if (lastUserTargetSigHolder[0] != userTargetSig) {
@@ -1333,12 +1503,17 @@ fun MapViewComposable(
                     anyLayerChanged = true
                     userTargetLayer.items.clear()
 
-                    // Target bearing guide ray (self -> focused target / search result / dropped pin)
+                    // Target bearing guide ray (self -> active guide target / focused target / search result / dropped pin)
                     if (currentLocation != null && !isMapPickMode) {
                         val selfGeo = GeoPoint(currentLocation.latitude, currentLocation.longitude)
                         val guideTargetGeo: GeoPoint?
                         val guideRayColor: Int
                         when {
+                            activeGuideTarget != null &&
+                                isValidCoordinate(activeGuideTarget.latitude, activeGuideTarget.longitude) -> {
+                                guideTargetGeo = GeoPoint(activeGuideTarget.latitude, activeGuideTarget.longitude)
+                                guideRayColor = android.graphics.Color.argb(230, 217, 119, 6)
+                            }
                             focusedTarget != null &&
                                 isValidCoordinate(focusedTarget.latitude, focusedTarget.longitude) &&
                                 (focusedTarget.latitude != 0.0 || focusedTarget.longitude != 0.0) -> {
@@ -1421,6 +1596,34 @@ fun MapViewComposable(
                             icon = droppedPinDrawable
                             setOnMarkerClickListener { _, _ -> true }
                         })
+                    }
+
+                    parkedSpot?.let { spot ->
+                        if (isValidCoordinate(spot.latitude, spot.longitude)) {
+                            userTargetLayer.add(Marker(map).apply {
+                                position = GeoPoint(spot.latitude, spot.longitude)
+                                title = spot.name
+                                val coordStr = com.geotrace.ui.screens.formatCoordinates(spot.latitude, spot.longitude, settings.coordinateFormat)
+                                val distTxt = currentLocation?.let { cur ->
+                                    val d = GeoPoint(cur.latitude, cur.longitude).distanceToAsDouble(GeoPoint(spot.latitude, spot.longitude))
+                                    if (d < 1000.0) " • ${d.toInt()}m away" else String.format(Locale.US, " • %.2fkm away", d / 1000.0)
+                                } ?: ""
+                                snippet = "${coordStr}${distTxt}"
+                                infoWindow = null
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = parkedPinDrawable
+                                setOnMarkerClickListener { m, _ ->
+                                    selectedMarkerInfo = MarkerInspectData(
+                                        title = m.title ?: spot.name,
+                                        detail = m.snippet ?: "",
+                                        badge = "PARK / CAMP",
+                                        latitude = spot.latitude,
+                                        longitude = spot.longitude
+                                    )
+                                    true
+                                }
+                            })
+                        }
                     }
 
                     selectedSearchPin?.let { place ->
@@ -1579,6 +1782,174 @@ fun MapViewComposable(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             if (hasInspectCoords) {
+                                val targetLat = inspectLat!!
+                                val targetLon = inspectLon!!
+                                val isGuidingThis = activeGuideTarget != null &&
+                                    abs(activeGuideTarget.latitude - targetLat) < 1e-6 &&
+                                    abs(activeGuideTarget.longitude - targetLon) < 1e-6
+                                if (onSetGuideTarget != null) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = if (isGuidingThis) customColors.warning.copy(alpha = 0.16f) else colorScheme.tertiary.copy(alpha = 0.12f),
+                                        border = androidx.compose.foundation.BorderStroke(
+                                            1.dp,
+                                            if (isGuidingThis) customColors.warning else colorScheme.tertiary.copy(alpha = 0.35f)
+                                        ),
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .clip(CircleShape)
+                                            .clickable {
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                if (isGuidingThis) {
+                                                    onClearGuideTarget?.invoke()
+                                                } else {
+                                                    onSetGuideTarget(inspectCardTitle, targetLat, targetLon, inspectCardBadge)
+                                                }
+                                            }
+                                            .testTag("inspect_point_target_btn")
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Explore,
+                                                contentDescription = "Point Compass to Target",
+                                                tint = if (isGuidingThis) customColors.warning else colorScheme.tertiary,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text(
+                                                text = if (isGuidingThis) "Guiding" else "Point",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                color = if (isGuidingThis) customColors.warning else colorScheme.tertiary
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Surface(
+                                    shape = CircleShape,
+                                    color = colorScheme.secondary.copy(alpha = 0.12f),
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.3f)),
+                                    modifier = Modifier
+                                        .heightIn(min = 48.dp)
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            val encodedLabel = Uri.encode(inspectCardTitle)
+                                            val geoUri = Uri.parse("geo:$targetLat,$targetLon?q=$targetLat,$targetLon($encodedLabel)")
+                                            val mapIntent = Intent(Intent.ACTION_VIEW, geoUri)
+                                            try {
+                                                context.startActivity(mapIntent)
+                                            } catch (_: Exception) {
+                                                Toast.makeText(
+                                                    context,
+                                                    "No external turn-by-turn navigation app installed.",
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }
+                                        }
+                                        .testTag("inspect_navigate_ext_btn")
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Directions,
+                                            contentDescription = "Navigate in External Maps App",
+                                            tint = colorScheme.secondary,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(5.dp))
+                                        Text(
+                                            text = "Navigate",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            color = colorScheme.secondary
+                                        )
+                                    }
+                                }
+
+                                val isInspectingParked = inspectCardBadge == "PARK / CAMP" && parkedSpot != null
+                                if (isInspectingParked && onClearParkedSpot != null) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = colorScheme.error.copy(alpha = 0.10f),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.error.copy(alpha = 0.35f)),
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .clip(CircleShape)
+                                            .clickable {
+                                                onClearParkedSpot()
+                                                selectedMarkerInfo = null
+                                            }
+                                            .testTag("inspect_clear_park_btn")
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Clear Parked Pin",
+                                                tint = colorScheme.error,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text(
+                                                text = "Clear Park",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                color = colorScheme.error
+                                            )
+                                        }
+                                    }
+                                } else if (onSaveParkedSpot != null && inspectCardBadge != "GNSS" && inspectCardBadge != "CELL") {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = customColors.warning.copy(alpha = 0.12f),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, customColors.warning.copy(alpha = 0.35f)),
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .clip(CircleShape)
+                                            .clickable {
+                                                val spotLabel = if (inspectCardTitle == "Dropped Pin") "Parked / Base Camp" else inspectCardTitle
+                                                onSaveParkedSpot(targetLat, targetLon, spotLabel)
+                                                Toast.makeText(context, "Saved Park/Camp pin", Toast.LENGTH_SHORT).show()
+                                            }
+                                            .testTag("inspect_save_park_btn")
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.LocalParking,
+                                                contentDescription = "Save as Parked Vehicle or Base Camp",
+                                                tint = customColors.warning,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text(
+                                                text = "Park/Camp",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                color = customColors.warning
+                                            )
+                                        }
+                                    }
+                                }
+
                                 Surface(
                                     shape = CircleShape,
                                     color = if (inspectCoordsCopied) colorScheme.tertiary.copy(alpha = 0.14f) else colorScheme.primary.copy(alpha = 0.12f),
@@ -1593,8 +1964,8 @@ fun MapViewComposable(
                                             com.geotrace.ui.screens.copyCoordinatesWithFeedback(
                                                 context = context,
                                                 haptic = haptic,
-                                                lat = inspectLat!!,
-                                                lon = inspectLon!!,
+                                                lat = targetLat,
+                                                lon = targetLon,
                                                 format = settings.coordinateFormat,
                                                 label = inspectCardTitle
                                             )
@@ -1633,8 +2004,8 @@ fun MapViewComposable(
                                         .clickable {
                                             com.geotrace.ui.screens.shareCoordinatesIntent(
                                                 context = context,
-                                                lat = inspectLat!!,
-                                                lon = inspectLon!!,
+                                                lat = targetLat,
+                                                lon = targetLon,
                                                 format = settings.coordinateFormat,
                                                 title = inspectCardTitle
                                             )

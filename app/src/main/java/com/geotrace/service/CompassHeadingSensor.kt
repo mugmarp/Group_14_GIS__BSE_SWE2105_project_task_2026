@@ -1,6 +1,7 @@
 package com.geotrace.service
 
 import android.content.Context
+import android.hardware.GeomagneticField
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -12,13 +13,22 @@ import android.view.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlin.math.abs
+
+data class CompassReading(
+    val azimuthDegrees: Float? = null,
+    val isLowAccuracy: Boolean = false,
+    val declinationDegrees: Float = 0f
+)
 
 fun normalizeHeadingDegrees(degrees: Float): Float {
     if (!degrees.isFinite()) return 0f
@@ -34,6 +44,13 @@ fun shortestAngleDeltaDegrees(fromDeg: Float, toDeg: Float): Float {
         raw < -180f -> raw + 360f
         else -> raw
     }
+}
+
+fun formatCompassCardinal(degrees: Float): String {
+    val norm = normalizeHeadingDegrees(degrees)
+    val dirs = arrayOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+    val idx = (((norm + 22.5f) % 360f) / 45f).toInt().coerceIn(0, 7)
+    return dirs[idx]
 }
 
 private fun currentDisplayRotation(context: Context): Int {
@@ -69,22 +86,42 @@ private fun remapRotationMatrix(inR: FloatArray, outR: FloatArray, displayRotati
     }
 }
 
-/**
- * Lifecycle-aware, display-rotation-compensated hardware compass azimuth in [0, 360) degrees.
- * Returns null if no orientation/magnetometer sensor is available or before first valid sample.
- */
 @Composable
-fun rememberCompassHeadingDegrees(
+fun rememberCompassReading(
     enabled: Boolean = true,
-    highPrecision: Boolean = true
-): State<Float?> {
+    highPrecision: Boolean = true,
+    latitude: Double? = null,
+    longitude: Double? = null,
+    altitudeMeters: Double = 0.0
+): State<CompassReading> {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val headingState = remember { mutableStateOf<Float?>(null) }
+    val readingState = remember { mutableStateOf(CompassReading()) }
+
+    val declination = remember(latitude, longitude, altitudeMeters) {
+        if (latitude != null && longitude != null &&
+            latitude.isFinite() && longitude.isFinite() &&
+            (latitude != 0.0 || longitude != 0.0)
+        ) {
+            try {
+                GeomagneticField(
+                    latitude.toFloat(),
+                    longitude.toFloat(),
+                    altitudeMeters.toFloat().coerceIn(-500f, 10000f),
+                    System.currentTimeMillis()
+                ).declination.takeIf { it.isFinite() } ?: 0f
+            } catch (_: Exception) {
+                0f
+            }
+        } else {
+            0f
+        }
+    }
+    val currentDeclination by rememberUpdatedState(declination)
 
     DisposableEffect(context, lifecycleOwner, enabled, highPrecision) {
         if (!enabled) {
-            headingState.value = null
+            readingState.value = CompassReading()
             return@DisposableEffect onDispose {}
         }
 
@@ -112,13 +149,17 @@ fun rememberCompassHeadingDegrees(
         var smoothedHeading: Float? = null
         var lastEmittedHeading: Float? = null
         var lastEmitTimeMs = 0L
+        var lowAccuracyFlag = false
 
         fun emitAzimuthRadians(azimuthRad: Float) {
-            val rawDeg = normalizeHeadingDegrees(Math.toDegrees(azimuthRad.toDouble()).toFloat())
+            val magneticDeg = normalizeHeadingDegrees(Math.toDegrees(azimuthRad.toDouble()).toFloat())
+            val decl = currentDeclination
+            val trueNorthDeg = normalizeHeadingDegrees(magneticDeg + decl)
+
             val nextSmoothed = if (smoothedHeading == null) {
-                rawDeg
+                trueNorthDeg
             } else {
-                val delta = shortestAngleDeltaDegrees(smoothedHeading!!, rawDeg)
+                val delta = shortestAngleDeltaDegrees(smoothedHeading!!, trueNorthDeg)
                 normalizeHeadingDegrees(smoothedHeading!! + 0.18f * delta)
             }
             smoothedHeading = nextSmoothed
@@ -132,7 +173,11 @@ fun rememberCompassHeadingDegrees(
             ) {
                 lastEmittedHeading = nextSmoothed
                 lastEmitTimeMs = now
-                headingState.value = nextSmoothed
+                readingState.value = CompassReading(
+                    azimuthDegrees = nextSmoothed,
+                    isLowAccuracy = lowAccuracyFlag,
+                    declinationDegrees = decl
+                )
             }
         }
 
@@ -167,7 +212,20 @@ fun rememberCompassHeadingDegrees(
                 }
             }
 
-            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+                val type = sensor?.type
+                if (type == Sensor.TYPE_MAGNETIC_FIELD ||
+                    type == Sensor.TYPE_ROTATION_VECTOR ||
+                    type == Sensor.TYPE_GEOMAGNETIC_ROTATION_VECTOR
+                ) {
+                    val isLow = accuracy == SensorManager.SENSOR_STATUS_UNRELIABLE ||
+                        accuracy == SensorManager.SENSOR_STATUS_ACCURACY_LOW
+                    if (lowAccuracyFlag != isLow) {
+                        lowAccuracyFlag = isLow
+                        readingState.value = readingState.value.copy(isLowAccuracy = isLow)
+                    }
+                }
+            }
         }
 
         var isRegistered = false
@@ -208,5 +266,20 @@ fun rememberCompassHeadingDegrees(
         }
     }
 
-    return headingState
+    return readingState
+}
+
+/**
+ * Lifecycle-aware, display-rotation-compensated hardware compass azimuth in [0, 360) degrees.
+ * Returns null if no orientation/magnetometer sensor is available or before first valid sample.
+ */
+@Composable
+fun rememberCompassHeadingDegrees(
+    enabled: Boolean = true,
+    highPrecision: Boolean = true
+): State<Float?> {
+    val reading = rememberCompassReading(enabled = enabled, highPrecision = highPrecision)
+    return remember(reading) {
+        derivedStateOf { reading.value.azimuthDegrees }
+    }
 }

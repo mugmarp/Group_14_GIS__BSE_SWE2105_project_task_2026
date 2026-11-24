@@ -6,8 +6,12 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.net.Uri
+import android.provider.OpenableColumns
 import android.view.WindowManager
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -45,22 +49,34 @@ import androidx.compose.material.icons.filled.Balance
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Directions
+import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.LocalParking
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Navigation
+import androidx.compose.material.icons.filled.NightsStay
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Undo
+import androidx.compose.material.icons.filled.UploadFile
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -86,6 +102,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -95,6 +112,7 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -115,6 +133,11 @@ import com.geotrace.model.MapTileType
 import com.geotrace.model.SearchPlaceResult
 import com.geotrace.model.SearchResultSource
 import com.geotrace.model.TrackingMode
+import com.geotrace.service.ElevationAnalyzer
+import com.geotrace.service.SolarCalculator
+import com.geotrace.service.formatCompassCardinal
+import com.geotrace.service.normalizeHeadingDegrees
+import com.geotrace.service.shortestAngleDeltaDegrees
 import com.geotrace.ui.components.MapViewComposable
 import com.geotrace.ui.components.OfflineMapsDialog
 import com.geotrace.ui.components.PlaceSearchDialog
@@ -126,6 +149,9 @@ import com.geotrace.ui.theme.TelemetryHeaderLabelStyle
 import com.geotrace.ui.theme.TelemetryScalarStyle
 import com.geotrace.viewmodel.GroupViewModel
 import com.geotrace.viewmodel.TrackerViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -169,6 +195,10 @@ fun MapScreen(
     val offlinePlacesCount by viewModel.offlinePlacesCount.collectAsState()
     val searchError by viewModel.searchError.collectAsState()
     val selectedSearchPin by viewModel.selectedSearchPin.collectAsState()
+    val parkedSpot by viewModel.parkedSpot.collectAsState()
+    val importedRoute by viewModel.importedRoute.collectAsState()
+    val isBacktrackingActiveTrail by viewModel.isBacktrackingActiveTrail.collectAsState()
+    val activeGuideTarget by viewModel.activeGuideTarget.collectAsState()
 
     val currentUser by (groupViewModel?.currentUser ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
     val activeGroup by (groupViewModel?.activeGroup ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
@@ -250,9 +280,59 @@ fun MapScreen(
     var showSearchDialog by rememberSaveable { mutableStateOf(false) }
     var sessionNameInput by rememberSaveable { mutableStateOf("") }
     var isHeaderExpanded by rememberSaveable { mutableStateOf(false) }
+    var showParkedSpotDialog by rememberSaveable { mutableStateOf(false) }
+    var liveCompassAzimuth by remember { mutableStateOf<Float?>(null) }
+    var isCompassLowAccuracy by remember { mutableStateOf(false) }
     var vectorCoordsCopied by remember { mutableStateOf(false) }
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var liveRecordingNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    val routeImportScope = rememberCoroutineScope()
+    val importRouteLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            routeImportScope.launch {
+                try {
+                    val (displayName, content) = withContext(Dispatchers.IO) {
+                        var fileName = "Imported Route"
+                        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                            if (c.moveToFirst()) {
+                                val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                                if (idx >= 0) fileName = c.getString(idx) ?: fileName
+                            }
+                        }
+                        val text = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use {
+                            it.readText()
+                        } ?: ""
+                        fileName to text
+                    }
+                    val ext = displayName.substringAfterLast('.', "")
+                    val baseName = displayName.substringBeforeLast('.').ifBlank { displayName }
+                    viewModel.importRouteFromContent(content, baseName, ext) { res ->
+                        res.onSuccess { route ->
+                            Toast.makeText(
+                                context,
+                                "Loaded ${route.name} (${route.formattedDistance}, ${route.points.size} pts)",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }.onFailure { err ->
+                            Toast.makeText(
+                                context,
+                                err.message ?: "Could not import route file.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(
+                        context,
+                        "Failed to read route file: ${e.localizedMessage ?: "I/O error"}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
     androidx.compose.runtime.LaunchedEffect(vectorCoordsCopied) {
         if (vectorCoordsCopied) {
             kotlinx.coroutines.delay(1600L)
@@ -439,6 +519,23 @@ fun MapScreen(
                 if (isHeaderExpanded) {
                     isHeaderExpanded = false
                 }
+            },
+            importedRoute = importedRoute,
+            lastHandledImportedRouteId = viewModel.lastHandledImportedRouteId,
+            onMarkImportedRouteHandled = { viewModel.lastHandledImportedRouteId = it },
+            parkedSpot = parkedSpot,
+            activeGuideTarget = activeGuideTarget,
+            onSetGuideTarget = { label, lat, lon, badge ->
+                viewModel.setTargetFinder(label, lat, lon, badge)
+            },
+            onClearGuideTarget = { viewModel.clearTargetFinder() },
+            onSaveParkedSpot = { lat, lon, label ->
+                viewModel.saveParkedSpot(lat, lon, label)
+            },
+            onClearParkedSpot = { viewModel.clearParkedSpot() },
+            onCompassStateChanged = { az, lowAcc ->
+                liveCompassAzimuth = az
+                isCompassLowAccuracy = lowAcc
             },
             bottomOverlayPadding = bottomOverlayPadding
         )
@@ -1203,7 +1300,435 @@ fun MapScreen(
                     }
                 }
 
+                // Offline Solar Daylight / Sunset Safety Chip
+                val daylightRefLat = currentLocation?.latitude ?: currentMapBounds?.centerLatitude
+                val daylightRefLon = currentLocation?.longitude ?: currentMapBounds?.centerLongitude
+                val solarInfo = remember(daylightRefLat, daylightRefLon, nowMs / 60_000L) {
+                    if (daylightRefLat != null && daylightRefLon != null &&
+                        (daylightRefLat != 0.0 || daylightRefLon != 0.0)
+                    ) {
+                        SolarCalculator.calculateDaylight(daylightRefLat, daylightRefLon, nowMs)
+                    } else null
+                }
+                if (solarInfo != null) {
+                    val sunsetWarn = solarInfo.isLowLightSoon
+                    val solarTint = when {
+                        sunsetWarn -> customColors.warning
+                        solarInfo.isDaylight -> colorScheme.tertiary
+                        else -> colorScheme.secondary
+                    }
+                    Surface(
+                        shape = CircleShape,
+                        color = if (sunsetWarn) customColors.warning.copy(alpha = 0.16f).compositeOver(colorScheme.surface) else colorScheme.surface,
+                        shadowElevation = 3.dp,
+                        border = BorderStroke(1.dp, if (sunsetWarn) customColors.warning else colorScheme.outlineVariant),
+                        modifier = Modifier
+                            .heightIn(min = 40.dp)
+                            .testTag("daylight_solar_chip")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (solarInfo.isDaylight) Icons.Default.WbSunny else Icons.Default.NightsStay,
+                                contentDescription = "Local Daylight Status",
+                                tint = solarTint,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = solarInfo.formatHudBadge(),
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (sunsetWarn) customColors.warning else colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+
+                // Persistent Park / Base Camp Pin Chip
+                Surface(
+                    shape = CircleShape,
+                    color = if (parkedSpot != null) customColors.warning.copy(alpha = 0.14f).compositeOver(colorScheme.surface) else colorScheme.surface,
+                    shadowElevation = 3.dp,
+                    border = BorderStroke(1.dp, if (parkedSpot != null) customColors.warning else colorScheme.outlineVariant),
+                    modifier = Modifier
+                        .heightIn(min = 40.dp)
+                        .clip(CircleShape)
+                        .clickable {
+                            if (parkedSpot == null) {
+                                val loc = currentLocation
+                                if (loc == null) {
+                                    Toast.makeText(context, "Waiting for GPS lock to save Park/Camp pin.", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    viewModel.saveParkedSpot(loc.latitude, loc.longitude, "Parked Vehicle / Camp")
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    Toast.makeText(context, "Saved Park/Camp spot at current position.", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                showParkedSpotDialog = true
+                            }
+                        }
+                        .testTag("park_camp_quick_chip")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.LocalParking,
+                            contentDescription = "Mark or Guide to Parked Vehicle / Camp",
+                            tint = if (parkedSpot != null) customColors.warning else colorScheme.primary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        val parkChipText = if (parkedSpot != null) {
+                            val spot = parkedSpot!!
+                            val dist = currentLocation?.let { cur ->
+                                viewModel.calculateDistanceMeters(cur.latitude, cur.longitude, spot.latitude, spot.longitude)
+                            }
+                            if (dist == null) "Park Saved"
+                            else if (dist < 1000.0) "Park ${dist.toInt()}m"
+                            else String.format(Locale.US, "Park %.1fkm", dist / 1000.0)
+                        } else {
+                            "Park/Camp"
+                        }
+                        Text(
+                            text = parkChipText,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface
+                        )
+                    }
+                }
+
+                // Backtrack Active Trail Chip (shown when recording >= 2 points)
+                if (activeSession != null && trailPoints.size >= 2) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (isBacktrackingActiveTrail) colorScheme.tertiary.copy(alpha = 0.16f).compositeOver(colorScheme.surface) else colorScheme.surface,
+                        shadowElevation = 3.dp,
+                        border = BorderStroke(1.dp, if (isBacktrackingActiveTrail) colorScheme.tertiary else colorScheme.outlineVariant),
+                        modifier = Modifier
+                            .heightIn(min = 40.dp)
+                            .clip(CircleShape)
+                            .clickable {
+                                if (isBacktrackingActiveTrail) {
+                                    viewModel.stopBacktrackActiveTrail()
+                                } else {
+                                    if (viewModel.startBacktrackActiveTrail()) {
+                                        Toast.makeText(context, "Backtrack guide active toward trail start", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                            .testTag("backtrack_trail_chip")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Undo,
+                                contentDescription = "Backtrack Active Trail",
+                                tint = if (isBacktrackingActiveTrail) colorScheme.tertiary else colorScheme.secondary,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = if (isBacktrackingActiveTrail) "Backtracking" else "Backtrack",
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isBacktrackingActiveTrail) colorScheme.tertiary else colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+
+                // Import GPX / KML / GeoJSON Route Chip
+                Surface(
+                    shape = CircleShape,
+                    color = if (importedRoute != null) colorScheme.tertiary.copy(alpha = 0.14f).compositeOver(colorScheme.surface) else colorScheme.surface,
+                    shadowElevation = 3.dp,
+                    border = BorderStroke(1.dp, if (importedRoute != null) colorScheme.tertiary else colorScheme.outlineVariant),
+                    modifier = Modifier
+                        .heightIn(min = 40.dp)
+                        .clip(CircleShape)
+                        .clickable {
+                            importRouteLauncher.launch(arrayOf("*/*"))
+                        }
+                        .testTag("import_route_chip")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.UploadFile,
+                            contentDescription = "Import GPX, KML, or GeoJSON Route",
+                            tint = if (importedRoute != null) colorScheme.tertiary else colorScheme.primary,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = importedRoute?.sourceFormat?.let { "$it Route" } ?: "Import Route",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.width(6.dp))
+            }
+
+            // Line-of-Sight True-North Target Compass Finder Banner
+            val guideTarget = activeGuideTarget
+            val curLocForGuide = currentLocation
+            if (!isPickingGeofenceCenter && guideTarget != null && curLocForGuide != null) {
+                val targetDistMeters = remember(
+                    curLocForGuide.latitude,
+                    curLocForGuide.longitude,
+                    guideTarget.latitude,
+                    guideTarget.longitude
+                ) {
+                    ElevationAnalyzer.haversineMeters(
+                        curLocForGuide.latitude,
+                        curLocForGuide.longitude,
+                        guideTarget.latitude,
+                        guideTarget.longitude
+                    )
+                }
+                val trueBearingDeg = remember(
+                    curLocForGuide.latitude,
+                    curLocForGuide.longitude,
+                    guideTarget.latitude,
+                    guideTarget.longitude
+                ) {
+                    ElevationAnalyzer.initialBearingDegrees(
+                        curLocForGuide.latitude,
+                        curLocForGuide.longitude,
+                        guideTarget.latitude,
+                        guideTarget.longitude
+                    )
+                }
+                val userHeadingDeg = liveCompassAzimuth
+                    ?: curLocForGuide.bearing.takeIf { it.isFinite() && curLocForGuide.speed >= 1.5f }
+                val arrowRotationDeg = if (userHeadingDeg != null) {
+                    shortestAngleDeltaDegrees(userHeadingDeg, trueBearingDeg)
+                } else {
+                    trueBearingDeg
+                }
+                val distLabel = if (targetDistMeters < 1000.0) {
+                    "${targetDistMeters.toInt()} m"
+                } else {
+                    String.format(Locale.US, "%.2f km", targetDistMeters / 1000.0)
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = colorScheme.surface,
+                    shadowElevation = 4.dp,
+                    border = BorderStroke(
+                        1.5.dp,
+                        if (isCompassLowAccuracy) customColors.warning else colorScheme.tertiary
+                    ),
+                    modifier = Modifier
+                        .padding(horizontal = 14.dp)
+                        .testTag("compass_target_banner")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(colorScheme.tertiary.copy(alpha = 0.14f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Navigation,
+                                contentDescription = "Target Direction Arrow",
+                                tint = colorScheme.tertiary,
+                                modifier = Modifier
+                                    .size(22.dp)
+                                    .graphicsLayer {
+                                        rotationZ = arrowRotationDeg
+                                    }
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "${guideTarget.badge}: ${guideTarget.label}",
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                            }
+                            Text(
+                                text = buildString {
+                                    append(distLabel)
+                                    append(" • ")
+                                    append("${trueBearingDeg.toInt()}° ${formatCompassCardinal(trueBearingDeg)}")
+                                    if (userHeadingDeg == null) append(" (True N)")
+                                },
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontSize = 11.sp,
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontFeatureSettings = "tnum"
+                                ),
+                                color = colorScheme.tertiary
+                            )
+                            if (isCompassLowAccuracy) {
+                                Text(
+                                    text = "Calibrate compass (figure-8) — magnetic interference detected",
+                                    fontSize = 9.5.sp,
+                                    color = customColors.warning,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = {
+                                viewModel.clearTargetFinder()
+                                if (isBacktrackingActiveTrail) viewModel.stopBacktrackActiveTrail()
+                            },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("close_compass_finder_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Stop Target Guidance",
+                                tint = colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Active Imported GPX/KML Route or Backtrack Off-Trail Progress Banner
+            val activeNavRoute = importedRoute
+            val activeNavPoints = remember(activeNavRoute, isBacktrackingActiveTrail, trailPoints) {
+                when {
+                    activeNavRoute != null -> activeNavRoute.points
+                    isBacktrackingActiveTrail && trailPoints.size >= 2 -> trailPoints.reversed()
+                    else -> emptyList()
+                }
+            }
+            if (!isPickingGeofenceCenter && activeNavPoints.isNotEmpty()) {
+                val routeTitle = activeNavRoute?.name ?: "Backtrack: ${activeSession?.name ?: "Active Trail"}"
+                val progressMatch = remember(curLocForGuide?.latitude, curLocForGuide?.longitude, activeNavPoints) {
+                    curLocForGuide?.let {
+                        ElevationAnalyzer.evaluateRouteProgress(it.latitude, it.longitude, activeNavPoints)
+                    }
+                }
+                val offTrailMeters = progressMatch?.crossTrackDistanceMeters ?: 0.0
+                val isOffTrail = progressMatch != null && offTrailMeters > 45.0
+                val remDistMeters = progressMatch?.remainingDistanceMeters ?: (activeNavRoute?.totalDistanceMeters ?: 0.0)
+                val remLabel = if (remDistMeters < 1000.0) {
+                    "${remDistMeters.toInt()} m"
+                } else {
+                    String.format(Locale.US, "%.2f km", remDistMeters / 1000.0)
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = if (isOffTrail) customColors.warning.copy(alpha = 0.14f).compositeOver(colorScheme.surface) else colorScheme.surface,
+                    shadowElevation = 4.dp,
+                    border = BorderStroke(1.5.dp, if (isOffTrail) customColors.warning else colorScheme.primary.copy(alpha = 0.6f)),
+                    modifier = Modifier
+                        .padding(horizontal = 14.dp)
+                        .testTag("route_guidance_banner")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (isOffTrail) Icons.Default.Warning else Icons.Default.Route,
+                            contentDescription = null,
+                            tint = if (isOffTrail) customColors.warning else colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = routeTitle,
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = buildString {
+                                    append("Left: $remLabel")
+                                    if (isOffTrail) {
+                                        append(" • OFF ROUTE ${offTrailMeters.toInt()}m")
+                                    } else if (activeNavRoute != null && activeNavRoute.elevationGainMeters >= 5.0) {
+                                        append(" • +${activeNavRoute.elevationGainMeters.toInt()}m ↑")
+                                    } else if (progressMatch != null) {
+                                        append(" • On trail (±${offTrailMeters.toInt()}m)")
+                                    }
+                                },
+                                fontSize = 10.5.sp,
+                                fontWeight = if (isOffTrail) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isOffTrail) customColors.warning else colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        if (activeNavRoute != null && activeNavPoints.isNotEmpty() && activeGuideTarget == null) {
+                            val endPt = activeNavPoints.last()
+                            TextButton(
+                                onClick = {
+                                    viewModel.setTargetFinder(
+                                        label = "${activeNavRoute.name} Finish",
+                                        latitude = endPt.latitude,
+                                        longitude = endPt.longitude,
+                                        badge = "ROUTE"
+                                    )
+                                },
+                                shape = CircleShape,
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            ) {
+                                Text("Point", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        IconButton(
+                            onClick = {
+                                if (activeNavRoute != null) viewModel.clearImportedRoute()
+                                if (isBacktrackingActiveTrail) viewModel.stopBacktrackActiveTrail()
+                            },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("clear_route_guidance_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close Route Overlay",
+                                tint = colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
             }
 
             if (isPickingGeofenceCenter) {
@@ -1955,6 +2480,103 @@ fun MapScreen(
                 Spacer(modifier = Modifier.height(10.dp))
             }
         }
+    }
+
+    // Saved Parked Vehicle / Base Camp Dialog
+    if (showParkedSpotDialog && parkedSpot != null) {
+        val spot = parkedSpot!!
+        val savedTimeStr = remember(spot.savedAtMs) {
+            SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date(spot.savedAtMs))
+        }
+        val distLabel = currentLocation?.let { cur ->
+            val d = viewModel.calculateDistanceMeters(cur.latitude, cur.longitude, spot.latitude, spot.longitude)
+            if (d < 1000.0) "${d.toInt()} m away" else String.format(Locale.US, "%.2f km away", d / 1000.0)
+        } ?: "Distance pending GPS fix"
+
+        AlertDialog(
+            onDismissRequest = { showParkedSpotDialog = false },
+            title = {
+                Text(
+                    text = spot.name,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "${formatCoordinates(spot.latitude, spot.longitude, settings.coordinateFormat)}\n$distLabel • Saved $savedTimeStr",
+                        fontSize = 12.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilledTonalButton(
+                            onClick = {
+                                viewModel.setTargetFinder(spot.name, spot.latitude, spot.longitude, "PARK / CAMP")
+                                showParkedSpotDialog = false
+                            },
+                            shape = CircleShape,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("park_dialog_point_btn")
+                        ) {
+                            Icon(Icons.Default.Explore, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text("Point Back", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        FilledTonalButton(
+                            onClick = {
+                                val loc = currentLocation
+                                if (loc != null) {
+                                    viewModel.saveParkedSpot(loc.latitude, loc.longitude, spot.name)
+                                    Toast.makeText(context, "Updated Park/Camp location", Toast.LENGTH_SHORT).show()
+                                    showParkedSpotDialog = false
+                                } else {
+                                    Toast.makeText(context, "Awaiting GPS fix", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            shape = CircleShape,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("park_dialog_update_btn")
+                        ) {
+                            Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text("Mark Here", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { showParkedSpotDialog = false },
+                    shape = CircleShape,
+                    modifier = Modifier.height(48.dp)
+                ) {
+                    Text("Done", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.clearParkedSpot()
+                        showParkedSpotDialog = false
+                        Toast.makeText(context, "Cleared Park/Camp pin", Toast.LENGTH_SHORT).show()
+                    },
+                    shape = CircleShape,
+                    modifier = Modifier.height(48.dp)
+                ) {
+                    Text("Clear Pin", fontSize = 12.sp, color = colorScheme.error)
+                }
+            },
+            shape = RoundedCornerShape(28.dp),
+            containerColor = colorScheme.surface
+        )
     }
 }
 

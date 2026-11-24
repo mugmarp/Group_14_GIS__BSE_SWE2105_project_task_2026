@@ -7,7 +7,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.geotrace.LocationTrackerApp
 import com.geotrace.data.export.ExportFormat
+import com.geotrace.data.export.ImportedRoute
 import com.geotrace.data.export.TrackExporter
+import com.geotrace.data.export.TrackImporter
+import com.geotrace.model.ActiveGuideTarget
 import com.geotrace.model.CellTowerInfo
 import com.geotrace.model.GeofenceCategory
 import com.geotrace.model.GeofenceZone
@@ -15,11 +18,14 @@ import com.geotrace.model.LocationPoint
 import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineDownloadProgress
 import com.geotrace.model.OfflineMapRegion
+import com.geotrace.model.ParkedSpot
 import com.geotrace.model.SearchPlaceResult
 import com.geotrace.model.SearchResultSource
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
 import com.geotrace.model.TrailWaypoint
+import com.geotrace.service.ElevationAnalyzer
+import com.geotrace.service.ElevationSummary
 import com.geotrace.service.LocationForegroundService
 import com.geotrace.service.PlaceSearchManager
 import kotlinx.coroutines.Dispatchers
@@ -54,6 +60,16 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val trackingMode: StateFlow<TrackingMode> = repository.trackingMode
     val filteredJitterMeters: StateFlow<Double> = repository.filteredJitterMeters
     val filteredJitterCount: StateFlow<Int> = repository.filteredJitterCount
+    val parkedSpot: StateFlow<ParkedSpot?> = repository.parkedSpot
+
+    private val _importedRoute = MutableStateFlow<ImportedRoute?>(null)
+    val importedRoute: StateFlow<ImportedRoute?> = _importedRoute.asStateFlow()
+
+    private val _isBacktrackingActiveTrail = MutableStateFlow(false)
+    val isBacktrackingActiveTrail: StateFlow<Boolean> = _isBacktrackingActiveTrail.asStateFlow()
+
+    private val _activeGuideTarget = MutableStateFlow<ActiveGuideTarget?>(null)
+    val activeGuideTarget: StateFlow<ActiveGuideTarget?> = _activeGuideTarget.asStateFlow()
 
     data class InspectedTrail(
         val session: TrackingSession,
@@ -166,6 +182,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     var lastHandledSearchRequestMs: Long = 0L
     @Volatile
     var lastHandledInspectedTrailId: String? = null
+    @Volatile
+    var lastHandledImportedRouteId: String? = null
 
     private val _currentMapBoundingBox = MutableStateFlow<org.osmdroid.util.BoundingBox?>(null)
     val currentMapBoundingBox: StateFlow<org.osmdroid.util.BoundingBox?> = _currentMapBoundingBox.asStateFlow()
@@ -1051,6 +1069,113 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         lastHandledInspectedTrailId = null
     }
 
+    fun saveParkedSpot(
+        latitude: Double,
+        longitude: Double,
+        name: String = "Parked Vehicle / Camp",
+        note: String = ""
+    ) {
+        if (!latitude.isFinite() || !longitude.isFinite() || (latitude == 0.0 && longitude == 0.0)) return
+        repository.saveParkedSpot(
+            ParkedSpot(
+                name = name.trim().ifBlank { "Parked Vehicle / Camp" },
+                note = note.trim(),
+                latitude = latitude,
+                longitude = longitude,
+                savedAtMs = System.currentTimeMillis()
+            )
+        )
+    }
+
+    fun clearParkedSpot() {
+        val currentSpot = repository.parkedSpot.value
+        if (currentSpot != null && _activeGuideTarget.value?.let {
+                it.latitude == currentSpot.latitude && it.longitude == currentSpot.longitude
+            } == true
+        ) {
+            _activeGuideTarget.value = null
+        }
+        repository.clearParkedSpot()
+    }
+
+    fun setTargetFinder(label: String, latitude: Double, longitude: Double, badge: String = "TARGET") {
+        if (!latitude.isFinite() || !longitude.isFinite() || (latitude == 0.0 && longitude == 0.0)) return
+        _activeGuideTarget.value = ActiveGuideTarget(
+            label = label.ifBlank { "Target Location" },
+            badge = badge,
+            latitude = latitude,
+            longitude = longitude
+        )
+    }
+
+    fun clearTargetFinder() {
+        _activeGuideTarget.value = null
+    }
+
+    fun importRouteFromContent(
+        rawContent: String,
+        fallbackName: String,
+        extensionHint: String?,
+        onResult: (Result<ImportedRoute>) -> Unit
+    ) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.Default) {
+                TrackImporter.parse(
+                    rawContent = rawContent,
+                    fallbackName = fallbackName,
+                    hintExtension = extensionHint
+                )
+            }
+            result.onSuccess { route ->
+                _isBacktrackingActiveTrail.value = false
+                _isMapFollowPaused.value = true
+                lastHandledImportedRouteId = null
+                _importedRoute.value = route
+            }
+            onResult(result)
+        }
+    }
+
+    fun clearImportedRoute() {
+        _importedRoute.value = null
+        lastHandledImportedRouteId = null
+    }
+
+    fun startBacktrackActiveTrail(): Boolean {
+        val pts = activeTrailPoints.value
+        if (pts.size < 2) return false
+        _importedRoute.value = null
+        _isBacktrackingActiveTrail.value = true
+        val startPt = pts.first()
+        _activeGuideTarget.value = ActiveGuideTarget(
+            label = "Trail Start (${activeSession.value?.name ?: "Return"})",
+            badge = "BACKTRACK",
+            latitude = startPt.latitude,
+            longitude = startPt.longitude
+        )
+        return true
+    }
+
+    fun stopBacktrackActiveTrail() {
+        _isBacktrackingActiveTrail.value = false
+        if (_activeGuideTarget.value?.badge == "BACKTRACK") {
+            _activeGuideTarget.value = null
+        }
+    }
+
+    fun loadElevationSummaryForSession(
+        sessionId: String,
+        onResult: (ElevationSummary) -> Unit
+    ) {
+        viewModelScope.launch {
+            val points = repository.getPointsForSession(sessionId)
+            val summary = withContext(Dispatchers.Default) {
+                ElevationAnalyzer.analyze(points)
+            }
+            onResult(summary)
+        }
+    }
+
     fun exportSession(
         session: TrackingSession,
         format: ExportFormat,
@@ -1413,13 +1538,39 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 emptyList()
             }
 
+            // 7b. Saved Parked Vehicle / Base Camp spot
+            val parkedMatches = repository.parkedSpot.value?.let { spot ->
+                if (trimmed.isBlank() ||
+                    spot.name.contains(trimmed, ignoreCase = true) ||
+                    spot.note.contains(trimmed, ignoreCase = true) ||
+                    "park".contains(trimmed, ignoreCase = true) ||
+                    "camp".contains(trimmed, ignoreCase = true) ||
+                    "car".contains(trimmed, ignoreCase = true)
+                ) {
+                    listOf(
+                        withDist(
+                            SearchPlaceResult(
+                                id = "parked_spot_pin",
+                                name = spot.name,
+                                subtitle = spot.note.ifBlank { "Saved Parked Vehicle / Base Camp" },
+                                latitude = spot.latitude,
+                                longitude = spot.longitude,
+                                source = SearchResultSource.WAYPOINT
+                            )
+                        )
+                    )
+                } else emptyList()
+            } ?: emptyList()
+
             if (trimmed.isBlank()) {
-                // On blank query show Recents first, then Safe Zones & Offline Regions
+                // On blank query show Recents first, then Parked Spot, Safe Zones & Offline Regions
+                localMatches.addAll(parkedMatches)
                 localMatches.addAll(recents)
                 localMatches.addAll(safeZoneMatches)
                 localMatches.addAll(regionMatches)
             } else {
                 // On active search prefer authoritative typed local sources before Recents
+                localMatches.addAll(parkedMatches)
                 localMatches.addAll(safeZoneMatches)
                 localMatches.addAll(wpts)
                 localMatches.addAll(deviceMatches)

@@ -4,11 +4,14 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContract
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -44,6 +47,8 @@ import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Terrain
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -73,7 +78,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -93,6 +104,7 @@ import com.geotrace.model.SpeedUnit
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
 import com.geotrace.model.TrailWaypoint
+import com.geotrace.service.ElevationSummary
 import com.geotrace.ui.components.GeoTraceTopBar
 import com.geotrace.ui.components.ScreenListContentPadding
 import com.geotrace.ui.components.adaptiveContentWidth
@@ -151,6 +163,9 @@ fun HistoryScreen(
     var waypointDialogSession by remember { mutableStateOf<TrackingSession?>(null) }
     var sessionWaypoints by remember { mutableStateOf<List<TrailWaypoint>>(emptyList()) }
     var isLoadingWaypoints by remember { mutableStateOf(false) }
+    var elevationDialogSession by remember { mutableStateOf<TrackingSession?>(null) }
+    var elevationSummary by remember { mutableStateOf<ElevationSummary?>(null) }
+    var isLoadingElevation by remember { mutableStateOf(false) }
 
     val filteredSessions = remember(sessions, historyQuery, selectedModeFilter) {
         val q = historyQuery.trim()
@@ -214,6 +229,54 @@ fun HistoryScreen(
         }
     }
 
+    val importRouteLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            coroutineScope.launch {
+                try {
+                    val (displayName, content) = withContext(Dispatchers.IO) {
+                        var fileName = "Imported Route"
+                        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                            if (c.moveToFirst()) {
+                                val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                                if (idx >= 0) fileName = c.getString(idx) ?: fileName
+                            }
+                        }
+                        val text = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use {
+                            it.readText()
+                        } ?: ""
+                        fileName to text
+                    }
+                    val ext = displayName.substringAfterLast('.', "")
+                    val baseName = displayName.substringBeforeLast('.').ifBlank { displayName }
+                    viewModel.importRouteFromContent(content, baseName, ext) { res ->
+                        res.onSuccess { route ->
+                            Toast.makeText(
+                                context,
+                                "Loaded ${route.name} (${route.formattedDistance}) onto Map",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            onNavigateBack?.invoke()
+                        }.onFailure { err ->
+                            Toast.makeText(
+                                context,
+                                err.message ?: "Could not import route file.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(
+                        context,
+                        "Import failed: ${e.localizedMessage ?: "Read error"}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        }
+    }
+
     fun openWaypointsDialog(session: TrackingSession) {
         waypointDialogSession = session
         sessionWaypoints = emptyList()
@@ -221,6 +284,16 @@ fun HistoryScreen(
         viewModel.loadWaypointsForSession(session.id) { loaded ->
             sessionWaypoints = loaded
             isLoadingWaypoints = false
+        }
+    }
+
+    fun openElevationDialog(session: TrackingSession) {
+        elevationDialogSession = session
+        elevationSummary = null
+        isLoadingElevation = true
+        viewModel.loadElevationSummaryForSession(session.id) { summary ->
+            elevationSummary = summary
+            isLoadingElevation = false
         }
     }
 
@@ -241,10 +314,34 @@ fun HistoryScreen(
             item {
                 GeoTraceTopBar(
                     title = "Recorded Trails & Telemetry",
-                    subtitle = "SQLite tracks with GPX, KML, CSV & GeoJSON exports",
+                    subtitle = "SQLite tracks, elevation profiles, GPX/KML/GeoJSON import & export",
                     onBack = onNavigateBack,
                     backContentDescription = "Back to Live Map"
                 )
+            }
+
+            item(key = "import_external_route_card") {
+                OutlinedButton(
+                    onClick = { importRouteLauncher.launch(arrayOf("*/*")) },
+                    shape = CircleShape,
+                    border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.5f)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = colorScheme.tertiary.copy(alpha = 0.08f),
+                        contentColor = colorScheme.tertiary
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("history_import_route_btn")
+                ) {
+                    Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(17.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Import External Route (GPX / KML / GeoJSON)",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
 
             if (sessions.isEmpty()) {
@@ -500,6 +597,7 @@ fun HistoryScreen(
                             onViewWaypoints = if (session.waypointCount > 0) {
                                 { openWaypointsDialog(session) }
                             } else null,
+                            onViewElevation = { openElevationDialog(session) },
                             onExport = { format -> triggerExport(session, format) },
                             onRename = {
                                 renameInput = session.name
@@ -511,6 +609,17 @@ fun HistoryScreen(
                 }
             }
         }
+    }
+
+    // Elevation Profile & Ascent/Descent Dialog
+    if (elevationDialogSession != null) {
+        val targetSession = elevationDialogSession!!
+        TrailElevationDialog(
+            session = targetSession,
+            summary = elevationSummary,
+            isLoading = isLoadingElevation,
+            onDismiss = { elevationDialogSession = null }
+        )
     }
 
     // Trail Waypoints Inspection & Management Dialog
@@ -952,6 +1061,7 @@ private fun SessionHistoryCard(
     exportBusy: Boolean,
     onViewOnMap: (() -> Unit)?,
     onViewWaypoints: (() -> Unit)?,
+    onViewElevation: () -> Unit,
     onExport: (ExportFormat) -> Unit,
     onRename: () -> Unit,
     onDeleteRequest: () -> Unit
@@ -1110,64 +1220,87 @@ private fun SessionHistoryCard(
                     }
                 }
 
-                if (onViewOnMap != null || onViewWaypoints != null) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        if (onViewOnMap != null) {
-                            OutlinedButton(
-                                onClick = onViewOnMap,
-                                shape = CircleShape,
-                                border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f)),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = colorScheme.primary.copy(alpha = 0.06f),
-                                    contentColor = colorScheme.primary
-                                ),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                                modifier = Modifier
-                                    .weight(1.25f)
-                                    .height(48.dp)
-                                    .testTag("view_trail_map_btn")
-                            ) {
-                                Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = if (onViewWaypoints != null) "Inspect on Map" else "Inspect Trail on Map",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (onViewOnMap != null) {
+                        OutlinedButton(
+                            onClick = onViewOnMap,
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f)),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = colorScheme.primary.copy(alpha = 0.06f),
+                                contentColor = colorScheme.primary
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                            modifier = Modifier
+                                .weight(1.1f)
+                                .height(48.dp)
+                                .testTag("view_trail_map_btn")
+                        ) {
+                            Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = "Map",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
+                    }
 
-                        if (onViewWaypoints != null) {
-                            OutlinedButton(
-                                onClick = onViewWaypoints,
-                                shape = CircleShape,
-                                border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.45f)),
-                                colors = ButtonDefaults.outlinedButtonColors(
-                                    containerColor = colorScheme.tertiary.copy(alpha = 0.06f),
-                                    contentColor = colorScheme.tertiary
-                                ),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                                    .testTag("view_waypoints_btn")
-                            ) {
-                                Icon(Icons.Default.Flag, contentDescription = null, modifier = Modifier.size(15.dp))
-                                Spacer(modifier = Modifier.width(5.dp))
-                                Text(
-                                    text = "Waypoints (${session.waypointCount})",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                    OutlinedButton(
+                        onClick = onViewElevation,
+                        shape = CircleShape,
+                        border = BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.45f)),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = colorScheme.secondary.copy(alpha = 0.06f),
+                            contentColor = colorScheme.secondary
+                        ),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                        modifier = Modifier
+                            .weight(1.1f)
+                            .height(48.dp)
+                            .testTag("view_elevation_btn")
+                    ) {
+                        Icon(Icons.Default.Terrain, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = "Elevation",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    if (onViewWaypoints != null) {
+                        OutlinedButton(
+                            onClick = onViewWaypoints,
+                            shape = CircleShape,
+                            border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.45f)),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = colorScheme.tertiary.copy(alpha = 0.06f),
+                                contentColor = colorScheme.tertiary
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .testTag("view_waypoints_btn")
+                        ) {
+                            Icon(Icons.Default.Flag, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = "${session.waypointCount}",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
@@ -1340,4 +1473,161 @@ private class CreateExportDocumentContract : ActivityResultContract<TrackerViewM
     override fun parseResult(resultCode: Int, intent: Intent?): Uri? {
         return if (resultCode == Activity.RESULT_OK) intent?.data else null
     }
+}
+
+@Composable
+private fun TrailElevationDialog(
+    session: TrackingSession,
+    summary: ElevationSummary?,
+    isLoading: Boolean,
+    onDismiss: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column {
+                Text(
+                    text = "Elevation Profile",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = colorScheme.onSurface
+                )
+                Text(
+                    text = "${session.name} • ${session.formattedDistance}",
+                    fontSize = 11.sp,
+                    color = colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        },
+        text = {
+            when {
+                isLoading || summary == null -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(140.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                    }
+                }
+                !summary.hasValidElevation || summary.profileSamples.size < 2 -> {
+                    Text(
+                        text = "No vertical altitude telemetry was captured for this trail (e.g., 2D network/cellular-only points).",
+                        fontSize = 12.sp,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                }
+                else -> {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(customColors.surfaceContainerLow, RoundedCornerShape(16.dp))
+                                .border(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            MetricItem("ASCENT", "+${summary.totalAscentMeters.toInt()} m", colorScheme.tertiary)
+                            MetricItem("DESCENT", "-${summary.totalDescentMeters.toInt()} m", colorScheme.error)
+                            MetricItem("MIN ALT", "${summary.minAltitudeMeters.toInt()} m", colorScheme.onSurfaceVariant)
+                            MetricItem("MAX ALT", "${summary.maxAltitudeMeters.toInt()} m", colorScheme.primary)
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = customColors.surfaceContainerLow,
+                            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(150.dp)
+                        ) {
+                            val lineColor = colorScheme.primary
+                            val fillTop = colorScheme.primary.copy(alpha = 0.28f)
+                            val fillBottom = colorScheme.primary.copy(alpha = 0.02f)
+                            val gridColor = colorScheme.outlineVariant.copy(alpha = 0.45f)
+
+                            Canvas(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 10.dp, vertical = 12.dp)
+                            ) {
+                                val samples = summary.profileSamples
+                                val minAlt = summary.minAltitudeMeters
+                                val maxAlt = summary.maxAltitudeMeters
+                                val altRange = (maxAlt - minAlt).coerceAtLeast(10.0)
+                                val maxDist = samples.last().distanceMeters.coerceAtLeast(1.0)
+
+                                // Horizontal reference lines
+                                for (step in 1..3) {
+                                    val y = size.height * (step / 4f)
+                                    drawLine(
+                                        color = gridColor,
+                                        start = Offset(0f, y),
+                                        end = Offset(size.width, y),
+                                        strokeWidth = 1f
+                                    )
+                                }
+
+                                val linePath = Path()
+                                val fillPath = Path()
+                                samples.forEachIndexed { idx, s ->
+                                    val x = ((s.distanceMeters / maxDist).toFloat().coerceIn(0f, 1f)) * size.width
+                                    val normY = ((s.altitudeMeters - minAlt) / altRange).toFloat().coerceIn(0f, 1f)
+                                    val y = size.height - normY * size.height
+                                    if (idx == 0) {
+                                        linePath.moveTo(x, y)
+                                        fillPath.moveTo(x, size.height)
+                                        fillPath.lineTo(x, y)
+                                    } else {
+                                        linePath.lineTo(x, y)
+                                        fillPath.lineTo(x, y)
+                                    }
+                                    if (idx == samples.lastIndex) {
+                                        fillPath.lineTo(x, size.height)
+                                        fillPath.close()
+                                    }
+                                }
+
+                                drawPath(
+                                    path = fillPath,
+                                    brush = Brush.verticalGradient(listOf(fillTop, fillBottom))
+                                )
+                                drawPath(
+                                    path = linePath,
+                                    color = lineColor,
+                                    style = Stroke(
+                                        width = 4f,
+                                        cap = StrokeCap.Round,
+                                        join = StrokeJoin.Round
+                                    )
+                                )
+                            }
+                        }
+                        Text(
+                            text = "Vertical jitter filtered (±4m hysteresis) across ${summary.profileSamples.size} sampled terrain intervals.",
+                            fontSize = 10.5.sp,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = CircleShape,
+                modifier = Modifier.height(48.dp)
+            ) {
+                Text("Close", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            }
+        },
+        shape = RoundedCornerShape(28.dp),
+        containerColor = colorScheme.surface
+    )
 }

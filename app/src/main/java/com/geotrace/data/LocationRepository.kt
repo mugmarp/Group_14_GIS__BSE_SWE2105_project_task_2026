@@ -13,10 +13,12 @@ import com.geotrace.model.LocationPoint
 import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineMapRegion
 import com.geotrace.model.OfflinePlacePoi
+import com.geotrace.model.ParkedSpot
 import com.geotrace.model.SpeedUnit
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
 import com.geotrace.model.TrailWaypoint
+import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -79,6 +81,45 @@ class LocationRepository(private val context: Context) {
 
     private val _filteredJitterCount = MutableStateFlow(0)
     val filteredJitterCount: StateFlow<Int> = _filteredJitterCount.asStateFlow()
+
+    private val _parkedSpot = MutableStateFlow(loadParkedSpot())
+    val parkedSpot: StateFlow<ParkedSpot?> = _parkedSpot.asStateFlow()
+
+    private fun loadParkedSpot(): ParkedSpot? {
+        val raw = prefs.getString("parked_spot_json", null) ?: return null
+        return try {
+            val obj = JSONObject(raw)
+            val lat = obj.optDouble("latitude", Double.NaN)
+            val lon = obj.optDouble("longitude", Double.NaN)
+            if (!lat.isFinite() || !lon.isFinite() || (lat == 0.0 && lon == 0.0)) return null
+            ParkedSpot(
+                name = obj.optString("name").ifBlank { "Parked Vehicle" },
+                note = obj.optString("note"),
+                latitude = lat,
+                longitude = lon,
+                savedAtMs = obj.optLong("savedAtMs", System.currentTimeMillis())
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun saveParkedSpot(spot: ParkedSpot) {
+        val obj = JSONObject().apply {
+            put("name", spot.name)
+            put("note", spot.note)
+            put("latitude", spot.latitude)
+            put("longitude", spot.longitude)
+            put("savedAtMs", spot.savedAtMs)
+        }
+        prefs.edit().putString("parked_spot_json", obj.toString()).apply()
+        _parkedSpot.value = spot
+    }
+
+    fun clearParkedSpot() {
+        prefs.edit().remove("parked_spot_json").apply()
+        _parkedSpot.value = null
+    }
 
     @Volatile
     var geofenceNotificationsEnabled: Boolean = prefs.getBoolean("geofence_notifications_enabled", false)

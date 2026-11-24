@@ -233,3 +233,18 @@ data class CellTowerLocation(
     val isServing: Boolean = true,
     val signalDbm: Int? = null
 )
+
+data class ParkedSpot(
+    val name: String,
+    val note: String = "",
+    val latitude: Double,
+    val longitude: Double,
+    val savedAtMs: Long = System.currentTimeMillis()
+)
+
+data class ActiveGuideTarget(
+    val label: String,
+    val badge: String = "TARGET",
+    val latitude: Double,
+    val longitude: Double
+)
