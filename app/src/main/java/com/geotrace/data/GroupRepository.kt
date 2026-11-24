@@ -31,6 +31,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -397,6 +398,8 @@ class GroupRepository(
                 .collection("devices").document(currentDeviceId)
                 .update("deviceName", name)
                 .await()
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             // Doc may not exist yet before first fix; ignored
         }
@@ -406,6 +409,8 @@ class GroupRepository(
                     .collection("live_locations").document("${uid}_${currentDeviceId}")
                     .update("displayName", name)
                     .await()
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {}
         }
     }
@@ -461,6 +466,7 @@ class GroupRepository(
             knownGroupIds.add(docRef.id)
             Result.success(created)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.e(TAG, "Failed to create group: ${e.message}", e)
             Result.failure(e)
         }
@@ -498,6 +504,7 @@ class GroupRepository(
             val updatedGroup = group.copy(memberIds = (group.memberIds + uid).distinct())
             Result.success(updatedGroup)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.e(TAG, "Failed to join group by code: ${e.message}", e)
             Result.failure(e)
         }
@@ -554,6 +561,8 @@ class GroupRepository(
             try {
                 locCol.document("${uid}_${currentDeviceId}").delete().await()
                 locCol.document(uid).delete().await()
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {}
 
             val snapshot = groupRef.get().await()
@@ -578,6 +587,7 @@ class GroupRepository(
             knownGroupIds.remove(groupId)
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.e(TAG, "Failed to leave group: ${e.message}", e)
             Result.failure(e)
         }
@@ -594,6 +604,8 @@ class GroupRepository(
             val groupRef = db.collection("groups").document(groupId)
             val docs = try {
                 groupRef.collection("live_locations").get().await().documents
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
                 emptyList()
             }
@@ -608,6 +620,7 @@ class GroupRepository(
             knownGroupIds.remove(groupId)
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.e(TAG, "Failed to delete group: ${e.message}", e)
             Result.failure(e)
         }
@@ -637,6 +650,8 @@ class GroupRepository(
             for (docId in docIdsToDelete) {
                 try {
                     locCol.document(docId).delete().await()
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (_: Exception) {}
             }
 
@@ -648,6 +663,7 @@ class GroupRepository(
             }
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.e(TAG, "Failed to remove group device ${target.id}: ${e.message}", e)
             Result.failure(e)
         }
@@ -663,6 +679,8 @@ class GroupRepository(
             val locCol = db.collection("groups").document(groupId).collection("live_locations")
             locCol.document("${uid}_${currentDeviceId}").delete().await()
             locCol.document(uid).delete().await()
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {}
     }
 
@@ -733,6 +751,7 @@ class GroupRepository(
 
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.w(TAG, "Failed to publish live location to group $groupId: ${e.message}")
             maybeReportWritePermissionError(e, "group location")
             Result.failure(e)
@@ -818,6 +837,7 @@ class GroupRepository(
             _lastSyncTimestampMs.value = System.currentTimeMillis()
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.w(TAG, "Failed to update personal device doc: ${e.message}")
             maybeReportWritePermissionError(e, "device fleet")
             Result.failure(e)
@@ -1022,6 +1042,7 @@ class GroupRepository(
                 .await()
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.e(TAG, "Failed to send remote ring command: ${e.message}", e)
             Result.failure(e)
         }
@@ -1040,6 +1061,8 @@ class GroupRepository(
                     )
                 )
                 .await()
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {}
     }
 
@@ -1060,6 +1083,7 @@ class GroupRepository(
                 .await()
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.e(TAG, "Failed to cancel ring command: ${e.message}", e)
             Result.failure(e)
         }
@@ -1076,6 +1100,7 @@ class GroupRepository(
                 .await()
             Result.success(Unit)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.e(TAG, "Failed to remove personal device: ${e.message}", e)
             Result.failure(e)
         }
@@ -1089,6 +1114,7 @@ class GroupRepository(
                 .delete()
                 .await()
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.w(TAG, "Failed to unlink personal device doc on sign out: ${e.message}")
         }
         val groupIds = (listOfNotNull(getSelectedGroupId()) + knownGroupIds.toList()).distinct()

@@ -8,6 +8,7 @@ import com.geotrace.model.OfflineMapRegion
 import com.geotrace.model.OfflinePlacePoi
 import com.geotrace.model.SearchPlaceResult
 import com.geotrace.model.SearchResultSource
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -37,6 +38,86 @@ class PlaceSearchManager(private val context: Context) {
         private const val KEY_RECENTS = "recent_places_json"
         private const val MAX_RECENTS = 8
         private const val USER_AGENT = "GeoTrace-GIS-FieldApp/1.0 (Android; Educational Telemetry)"
+
+        /**
+         * Parses raw Decimal Degrees, DMS coordinates, `geo:lat,lon` URIs, or Google Maps links
+         * completely offline in <1ms.
+         */
+        fun parseDirectCoordinates(rawInput: String): SearchPlaceResult? {
+            val text = rawInput.trim()
+            if (text.isBlank()) return null
+
+            // 1. Check DMS format e.g. 0°19'57.4"N, 32°34'06.6"E or 0° 19' 57.4" S 30° 39' 16.2" W
+            val dmsRegex = Regex(
+                """([+-]?\d{1,3})\s*[°d]\s*(\d{1,2})\s*['′m]\s*(\d{1,2}(?:\.\d+)?)\s*(?:["″s])?\s*([NSns])\s*[,;\s]+\s*([+-]?\d{1,3})\s*[°d]\s*(\d{1,2})\s*['′m]\s*(\d{1,2}(?:\.\d+)?)\s*(?:["″s])?\s*([EWew])"""
+            )
+            dmsRegex.find(text)?.let { m ->
+                val latDeg = m.groupValues[1].toDoubleOrNull() ?: return null
+                val latMin = m.groupValues[2].toDoubleOrNull() ?: return null
+                val latSec = m.groupValues[3].toDoubleOrNull() ?: return null
+                val latHem = m.groupValues[4].uppercase(Locale.US)
+                val lonDeg = m.groupValues[5].toDoubleOrNull() ?: return null
+                val lonMin = m.groupValues[6].toDoubleOrNull() ?: return null
+                val lonSec = m.groupValues[7].toDoubleOrNull() ?: return null
+                val lonHem = m.groupValues[8].uppercase(Locale.US)
+
+                if (latMin >= 60.0 || latSec >= 60.0 || lonMin >= 60.0 || lonSec >= 60.0) return null
+                var lat = kotlin.math.abs(latDeg) + latMin / 60.0 + latSec / 3600.0
+                if (latHem == "S") lat = -lat
+                var lon = kotlin.math.abs(lonDeg) + lonMin / 60.0 + lonSec / 3600.0
+                if (lonHem == "W") lon = -lon
+
+                if (isValidLatLon(lat, lon)) {
+                    return buildCoordinateResult(lat, lon, "DMS Coordinate")
+                }
+            }
+
+            // 2. Check geo: URI or URL query/at-coordinates (?q=lat,lon or @lat,lon)
+            val urlOrGeoRegex = Regex("""(?:q=|query=|loc:|geo:|@)(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)""")
+            urlOrGeoRegex.find(text)?.let { m ->
+                val lat = m.groupValues[1].toDoubleOrNull()
+                val lon = m.groupValues[2].toDoubleOrNull()
+                if (lat != null && lon != null && isValidLatLon(lat, lon)) {
+                    return buildCoordinateResult(lat, lon, "Map Link / Geo URI")
+                }
+            }
+
+            // 3. Check Decimal Degrees with optional degree symbols or N/S/E/W suffixes
+            val ddRegex = Regex(
+                """^\s*([+-]?\d{1,2}(?:\.\d+)?)\s*°?\s*([NSns])?\s*[,;\s]+\s*([+-]?\d{1,3}(?:\.\d+)?)\s*°?\s*([EWew])?\s*$"""
+            )
+            ddRegex.matchEntire(text)?.let { m ->
+                var lat = m.groupValues[1].toDoubleOrNull() ?: return@let
+                val latHem = m.groupValues[2].uppercase(Locale.US)
+                var lon = m.groupValues[3].toDoubleOrNull() ?: return@let
+                val lonHem = m.groupValues[4].uppercase(Locale.US)
+
+                if (latHem == "S") lat = -kotlin.math.abs(lat) else if (latHem == "N") lat = kotlin.math.abs(lat)
+                if (lonHem == "W") lon = -kotlin.math.abs(lon) else if (lonHem == "E") lon = kotlin.math.abs(lon)
+
+                if (isValidLatLon(lat, lon)) {
+                    return buildCoordinateResult(lat, lon, "Decimal Coordinates")
+                }
+            }
+
+            return null
+        }
+
+        private fun buildCoordinateResult(lat: Double, lon: Double, label: String): SearchPlaceResult {
+            val dd = String.format(Locale.US, "%.5f°, %.5f°", lat, lon)
+            return SearchPlaceResult(
+                id = "coord_${String.format(Locale.US, "%.6f_%.6f", lat, lon)}",
+                name = dd,
+                subtitle = "$label • Jump directly to coordinate",
+                latitude = lat,
+                longitude = lon,
+                source = SearchResultSource.COORDINATE
+            )
+        }
+
+        private fun isValidLatLon(lat: Double, lon: Double): Boolean {
+            return lat.isFinite() && lon.isFinite() && lat in -90.0..90.0 && lon in -180.0..180.0
+        }
     }
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -58,85 +139,7 @@ class PlaceSearchManager(private val context: Context) {
         }
     }
 
-    /**
-     * Parses raw Decimal Degrees, DMS coordinates, `geo:lat,lon` URIs, or Google Maps links
-     * completely offline in <1ms.
-     */
-    fun parseDirectCoordinates(rawInput: String): SearchPlaceResult? {
-        val text = rawInput.trim()
-        if (text.isBlank()) return null
-
-        // 1. Check DMS format e.g. 0°19'57.4"N, 32°34'06.6"E or 0° 19' 57.4" S 30° 39' 16.2" W
-        val dmsRegex = Regex(
-            """([+-]?\d{1,3})\s*[°d]\s*(\d{1,2})\s*['′m]\s*(\d{1,2}(?:\.\d+)?)\s*(?:["″s])?\s*([NSns])\s*[,;\s]+\s*([+-]?\d{1,3})\s*[°d]\s*(\d{1,2})\s*['′m]\s*(\d{1,2}(?:\.\d+)?)\s*(?:["″s])?\s*([EWew])"""
-        )
-        dmsRegex.find(text)?.let { m ->
-            val latDeg = m.groupValues[1].toDoubleOrNull() ?: return null
-            val latMin = m.groupValues[2].toDoubleOrNull() ?: return null
-            val latSec = m.groupValues[3].toDoubleOrNull() ?: return null
-            val latHem = m.groupValues[4].uppercase(Locale.US)
-            val lonDeg = m.groupValues[5].toDoubleOrNull() ?: return null
-            val lonMin = m.groupValues[6].toDoubleOrNull() ?: return null
-            val lonSec = m.groupValues[7].toDoubleOrNull() ?: return null
-            val lonHem = m.groupValues[8].uppercase(Locale.US)
-
-            if (latMin >= 60.0 || latSec >= 60.0 || lonMin >= 60.0 || lonSec >= 60.0) return null
-            var lat = kotlin.math.abs(latDeg) + latMin / 60.0 + latSec / 3600.0
-            if (latHem == "S") lat = -lat
-            var lon = kotlin.math.abs(lonDeg) + lonMin / 60.0 + lonSec / 3600.0
-            if (lonHem == "W") lon = -lon
-
-            if (isValidLatLon(lat, lon)) {
-                return buildCoordinateResult(lat, lon, "DMS Coordinate")
-            }
-        }
-
-        // 2. Check geo: URI or URL query/at-coordinates (?q=lat,lon or @lat,lon)
-        val urlOrGeoRegex = Regex("""(?:q=|query=|loc:|geo:|@)(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)""")
-        urlOrGeoRegex.find(text)?.let { m ->
-            val lat = m.groupValues[1].toDoubleOrNull()
-            val lon = m.groupValues[2].toDoubleOrNull()
-            if (lat != null && lon != null && isValidLatLon(lat, lon)) {
-                return buildCoordinateResult(lat, lon, "Map Link / Geo URI")
-            }
-        }
-
-        // 3. Check Decimal Degrees with optional degree symbols or N/S/E/W suffixes
-        val ddRegex = Regex(
-            """^\s*([+-]?\d{1,2}(?:\.\d+)?)\s*°?\s*([NSns])?\s*[,;\s]+\s*([+-]?\d{1,3}(?:\.\d+)?)\s*°?\s*([EWew])?\s*$"""
-        )
-        ddRegex.matchEntire(text)?.let { m ->
-            var lat = m.groupValues[1].toDoubleOrNull() ?: return@let
-            val latHem = m.groupValues[2].uppercase(Locale.US)
-            var lon = m.groupValues[3].toDoubleOrNull() ?: return@let
-            val lonHem = m.groupValues[4].uppercase(Locale.US)
-
-            if (latHem == "S") lat = -kotlin.math.abs(lat) else if (latHem == "N") lat = kotlin.math.abs(lat)
-            if (lonHem == "W") lon = -kotlin.math.abs(lon) else if (lonHem == "E") lon = kotlin.math.abs(lon)
-
-            if (isValidLatLon(lat, lon)) {
-                return buildCoordinateResult(lat, lon, "Decimal Coordinates")
-            }
-        }
-
-        return null
-    }
-
-    private fun buildCoordinateResult(lat: Double, lon: Double, label: String): SearchPlaceResult {
-        val dd = String.format(Locale.US, "%.5f°, %.5f°", lat, lon)
-        return SearchPlaceResult(
-            id = "coord_${String.format(Locale.US, "%.6f_%.6f", lat, lon)}",
-            name = dd,
-            subtitle = "$label • Jump directly to coordinate",
-            latitude = lat,
-            longitude = lon,
-            source = SearchResultSource.COORDINATE
-        )
-    }
-
-    private fun isValidLatLon(lat: Double, lon: Double): Boolean {
-        return lat.isFinite() && lon.isFinite() && lat in -90.0..90.0 && lon in -180.0..180.0
-    }
+    fun parseDirectCoordinates(rawInput: String): SearchPlaceResult? = Companion.parseDirectCoordinates(rawInput)
 
     data class OnlineSearchOutcome(
         val results: List<SearchPlaceResult>,
@@ -156,6 +159,7 @@ class PlaceSearchManager(private val context: Context) {
         val photonResults = try {
             queryPhoton(trimmed, biasLat, biasLon)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.w(TAG, "Photon search failed: ${e.message}")
             photonFailed = true
             null
@@ -177,6 +181,7 @@ class PlaceSearchManager(private val context: Context) {
                 )
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.w(TAG, "Nominatim search failed: ${e.message}")
             OnlineSearchOutcome(
                 results = emptyList(),

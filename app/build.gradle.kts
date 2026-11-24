@@ -120,4 +120,8 @@ dependencies {
 
     // Phase 2: Nearby Connections P2P Mesh
     implementation(libs.play.services.nearby)
+
+    // Local JVM Unit Tests
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }
