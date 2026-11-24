@@ -195,6 +195,6 @@ The compiled APK files will be located at:
 | **ATAHO APRINAL**         | 2025/BSE/O46/PS|
 | *ARINDWA EMMANUEL* | 2020/BSE/039/PS|
 | *AINEMBABAZI ALISON* | 2025/BSE/191/PS |
-| *NATWATA CYRIL* | — |
+| *NATWEETA CYRIL* | 2025/BSE/PS |
 
 **Repository URL:** `https://github.com/mugmarp/Group_14_GIS__BSE_SWE2105_project_task_2026`
