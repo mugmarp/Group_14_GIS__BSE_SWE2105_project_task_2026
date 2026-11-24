@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
+import com.geotrace.model.LocationPoint
 import com.geotrace.model.OfflineMapRegion
 import com.geotrace.model.OfflinePlacePoi
 import com.geotrace.model.SearchPlaceResult
@@ -117,6 +118,136 @@ class PlaceSearchManager(private val context: Context) {
 
         private fun isValidLatLon(lat: Double, lon: Double): Boolean {
             return lat.isFinite() && lon.isFinite() && lat in -90.0..90.0 && lon in -180.0..180.0
+        }
+
+        private val SURVIVAL_FALLBACK_NAMES = mapOf(
+            "drinking_water" to "Drinking Water",
+            "water_point" to "Water Point",
+            "spring" to "Natural Spring",
+            "fuel" to "Fuel Station",
+            "hospital" to "Hospital",
+            "clinic" to "Medical Clinic",
+            "pharmacy" to "Pharmacy",
+            "doctors" to "Medical Post",
+            "police" to "Police Post",
+            "ranger_station" to "Ranger Station",
+            "shelter" to "Emergency Shelter",
+            "alpine_hut" to "Alpine Hut",
+            "wilderness_hut" to "Wilderness Hut",
+            "camp_site" to "Campsite",
+            "viewpoint" to "Viewpoint",
+            "information" to "Visitor Information",
+            "toilets" to "Public Toilets",
+            "waterfall" to "Waterfall",
+            "peak" to "Peak",
+            "bus_station" to "Bus Station",
+            "aerodrome" to "Airfield / Airstrip",
+            "atm" to "ATM",
+            "parking" to "Trailhead / Parking"
+        )
+
+        /**
+         * Pure JVM helper that maps Overpass element tags to (resolvedName, formattedCategory, priorityScore).
+         * Higher priority scores surface medical/water/fuel/lodging/tourism essentials before generic roads/buildings.
+         */
+        fun categorizeAndScoreOverpassElement(tags: JSONObject): Triple<String?, String, Int> {
+            val amenity = tags.optString("amenity").trim()
+            val tourism = tags.optString("tourism").trim()
+            val naturalTag = tags.optString("natural").trim()
+            val railway = tags.optString("railway").trim()
+            val aeroway = tags.optString("aeroway").trim()
+            val place = tags.optString("place").trim()
+            val shop = tags.optString("shop").trim()
+            val building = tags.optString("building").trim().takeIf { it != "yes" } ?: ""
+            val highway = tags.optString("highway").trim()
+
+            val rawCategoryKey = amenity.ifBlank { tourism }
+                .ifBlank { naturalTag }
+                .ifBlank { if (railway == "station") "train_station" else "" }
+                .ifBlank { aeroway }
+                .ifBlank { place }
+                .ifBlank { shop }
+                .ifBlank { building }
+                .ifBlank { if (highway.isNotBlank()) "road" else "place" }
+
+            val priority = when {
+                amenity in setOf("hospital", "clinic", "pharmacy", "doctors", "drinking_water", "water_point", "police", "ranger_station") -> 100
+                naturalTag == "spring" -> 100
+                amenity in setOf("fuel", "shelter") -> 90
+                tourism in setOf("camp_site", "alpine_hut", "wilderness_hut", "hotel", "guest_house", "hostel", "chalet", "motel") -> 85
+                tourism in setOf("viewpoint", "attraction", "information", "museum", "picnic_site") || naturalTag in setOf("waterfall", "peak") -> 75
+                railway == "station" || aeroway == "aerodrome" || amenity in setOf("bus_station", "atm", "bank", "restaurant", "cafe", "toilets", "parking") -> 60
+                place.isNotBlank() || shop.isNotBlank() -> 40
+                else -> 20
+            }
+
+            val explicitName = tags.optString("name").trim()
+            val fallbackName = SURVIVAL_FALLBACK_NAMES[amenity]
+                ?: SURVIVAL_FALLBACK_NAMES[tourism]
+                ?: SURVIVAL_FALLBACK_NAMES[naturalTag]
+                ?: SURVIVAL_FALLBACK_NAMES[aeroway]
+                ?: if (railway == "station") "Train Station" else null
+
+            val resolvedName = explicitName.ifBlank { fallbackName ?: "" }.ifBlank { null }
+            val formattedCategory = rawCategoryKey
+                .replace('_', ' ')
+                .replaceFirstChar { it.uppercase() }
+            return Triple(resolvedName, formattedCategory, priority)
+        }
+
+        /**
+         * Parses an Overpass API JSON response string into tourism/survival-prioritized [OfflinePlacePoi] records.
+         * Extracted cleanly for offline unit testing without network calls.
+         */
+        fun parseOverpassElementsJson(
+            responseText: String,
+            regionId: String,
+            regionName: String,
+            seenDedup: MutableSet<String> = HashSet(),
+            maxResults: Int = 250
+        ): List<OfflinePlacePoi> {
+            val elements = JSONObject(responseText).optJSONArray("elements") ?: return emptyList()
+            val scored = mutableListOf<Pair<Int, OfflinePlacePoi>>()
+
+            for (i in 0 until elements.length()) {
+                val el = elements.optJSONObject(i) ?: continue
+                val tags = el.optJSONObject("tags") ?: continue
+                val (resolvedName, category, priority) = categorizeAndScoreOverpassElement(tags)
+                val name = resolvedName ?: continue
+
+                val centerObj = el.optJSONObject("center")
+                val lat = centerObj?.optDouble("lat", Double.NaN) ?: el.optDouble("lat", Double.NaN)
+                val lon = centerObj?.optDouble("lon", Double.NaN) ?: el.optDouble("lon", Double.NaN)
+                if (!isValidLatLon(lat, lon)) continue
+
+                val dedup = "${name.lowercase(Locale.US)}:${String.format(Locale.US, "%.4f,%.4f", lat, lon)}"
+                if (!seenDedup.add(dedup)) continue
+
+                val street = tags.optString("addr:street")
+                val city = tags.optString("addr:city")
+                val sub = listOfNotNull(
+                    category.takeIf { it.isNotBlank() },
+                    street.takeIf { it.isNotBlank() },
+                    city.takeIf { it.isNotBlank() },
+                    "Cached in $regionName"
+                ).joinToString(" • ")
+
+                val poi = OfflinePlacePoi(
+                    id = "${regionId}_${el.optString("type")}_${el.optLong("id", UUID.randomUUID().mostSignificantBits)}",
+                    regionId = regionId,
+                    name = name,
+                    category = category,
+                    subtitle = sub,
+                    latitude = lat,
+                    longitude = lon
+                )
+                scored.add(priority to poi)
+            }
+
+            return scored
+                .sortedWith(compareByDescending<Pair<Int, OfflinePlacePoi>> { it.first }.thenBy { it.second.name })
+                .take(maxResults)
+                .map { it.second }
         }
     }
 
@@ -318,8 +449,8 @@ class PlaceSearchManager(private val context: Context) {
     }
 
     /**
-     * Fetches named POIs, institutions, and major roads inside an offline region's bounding box
-     * from OpenStreetMap Overpass API so downloaded regions become searchable when offline.
+     * Fetches tourism-prioritized POIs (lodging, camps, water, fuel, medical, viewpoints, transit)
+     * plus named landmarks inside an offline region's bounding box from OpenStreetMap Overpass API.
      */
     suspend fun fetchRegionPoisForOfflineCache(region: OfflineMapRegion): List<OfflinePlacePoi> = withContext(Dispatchers.IO) {
         val s = region.southLat.coerceIn(-85.0, 85.0)
@@ -340,26 +471,92 @@ class PlaceSearchManager(private val context: Context) {
             Triple(s, w, n) to e
         }
         val (swn, eastClamp) = queryBox
-        val bboxStr = String.format(Locale.US, "%.5f,%.5f,%.5f,%.5f", swn.first, swn.second, swn.third, eastClamp)
+        return@withContext executeOverpassQueryForBox(
+            south = swn.first,
+            west = swn.second,
+            north = swn.third,
+            east = eastClamp,
+            regionId = region.id,
+            regionName = region.name,
+            seenDedup = HashSet(),
+            maxResults = 250
+        )
+    }
 
+    /**
+     * Fetches tourism and survival POIs along an expedition/trail corridor strip (e.g. ±1.5 km buffer),
+     * chunked across sampled corridor segments so long trails remain fast and within Overpass rate limits.
+     */
+    suspend fun fetchCorridorPoisForOfflineCache(
+        points: List<LocationPoint>,
+        regionId: String,
+        regionName: String,
+        halfWidthKm: Double = 1.5
+    ): List<OfflinePlacePoi> = withContext(Dispatchers.IO) {
+        if (points.size < 2) return@withContext emptyList()
+        val rawBoxes = OfflineMapManager.computeCorridorBoxes(
+            points = points,
+            halfWidthKm = halfWidthKm,
+            spacingMeters = 2500.0
+        )
+        if (rawBoxes.isEmpty()) return@withContext emptyList()
+
+        // Merge down to at most 4 evenly distributed corridor windows so Overpass stays responsive
+        val stride = ((rawBoxes.size + 3) / 4).coerceAtLeast(1)
+        val mergedWindows = rawBoxes.chunked(stride).map { chunk ->
+            OfflineMapManager.unionBoundingBox(chunk)!!
+        }
+
+        val combined = mutableListOf<OfflinePlacePoi>()
+        val seenDedup = HashSet<String>()
+        for (window in mergedWindows) {
+            if (combined.size >= 300) break
+            val batch = executeOverpassQueryForBox(
+                south = window.south,
+                west = window.west,
+                north = window.north,
+                east = window.east,
+                regionId = regionId,
+                regionName = regionName,
+                seenDedup = seenDedup,
+                maxResults = 150
+            )
+            combined.addAll(batch)
+        }
+        combined.take(300)
+    }
+
+    private fun executeOverpassQueryForBox(
+        south: Double,
+        west: Double,
+        north: Double,
+        east: Double,
+        regionId: String,
+        regionName: String,
+        seenDedup: MutableSet<String>,
+        maxResults: Int
+    ): List<OfflinePlacePoi> {
+        val bboxStr = String.format(Locale.US, "%.5f,%.5f,%.5f,%.5f", south, west, north, east)
         val overpassQuery = """
-            [out:json][timeout:10];
+            [out:json][timeout:12];
             (
+              nwr["tourism"~"camp_site|alpine_hut|wilderness_hut|hotel|guest_house|hostel|chalet|motel|viewpoint|attraction|information|museum|picnic_site"]($bboxStr);
+              nwr["amenity"~"drinking_water|water_point|fuel|hospital|clinic|pharmacy|doctors|police|shelter|restaurant|cafe|atm|bank|toilets|bus_station|parking|ranger_station"]($bboxStr);
+              node["natural"~"spring|peak|waterfall"]($bboxStr);
+              node["railway"="station"]($bboxStr);
+              node["aeroway"="aerodrome"]($bboxStr);
               node["name"]($bboxStr);
-              way["name"]["amenity"]($bboxStr);
-              way["name"]["building"]($bboxStr);
-              way["name"]["highway"]($bboxStr);
             );
             out center 250;
         """.trimIndent()
 
         var conn: HttpURLConnection? = null
-        try {
+        return try {
             val url = URL("https://overpass-api.de/api/interpreter")
             conn = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = "POST"
                 connectTimeout = 8000
-                readTimeout = 11000
+                readTimeout = 13000
                 doOutput = true
                 setRequestProperty("User-Agent", USER_AGENT)
                 setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
@@ -370,58 +567,16 @@ class PlaceSearchManager(private val context: Context) {
             }
             if (conn.responseCode !in 200..299) {
                 Log.w(TAG, "Overpass POI pre-cache HTTP ${conn.responseCode}")
-                return@withContext emptyList()
+                return emptyList()
             }
             val responseText = BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8)).use { it.readText() }
-            val elements = JSONObject(responseText).optJSONArray("elements") ?: return@withContext emptyList()
-
-            val pois = mutableListOf<OfflinePlacePoi>()
-            val seen = HashSet<String>()
-            for (i in 0 until elements.length()) {
-                val el = elements.optJSONObject(i) ?: continue
-                val tags = el.optJSONObject("tags") ?: continue
-                val name = tags.optString("name").trim()
-                if (name.isBlank()) continue
-
-                val centerObj = el.optJSONObject("center")
-                val lat = centerObj?.optDouble("lat", Double.NaN) ?: el.optDouble("lat", Double.NaN)
-                val lon = centerObj?.optDouble("lon", Double.NaN) ?: el.optDouble("lon", Double.NaN)
-                if (!isValidLatLon(lat, lon)) continue
-
-                val dedup = "${name.lowercase(Locale.US)}:${String.format(Locale.US, "%.4f,%.4f", lat, lon)}"
-                if (!seen.add(dedup)) continue
-
-                val category = tags.optString("amenity")
-                    .ifBlank { tags.optString("place") }
-                    .ifBlank { tags.optString("shop") }
-                    .ifBlank { tags.optString("tourism") }
-                    .ifBlank { tags.optString("building").takeIf { it != "yes" } ?: "" }
-                    .ifBlank { if (tags.has("highway")) "road" else "place" }
-                    .replace('_', ' ')
-                    .replaceFirstChar { it.uppercase() }
-
-                val street = tags.optString("addr:street")
-                val city = tags.optString("addr:city")
-                val sub = listOfNotNull(
-                    category.takeIf { it.isNotBlank() },
-                    street.takeIf { it.isNotBlank() },
-                    city.takeIf { it.isNotBlank() },
-                    "Cached in ${region.name}"
-                ).joinToString(" • ")
-
-                pois.add(
-                    OfflinePlacePoi(
-                        id = "${region.id}_${el.optString("type")}_${el.optLong("id", UUID.randomUUID().mostSignificantBits)}",
-                        regionId = region.id,
-                        name = name,
-                        category = category,
-                        subtitle = sub,
-                        latitude = lat,
-                        longitude = lon
-                    )
-                )
-            }
-            pois
+            parseOverpassElementsJson(
+                responseText = responseText,
+                regionId = regionId,
+                regionName = regionName,
+                seenDedup = seenDedup,
+                maxResults = maxResults
+            )
         } catch (e: Exception) {
             Log.w(TAG, "Overpass POI pre-cache skipped: ${e.message}")
             emptyList()

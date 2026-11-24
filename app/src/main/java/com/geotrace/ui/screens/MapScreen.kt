@@ -43,10 +43,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AddAPhoto
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Balance
+import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -82,6 +86,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
@@ -124,9 +130,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.geotrace.model.CoordinateFormat
 import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MapTileType
@@ -196,6 +204,9 @@ fun MapScreen(
     val searchError by viewModel.searchError.collectAsState()
     val selectedSearchPin by viewModel.selectedSearchPin.collectAsState()
     val parkedSpot by viewModel.parkedSpot.collectAsState()
+    val savedPlaces by viewModel.savedPlaces.collectAsState()
+    val trips by viewModel.trips.collectAsState()
+    val lastGaspBeacon by viewModel.lastGaspBeacon.collectAsState()
     val importedRoute by viewModel.importedRoute.collectAsState()
     val isBacktrackingActiveTrail by viewModel.isBacktrackingActiveTrail.collectAsState()
     val activeGuideTarget by viewModel.activeGuideTarget.collectAsState()
@@ -271,9 +282,21 @@ fun MapScreen(
     }
 
     var showStartDialog by rememberSaveable { mutableStateOf(false) }
+    var selectedStartTripId by rememberSaveable { mutableStateOf<String?>(null) }
     var showWaypointDialog by rememberSaveable { mutableStateOf(false) }
     var waypointNameInput by rememberSaveable { mutableStateOf("") }
     var waypointNoteInput by rememberSaveable { mutableStateOf("") }
+    var waypointPhotoUriInput by rememberSaveable { mutableStateOf<String?>(null) }
+    var showSavePlaceDialog by rememberSaveable { mutableStateOf(false) }
+    var savePlaceNameInput by rememberSaveable { mutableStateOf("") }
+    var savePlaceCategory by rememberSaveable { mutableStateOf("Spot") }
+    var savePlaceNoteInput by rememberSaveable { mutableStateOf("") }
+    var savePlaceLat by rememberSaveable { mutableStateOf<Double?>(null) }
+    var savePlaceLon by rememberSaveable { mutableStateOf<Double?>(null) }
+    var savePlaceAlt by rememberSaveable { mutableStateOf(0.0) }
+    var savePlaceTripId by rememberSaveable { mutableStateOf<String?>(null) }
+    var savePlacePhotoUriInput by rememberSaveable { mutableStateOf<String?>(null) }
+    var activePhotoPickerTarget by rememberSaveable { mutableStateOf("waypoint") }
     var showProfileDialog by rememberSaveable { mutableStateOf(false) }
     var showOfflineMapsDialog by rememberSaveable { mutableStateOf(false) }
     var showDevicesSheet by rememberSaveable { mutableStateOf(false) }
@@ -287,6 +310,17 @@ fun MapScreen(
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     var liveRecordingNowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     val routeImportScope = rememberCoroutineScope()
+    val pickPhotoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            if (activePhotoPickerTarget == "save_place") {
+                savePlacePhotoUriInput = uri.toString()
+            } else {
+                waypointPhotoUriInput = uri.toString()
+            }
+        }
+    }
     val importRouteLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -524,6 +558,7 @@ fun MapScreen(
             lastHandledImportedRouteId = viewModel.lastHandledImportedRouteId,
             onMarkImportedRouteHandled = { viewModel.lastHandledImportedRouteId = it },
             parkedSpot = parkedSpot,
+            savedPlaces = savedPlaces,
             activeGuideTarget = activeGuideTarget,
             onSetGuideTarget = { label, lat, lon, badge ->
                 viewModel.setTargetFinder(label, lat, lon, badge)
@@ -533,6 +568,21 @@ fun MapScreen(
                 viewModel.saveParkedSpot(lat, lon, label)
             },
             onClearParkedSpot = { viewModel.clearParkedSpot() },
+            onOpenSavePlaceDialog = { suggestedName, lat, lon ->
+                savePlaceNameInput = suggestedName
+                savePlaceCategory = "Spot"
+                savePlaceNoteInput = ""
+                savePlaceLat = lat
+                savePlaceLon = lon
+                savePlaceAlt = 0.0
+                savePlaceTripId = null
+                savePlacePhotoUriInput = null
+                showSavePlaceDialog = true
+            },
+            onDeleteSavedPlace = { id ->
+                viewModel.deleteSavedPlace(id)
+                Toast.makeText(context, "Saved place removed", Toast.LENGTH_SHORT).show()
+            },
             onCompassStateChanged = { az, lowAcc ->
                 liveCompassAzimuth = az
                 isCompassLowAccuracy = lowAcc
@@ -921,6 +971,7 @@ fun MapScreen(
                                             onClick = {
                                                 waypointNameInput = "Waypoint #${activeWaypoints.size + 1}"
                                                 waypointNoteInput = ""
+                                                waypointPhotoUriInput = null
                                                 showWaypointDialog = true
                                             },
                                             enabled = currentLocation != null,
@@ -1479,6 +1530,101 @@ fun MapScreen(
                     }
                 }
 
+                // Standalone Save Place Bookmark Chip
+                Surface(
+                    shape = CircleShape,
+                    color = colorScheme.surface,
+                    shadowElevation = 3.dp,
+                    border = BorderStroke(1.dp, colorScheme.outlineVariant),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .clip(CircleShape)
+                        .clickable {
+                            val loc = currentLocation
+                            val bounds = currentMapBounds
+                            val lat = loc?.latitude ?: bounds?.centerLatitude
+                            val lon = loc?.longitude ?: bounds?.centerLongitude
+                            if (lat == null || lon == null || (lat == 0.0 && lon == 0.0)) {
+                                Toast.makeText(context, "Waiting for GPS lock or map center.", Toast.LENGTH_SHORT).show()
+                            } else {
+                                savePlaceNameInput = ""
+                                savePlaceCategory = "Spot"
+                                savePlaceNoteInput = ""
+                                savePlaceLat = lat
+                                savePlaceLon = lon
+                                savePlaceAlt = loc?.altitude ?: 0.0
+                                savePlaceTripId = null
+                                savePlacePhotoUriInput = null
+                                showSavePlaceDialog = true
+                            }
+                        }
+                        .testTag("save_spot_quick_chip")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BookmarkAdd,
+                            contentDescription = "Save Place Bookmark",
+                            tint = colorScheme.secondary,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = if (savedPlaces.isNotEmpty()) "Save (${savedPlaces.size})" else "Save Spot",
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface
+                        )
+                    }
+                }
+
+                // 1-Tap SOS Emergency Share Chip
+                Surface(
+                    shape = CircleShape,
+                    color = colorScheme.error.copy(alpha = 0.14f).compositeOver(colorScheme.surface),
+                    shadowElevation = 3.dp,
+                    border = BorderStroke(1.dp, colorScheme.error.copy(alpha = 0.7f)),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .clip(CircleShape)
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val sosBody = viewModel.buildCurrentSosMessage()
+                            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_SUBJECT, "GeoTrace SOS Emergency Position")
+                                putExtra(Intent.EXTRA_TEXT, sosBody)
+                            }
+                            val chooser = Intent.createChooser(sendIntent, "Send SOS Coordinates")
+                            if (context !is Activity) {
+                                chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            context.startActivity(chooser)
+                        }
+                        .testTag("sos_quick_chip")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = "Share Emergency SOS Coordinates",
+                            tint = colorScheme.error,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Text(
+                            text = "SOS",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.error
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.width(6.dp))
             }
 
@@ -1731,6 +1877,104 @@ fun MapScreen(
                 }
             }
 
+            if (!isPickingGeofenceCenter && lastGaspBeacon != null) {
+                val beacon = lastGaspBeacon!!
+                val beaconTime = remember(beacon.timestamp) {
+                    SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date(beacon.timestamp))
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    color = colorScheme.errorContainer.copy(alpha = 0.85f).compositeOver(colorScheme.surface),
+                    shadowElevation = 4.dp,
+                    border = BorderStroke(1.5.dp, colorScheme.error.copy(alpha = 0.8f)),
+                    modifier = Modifier
+                        .padding(horizontal = 14.dp)
+                        .testTag("last_gasp_beacon_banner")
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BatteryAlert,
+                            contentDescription = "Low-Battery Last-Gasp Beacon",
+                            tint = colorScheme.error,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Last-Gasp Beacon • ${beacon.batteryPercent}% batt ($beaconTime)",
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onErrorContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                text = buildString {
+                                    append(formatCoordinates(beacon.latitude, beacon.longitude, settings.coordinateFormat))
+                                    if (beacon.cellSummary.isNotBlank()) {
+                                        append(" • ${beacon.cellSummary}")
+                                    }
+                                },
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontSize = 10.sp,
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    fontFeatureSettings = "tnum"
+                                ),
+                                color = colorScheme.onErrorContainer.copy(alpha = 0.85f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        TextButton(
+                            onClick = {
+                                viewModel.clearInspectedTrail()
+                                viewModel.selectSearchResult(
+                                    SearchPlaceResult(
+                                        id = "last_gasp_${beacon.timestamp}",
+                                        name = "Last-Gasp Beacon (${beacon.batteryPercent}%)",
+                                        subtitle = "Low-battery fix saved $beaconTime",
+                                        latitude = beacon.latitude,
+                                        longitude = beacon.longitude,
+                                        source = SearchResultSource.SAVED_PLACE
+                                    )
+                                )
+                                viewModel.setTargetFinder(
+                                    label = "Last-Gasp (${beacon.batteryPercent}%)",
+                                    latitude = beacon.latitude,
+                                    longitude = beacon.longitude,
+                                    badge = "BEACON"
+                                )
+                            },
+                            shape = CircleShape,
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("focus_last_gasp_btn")
+                        ) {
+                            Text("Locate", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colorScheme.error)
+                        }
+                        IconButton(
+                            onClick = { viewModel.clearLastGaspBeacon() },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .testTag("dismiss_last_gasp_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Dismiss Last-Gasp Beacon",
+                                tint = colorScheme.onErrorContainer,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
             if (isPickingGeofenceCenter) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Surface(
@@ -1867,7 +2111,7 @@ fun MapScreen(
         val loc = currentLocation
         val focusManager = LocalFocusManager.current
         val submitWaypoint = {
-            viewModel.dropWaypoint(waypointNameInput, waypointNoteInput) { wp ->
+            viewModel.dropWaypoint(waypointNameInput, waypointNoteInput, waypointPhotoUriInput) { wp ->
                 if (wp != null) {
                     android.widget.Toast.makeText(
                         context,
@@ -1882,10 +2126,14 @@ fun MapScreen(
                     ).show()
                 }
             }
+            waypointPhotoUriInput = null
             showWaypointDialog = false
         }
         AlertDialog(
-            onDismissRequest = { showWaypointDialog = false },
+            onDismissRequest = {
+                waypointPhotoUriInput = null
+                showWaypointDialog = false
+            },
             title = {
                 Text(
                     "Pin Field Waypoint",
@@ -1895,7 +2143,10 @@ fun MapScreen(
                 )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     Text(
                         text = if (loc != null) {
                             "Marks an individual GIS waypoint (<wpt>) at ${formatCoordinates(loc.latitude, loc.longitude, settings.coordinateFormat)} (±${loc.accuracy.toInt()}m)."
@@ -1946,6 +2197,59 @@ fun MapScreen(
                             .fillMaxWidth()
                             .testTag("waypoint_note_input")
                     )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        FilledTonalButton(
+                            onClick = {
+                                activePhotoPickerTarget = "waypoint"
+                                pickPhotoLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            shape = CircleShape,
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("waypoint_attach_photo_btn")
+                        ) {
+                            Icon(Icons.Default.AddAPhoto, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (waypointPhotoUriInput == null) "Attach Photo (Offline)" else "Change Photo",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        if (waypointPhotoUriInput != null) {
+                            IconButton(
+                                onClick = { waypointPhotoUriInput = null },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Remove attached photo",
+                                    tint = colorScheme.error
+                                )
+                            }
+                        }
+                    }
+
+                    if (!waypointPhotoUriInput.isNullOrBlank()) {
+                        AsyncImage(
+                            model = waypointPhotoUriInput,
+                            contentDescription = "Waypoint attached photo preview",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(110.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -1953,15 +2257,233 @@ fun MapScreen(
                     onClick = { submitWaypoint() },
                     enabled = loc != null,
                     shape = CircleShape,
-                    modifier = Modifier.testTag("confirm_drop_waypoint_btn")
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("confirm_drop_waypoint_btn")
                 ) {
                     Text("Save Waypoint", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             },
             dismissButton = {
                 TextButton(
-                    onClick = { showWaypointDialog = false },
-                    shape = CircleShape
+                    onClick = {
+                        waypointPhotoUriInput = null
+                        showWaypointDialog = false
+                    },
+                    shape = CircleShape,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Cancel", fontSize = 12.sp)
+                }
+            },
+            shape = RoundedCornerShape(28.dp),
+            containerColor = colorScheme.surface
+        )
+    }
+
+    // Standalone Save Place Bookmark Dialog
+    if (showSavePlaceDialog && savePlaceLat != null && savePlaceLon != null) {
+        val targetLat = savePlaceLat!!
+        val targetLon = savePlaceLon!!
+        val categories = remember { listOf("Spot", "Lodge", "Camp", "Trailhead", "Viewpoint", "Water", "Medical") }
+        AlertDialog(
+            onDismissRequest = {
+                savePlacePhotoUriInput = null
+                showSavePlaceDialog = false
+            },
+            title = {
+                Text(
+                    text = "Save Place Bookmark",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = colorScheme.onSurface
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .testTag("save_place_dialog"),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = formatCoordinates(targetLat, targetLon, settings.coordinateFormat),
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 11.sp,
+                            fontFamily = JetBrainsMonoFontFamily,
+                            fontFeatureSettings = "tnum"
+                        ),
+                        color = colorScheme.primary
+                    )
+                    OutlinedTextField(
+                        value = savePlaceNameInput,
+                        onValueChange = { savePlaceNameInput = it },
+                        label = { Text("Place Name", fontSize = 12.sp) },
+                        placeholder = { Text("e.g. Trailhead Gate or Spring", fontSize = 12.sp) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Words,
+                            imeAction = ImeAction.Next
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("save_place_name_input")
+                    )
+                    Text(
+                        text = "Category",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        for (cat in categories) {
+                            FilterChip(
+                                selected = savePlaceCategory == cat,
+                                onClick = { savePlaceCategory = cat },
+                                label = { Text(cat, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                                shape = CircleShape,
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = savePlaceNoteInput,
+                        onValueChange = { savePlaceNoteInput = it },
+                        label = { Text("Field Note (Optional)", fontSize = 12.sp) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.Done
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("save_place_note_input")
+                    )
+                    if (trips.isNotEmpty()) {
+                        Text(
+                            text = "Attach to Trip (Optional)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            FilterChip(
+                                selected = savePlaceTripId == null,
+                                onClick = { savePlaceTripId = null },
+                                label = { Text("Standalone", fontSize = 11.sp) },
+                                shape = CircleShape,
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            )
+                            for (trip in trips) {
+                                FilterChip(
+                                    selected = savePlaceTripId == trip.id,
+                                    onClick = { savePlaceTripId = trip.id },
+                                    label = { Text(trip.name, fontSize = 11.sp, maxLines = 1) },
+                                    shape = CircleShape,
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                )
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        FilledTonalButton(
+                            onClick = {
+                                activePhotoPickerTarget = "save_place"
+                                pickPhotoLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                )
+                            },
+                            shape = CircleShape,
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .testTag("save_place_attach_photo_btn")
+                        ) {
+                            Icon(Icons.Default.AddAPhoto, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (savePlacePhotoUriInput == null) "Attach Photo" else "Change Photo",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        if (savePlacePhotoUriInput != null) {
+                            IconButton(
+                                onClick = { savePlacePhotoUriInput = null },
+                                modifier = Modifier.size(48.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Remove place photo",
+                                    tint = colorScheme.error
+                                )
+                            }
+                        }
+                    }
+                    if (!savePlacePhotoUriInput.isNullOrBlank()) {
+                        AsyncImage(
+                            model = savePlacePhotoUriInput,
+                            contentDescription = "Saved place attached photo preview",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(110.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.savePlace(
+                            name = savePlaceNameInput,
+                            category = savePlaceCategory,
+                            note = savePlaceNoteInput,
+                            latitude = targetLat,
+                            longitude = targetLon,
+                            altitude = savePlaceAlt,
+                            photoPickerUri = savePlacePhotoUriInput,
+                            tripId = savePlaceTripId
+                        ) { saved ->
+                            Toast.makeText(context, "Saved \"${saved.name}\"", Toast.LENGTH_SHORT).show()
+                        }
+                        savePlacePhotoUriInput = null
+                        showSavePlaceDialog = false
+                    },
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("confirm_save_place_btn")
+                ) {
+                    Text("Save Place", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        savePlacePhotoUriInput = null
+                        showSavePlaceDialog = false
+                    },
+                    shape = CircleShape,
+                    modifier = Modifier.heightIn(min = 48.dp)
                 ) {
                     Text("Cancel", fontSize = 12.sp)
                 }
@@ -2055,7 +2577,7 @@ fun MapScreen(
     if (showStartDialog) {
         val confirmStartSession = {
             val name = sessionNameInput.ifBlank { "Field Trail" }
-            val started = viewModel.startTracking(name, trackingMode)
+            val started = viewModel.startTracking(name, trackingMode, tripId = selectedStartTripId)
             if (!started) {
                 Toast.makeText(context, "Location permission is required to record a trail.", Toast.LENGTH_SHORT).show()
             }
@@ -2099,6 +2621,39 @@ fun MapScreen(
                             .fillMaxWidth()
                             .testTag("session_name_input")
                     )
+                    if (trips.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Assign to Trip (Optional)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            FilterChip(
+                                selected = selectedStartTripId == null,
+                                onClick = { selectedStartTripId = null },
+                                label = { Text("None", fontSize = 11.sp) },
+                                shape = CircleShape,
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            )
+                            for (trip in trips) {
+                                FilterChip(
+                                    selected = selectedStartTripId == trip.id,
+                                    onClick = { selectedStartTripId = trip.id },
+                                    label = { Text(trip.name, fontSize = 11.sp, maxLines = 1) },
+                                    shape = CircleShape,
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -2109,7 +2664,9 @@ fun MapScreen(
                         contentColor = colorScheme.onPrimary
                     ),
                     shape = CircleShape,
-                    modifier = Modifier.testTag("confirm_start_btn")
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("confirm_start_btn")
                 ) {
                     Text("Start Recording", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
@@ -2117,7 +2674,8 @@ fun MapScreen(
             dismissButton = {
                 TextButton(
                     onClick = { showStartDialog = false },
-                    shape = CircleShape
+                    shape = CircleShape,
+                    modifier = Modifier.heightIn(min = 48.dp)
                 ) {
                     Text("Cancel", color = colorScheme.onSurfaceVariant, fontSize = 12.sp)
                 }

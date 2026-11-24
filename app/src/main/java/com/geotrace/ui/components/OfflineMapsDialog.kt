@@ -84,7 +84,8 @@ import java.util.Locale
 private enum class OfflineAreaMode(val label: String) {
     VIEWPORT("Map View"),
     AROUND_2KM("2 km Me"),
-    AROUND_5KM("5 km Me")
+    AROUND_5KM("5 km Me"),
+    ROUTE_CORRIDOR("Route Strip")
 }
 
 private enum class OfflineDetailTier(val label: String, val minZoom: Int, val maxZoom: Int) {
@@ -107,6 +108,21 @@ fun OfflineMapsDialog(
     val savedRegions by viewModel.offlineMapRegions.collectAsState()
     val progress by viewModel.offlineDownloadProgress.collectAsState()
     val cacheSizeMb by viewModel.offlineCacheSizeMb.collectAsState()
+    val importedRoute by viewModel.importedRoute.collectAsState()
+    val inspectedTrail by viewModel.inspectedTrail.collectAsState()
+    val activeTrailPoints by viewModel.activeTrailPoints.collectAsState()
+
+    val activeCorridorPoints = remember(importedRoute, inspectedTrail, activeTrailPoints) {
+        when {
+            (importedRoute?.points?.size ?: 0) >= 2 -> importedRoute!!.points
+            (inspectedTrail?.points?.size ?: 0) >= 2 -> inspectedTrail!!.points
+            activeTrailPoints.size >= 2 -> activeTrailPoints
+            else -> emptyList()
+        }
+    }
+    val activeCorridorLabel = remember(importedRoute, inspectedTrail) {
+        importedRoute?.name ?: inspectedTrail?.session?.name ?: "Active Trail"
+    }
 
     val downloadableTypes = remember {
         MapTileType.values().filter { it.supportsOfflineBulkDownload }
@@ -122,6 +138,7 @@ fun OfflineMapsDialog(
     var areaMode by rememberSaveable {
         mutableStateOf(
             when {
+                activeCorridorPoints.size >= 2 -> OfflineAreaMode.ROUTE_CORRIDOR
                 currentMapBounds != null -> OfflineAreaMode.VIEWPORT
                 currentLocation != null -> OfflineAreaMode.AROUND_2KM
                 else -> OfflineAreaMode.VIEWPORT
@@ -145,23 +162,37 @@ fun OfflineMapsDialog(
             OfflineAreaMode.AROUND_5KM -> currentLocation?.let {
                 viewModel.computeBoundingBoxAround(it.latitude, it.longitude, 5.0)
             }
+            OfflineAreaMode.ROUTE_CORRIDOR -> null
         }
     }
 
-    val estimate = remember(targetBox, selectedType, detailTier) {
-        targetBox?.let {
-            viewModel.estimateOfflineRegion(it, selectedType, detailTier.minZoom, detailTier.maxZoom)
+    val estimate = remember(areaMode, targetBox, activeCorridorPoints, selectedType, detailTier) {
+        if (areaMode == OfflineAreaMode.ROUTE_CORRIDOR) {
+            if (activeCorridorPoints.size >= 2) {
+                viewModel.estimateCorridorRegion(
+                    points = activeCorridorPoints,
+                    halfWidthKm = 1.5,
+                    tileType = selectedType,
+                    minZoom = detailTier.minZoom,
+                    maxZoom = detailTier.maxZoom
+                )
+            } else null
+        } else {
+            targetBox?.let {
+                viewModel.estimateOfflineRegion(it, selectedType, detailTier.minZoom, detailTier.maxZoom)
+            }
         }
     }
     val estTiles = estimate?.first ?: 0
     val estMb = estimate?.second ?: 0f
     val exceedsCap = estTiles > OfflineMapManager.MAX_TILES_PER_DOWNLOAD
 
-    val suggestedName = remember(areaMode, selectedType) {
+    val suggestedName = remember(areaMode, selectedType, activeCorridorLabel) {
         val areaLabel = when (areaMode) {
             OfflineAreaMode.VIEWPORT -> "Map Area"
             OfflineAreaMode.AROUND_2KM -> "2km Field Zone"
             OfflineAreaMode.AROUND_5KM -> "5km Sector"
+            OfflineAreaMode.ROUTE_CORRIDOR -> "$activeCorridorLabel Corridor"
         }
         "$areaLabel (${selectedType.label})"
     }
@@ -378,26 +409,41 @@ fun OfflineMapsDialog(
 
                             // Area Selection
                             Text("1. Target Area", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                OfflineAreaMode.values().forEach { mode ->
-                                    val enabled = when (mode) {
-                                        OfflineAreaMode.VIEWPORT -> currentMapBounds != null
-                                        OfflineAreaMode.AROUND_2KM, OfflineAreaMode.AROUND_5KM -> currentLocation != null
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                OfflineAreaMode.values().toList().chunked(2).forEach { rowModes ->
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        rowModes.forEach { mode ->
+                                            val enabled = when (mode) {
+                                                OfflineAreaMode.VIEWPORT -> currentMapBounds != null
+                                                OfflineAreaMode.AROUND_2KM, OfflineAreaMode.AROUND_5KM -> currentLocation != null
+                                                OfflineAreaMode.ROUTE_CORRIDOR -> activeCorridorPoints.size >= 2
+                                            }
+                                            val selected = areaMode == mode
+                                            FilterChip(
+                                                selected = selected,
+                                                enabled = enabled && !progress.isDownloading,
+                                                onClick = { areaMode = mode },
+                                                label = { Text(mode.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
+                                                shape = CircleShape,
+                                                colors = offlineChipColors,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .heightIn(min = 48.dp)
+                                                    .testTag("offline_area_${mode.name.lowercase()}")
+                                            )
+                                        }
                                     }
-                                    val selected = areaMode == mode
-                                    FilterChip(
-                                        selected = selected,
-                                        enabled = enabled && !progress.isDownloading,
-                                        onClick = { areaMode = mode },
-                                        label = { Text(mode.label, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis) },
-                                        shape = CircleShape,
-                                        colors = offlineChipColors,
-                                        modifier = Modifier.weight(1f).heightIn(min = 48.dp)
-                                    )
                                 }
+                            }
+                            if (areaMode == OfflineAreaMode.ROUTE_CORRIDOR && activeCorridorPoints.size >= 2) {
+                                Text(
+                                    text = "Caches a ±1.5 km strip & tourism POIs along \"$activeCorridorLabel\" to save storage.",
+                                    fontSize = 10.sp,
+                                    color = colorScheme.primary
+                                )
                             }
 
                             // Tile Layer Selection
@@ -526,10 +572,20 @@ fun OfflineMapsDialog(
                     ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
+                    val hasValidAreaTarget = if (areaMode == OfflineAreaMode.ROUTE_CORRIDOR) {
+                        activeCorridorPoints.size >= 2
+                    } else {
+                        targetBox != null
+                    }
                     val summaryText = when {
-                        targetBox == null -> "Open the Map tab or wait for a GPS fix to compute area bounds."
-                        exceedsCap -> "Area too large ($estTiles tiles > ${OfflineMapManager.MAX_TILES_PER_DOWNLOAD} max). Zoom in closer on the map or choose 2 km / Standard."
-                        else -> "Estimated download: $estTiles tiles (~${String.format(Locale.US, "%.1f", estMb)} MB)"
+                        areaMode == OfflineAreaMode.ROUTE_CORRIDOR && activeCorridorPoints.size < 2 ->
+                            "Import, inspect, or record a trail to cache a route corridor."
+                        areaMode != OfflineAreaMode.ROUTE_CORRIDOR && targetBox == null ->
+                            "Open the Map tab or wait for a GPS fix to compute area bounds."
+                        exceedsCap ->
+                            "Area too large ($estTiles tiles > ${OfflineMapManager.MAX_TILES_PER_DOWNLOAD} max). Zoom in closer on the map or choose 2 km / Standard."
+                        else ->
+                            "Estimated download: $estTiles tiles (~${String.format(Locale.US, "%.1f", estMb)} MB)"
                     }
                     Text(
                         text = summaryText,
@@ -542,20 +598,38 @@ fun OfflineMapsDialog(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                val canDownload = if (areaMode == OfflineAreaMode.ROUTE_CORRIDOR) {
+                    activeCorridorPoints.size >= 2
+                } else {
+                    targetBox != null
+                }
+
                 Button(
                     onClick = {
-                        val box = targetBox ?: return@Button
                         val finalName = regionName.trim().ifBlank { suggestedName }
-                        viewModel.startOfflineRegionDownload(
-                            name = finalName,
-                            box = box,
-                            tileType = selectedType,
-                            minZoom = detailTier.minZoom,
-                            maxZoom = detailTier.maxZoom
-                        )
+                        if (areaMode == OfflineAreaMode.ROUTE_CORRIDOR) {
+                            if (activeCorridorPoints.size < 2) return@Button
+                            viewModel.startCorridorOfflineDownload(
+                                name = finalName,
+                                points = activeCorridorPoints,
+                                halfWidthKm = 1.5,
+                                tileType = selectedType,
+                                minZoom = detailTier.minZoom,
+                                maxZoom = detailTier.maxZoom
+                            )
+                        } else {
+                            val box = targetBox ?: return@Button
+                            viewModel.startOfflineRegionDownload(
+                                name = finalName,
+                                box = box,
+                                tileType = selectedType,
+                                minZoom = detailTier.minZoom,
+                                maxZoom = detailTier.maxZoom
+                            )
+                        }
                         regionName = ""
                     },
-                    enabled = targetBox != null && !exceedsCap && !progress.isDownloading && estTiles > 0,
+                    enabled = canDownload && !exceedsCap && !progress.isDownloading && estTiles > 0,
                     shape = CircleShape,
                     modifier = Modifier
                         .fillMaxWidth()

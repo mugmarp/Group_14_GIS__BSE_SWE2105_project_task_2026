@@ -101,10 +101,14 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
+import java.io.File
 import com.geotrace.data.export.ImportedRoute
 import com.geotrace.model.ActiveGuideTarget
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.ParkedSpot
+import com.geotrace.model.SavedPlace
 import com.geotrace.service.normalizeHeadingDegrees
 import com.geotrace.service.rememberCompassReading
 import com.geotrace.service.shortestAngleDeltaDegrees
@@ -138,7 +142,9 @@ private data class MarkerInspectData(
     val detail: String,
     val badge: String,
     val latitude: Double? = null,
-    val longitude: Double? = null
+    val longitude: Double? = null,
+    val photoUri: String = "",
+    val savedPlaceId: String? = null
 )
 
 private data class GeofenceLayerSig(
@@ -191,6 +197,7 @@ private data class UserTargetLayerSig(
     val selectedSearchPin: com.geotrace.model.SearchPlaceResult?,
     val droppedInspectPin: GeoPoint?,
     val parkedSpot: ParkedSpot?,
+    val savedPlaces: List<SavedPlace>,
     val activeGuideTarget: ActiveGuideTarget?,
     val userPinColorArgb: Int
 )
@@ -355,11 +362,14 @@ fun MapViewComposable(
     lastHandledImportedRouteId: String? = null,
     onMarkImportedRouteHandled: ((String) -> Unit)? = null,
     parkedSpot: ParkedSpot? = null,
+    savedPlaces: List<SavedPlace> = emptyList(),
     activeGuideTarget: ActiveGuideTarget? = null,
     onSetGuideTarget: ((String, Double, Double, String) -> Unit)? = null,
     onClearGuideTarget: (() -> Unit)? = null,
     onSaveParkedSpot: ((Double, Double, String) -> Unit)? = null,
     onClearParkedSpot: (() -> Unit)? = null,
+    onOpenSavePlaceDialog: ((String, Double, Double) -> Unit)? = null,
+    onDeleteSavedPlace: ((String) -> Unit)? = null,
     onCompassStateChanged: ((Float?, Boolean) -> Unit)? = null,
     bottomOverlayPadding: Dp = 0.dp,
     modifier: Modifier = Modifier
@@ -558,6 +568,9 @@ fun MapViewComposable(
     val parkedPinDrawable = remember(context) {
         createPinBadgeDrawable(context, "P", android.graphics.Color.parseColor("#B45309"))
     }
+    val savedPlaceDrawable = remember(context) {
+        createPinBadgeDrawable(context, "★", android.graphics.Color.parseColor("#0D9488"))
+    }
     val routeStartDrawable = remember(context) {
         createPinBadgeDrawable(context, "A", android.graphics.Color.parseColor("#0D9488"))
     }
@@ -713,6 +726,7 @@ fun MapViewComposable(
         } else {
             val targetZoom = when (place.source) {
                 com.geotrace.model.SearchResultSource.COORDINATE,
+                com.geotrace.model.SearchResultSource.SAVED_PLACE,
                 com.geotrace.model.SearchResultSource.WAYPOINT,
                 com.geotrace.model.SearchResultSource.OFFLINE_POI -> 17.2
                 else -> 16.5
@@ -1192,7 +1206,8 @@ fun MapViewComposable(
                                         detail = m.snippet ?: "",
                                         badge = "WAYPOINT",
                                         latitude = wp.latitude,
-                                        longitude = wp.longitude
+                                        longitude = wp.longitude,
+                                        photoUri = wp.photoUri
                                     )
                                     true
                                 }
@@ -1495,6 +1510,7 @@ fun MapViewComposable(
                     selectedSearchPin = selectedSearchPin,
                     droppedInspectPin = droppedInspectPin,
                     parkedSpot = parkedSpot,
+                    savedPlaces = savedPlaces,
                     activeGuideTarget = activeGuideTarget,
                     userPinColorArgb = userPinColor.toArgb()
                 )
@@ -1626,6 +1642,33 @@ fun MapViewComposable(
                         }
                     }
 
+                    savedPlaces.forEach { place ->
+                        if (isValidCoordinate(place.latitude, place.longitude)) {
+                            userTargetLayer.add(Marker(map).apply {
+                                position = GeoPoint(place.latitude, place.longitude)
+                                title = place.name
+                                val coordStr = com.geotrace.ui.screens.formatCoordinates(place.latitude, place.longitude, settings.coordinateFormat)
+                                val notePrefix = if (place.note.isNotBlank()) "${place.note} • " else ""
+                                snippet = "${place.category} • $notePrefix$coordStr"
+                                infoWindow = null
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = savedPlaceDrawable
+                                setOnMarkerClickListener { m, _ ->
+                                    selectedMarkerInfo = MarkerInspectData(
+                                        title = m.title ?: place.name,
+                                        detail = m.snippet ?: "",
+                                        badge = "SAVED PLACE",
+                                        latitude = place.latitude,
+                                        longitude = place.longitude,
+                                        photoUri = place.photoUri,
+                                        savedPlaceId = place.id
+                                    )
+                                    true
+                                }
+                            })
+                        }
+                    }
+
                     selectedSearchPin?.let { place ->
                         if (isValidCoordinate(place.latitude, place.longitude)) {
                             userTargetLayer.add(Marker(map).apply {
@@ -1706,6 +1749,19 @@ fun MapViewComposable(
                             ),
                         verticalAlignment = Alignment.Top
                     ) {
+                        val inspectPhotoUri = selectedMarkerInfo?.photoUri
+                        if (!inspectPhotoUri.isNullOrBlank()) {
+                            AsyncImage(
+                                model = if (inspectPhotoUri.startsWith("/")) File(inspectPhotoUri) else inspectPhotoUri,
+                                contentDescription = "Location Photo",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .padding(end = 10.dp)
+                                    .size(56.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(customColors.surfaceContainerLow)
+                            )
+                        }
                         Column(
                             modifier = Modifier
                                 .weight(1f)
@@ -1945,6 +2001,79 @@ fun MapViewComposable(
                                                 maxLines = 1,
                                                 softWrap = false,
                                                 color = customColors.warning
+                                            )
+                                        }
+                                    }
+                                }
+
+                                val savedPlaceIdToDelete = selectedMarkerInfo?.savedPlaceId
+                                if (savedPlaceIdToDelete != null && onDeleteSavedPlace != null) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = colorScheme.error.copy(alpha = 0.10f),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.error.copy(alpha = 0.35f)),
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .clip(CircleShape)
+                                            .clickable {
+                                                onDeleteSavedPlace(savedPlaceIdToDelete)
+                                                selectedMarkerInfo = null
+                                            }
+                                            .testTag("inspect_delete_saved_place_btn")
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Remove Saved Place",
+                                                tint = colorScheme.error,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text(
+                                                text = "Remove",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                color = colorScheme.error
+                                            )
+                                        }
+                                    }
+                                } else if (onOpenSavePlaceDialog != null && inspectCardBadge != "GNSS" && inspectCardBadge != "CELL") {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = colorScheme.primary.copy(alpha = 0.12f),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.35f)),
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .clip(CircleShape)
+                                            .clickable {
+                                                val defaultLabel = if (inspectCardTitle == "Dropped Pin") "" else inspectCardTitle
+                                                onOpenSavePlaceDialog(defaultLabel, targetLat, targetLon)
+                                            }
+                                            .testTag("inspect_save_place_btn")
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.BookmarkAdd,
+                                                contentDescription = "Save Place Bookmark",
+                                                tint = colorScheme.primary,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text(
+                                                text = "Save Place",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                color = colorScheme.primary
                                             )
                                         }
                                     }

@@ -3,21 +3,27 @@ package com.geotrace.data
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.net.Uri
 import com.geotrace.model.AppThemeMode
 import com.geotrace.model.CellTowerInfo
 import com.geotrace.model.CoordinateFormat
 import com.geotrace.model.GeofenceAlert
 import com.geotrace.model.GeofenceCategory
 import com.geotrace.model.GeofenceZone
+import com.geotrace.model.LastGaspBeacon
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineMapRegion
 import com.geotrace.model.OfflinePlacePoi
 import com.geotrace.model.ParkedSpot
+import com.geotrace.model.SavedPlace
 import com.geotrace.model.SpeedUnit
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
 import com.geotrace.model.TrailWaypoint
+import com.geotrace.model.TripGroup
 import org.json.JSONObject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -28,9 +34,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 import java.util.UUID
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -84,6 +94,55 @@ class LocationRepository(private val context: Context) {
 
     private val _parkedSpot = MutableStateFlow(loadParkedSpot())
     val parkedSpot: StateFlow<ParkedSpot?> = _parkedSpot.asStateFlow()
+
+    private val _savedPlaces = MutableStateFlow<List<SavedPlace>>(emptyList())
+    val savedPlaces: StateFlow<List<SavedPlace>> = _savedPlaces.asStateFlow()
+
+    private val _trips = MutableStateFlow<List<TripGroup>>(emptyList())
+    val trips: StateFlow<List<TripGroup>> = _trips.asStateFlow()
+
+    private val _lastGaspBeacon = MutableStateFlow(loadLastGaspBeacon())
+    val lastGaspBeacon: StateFlow<LastGaspBeacon?> = _lastGaspBeacon.asStateFlow()
+
+    private fun loadLastGaspBeacon(): LastGaspBeacon? {
+        val raw = prefs.getString("last_gasp_beacon_json", null) ?: return null
+        return try {
+            val obj = JSONObject(raw)
+            val lat = obj.optDouble("latitude", Double.NaN)
+            val lon = obj.optDouble("longitude", Double.NaN)
+            if (!lat.isFinite() || !lon.isFinite() || (lat == 0.0 && lon == 0.0)) return null
+            LastGaspBeacon(
+                latitude = lat,
+                longitude = lon,
+                accuracy = obj.optDouble("accuracy", 0.0).toFloat(),
+                altitude = obj.optDouble("altitude", 0.0),
+                batteryPercent = obj.optInt("batteryPercent", 0),
+                timestamp = obj.optLong("timestamp", System.currentTimeMillis()),
+                cellSummary = obj.optString("cellSummary")
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun saveLastGaspBeacon(beacon: LastGaspBeacon) {
+        val obj = JSONObject().apply {
+            put("latitude", beacon.latitude)
+            put("longitude", beacon.longitude)
+            put("accuracy", beacon.accuracy.toDouble())
+            put("altitude", beacon.altitude)
+            put("batteryPercent", beacon.batteryPercent)
+            put("timestamp", beacon.timestamp)
+            put("cellSummary", beacon.cellSummary)
+        }
+        prefs.edit().putString("last_gasp_beacon_json", obj.toString()).apply()
+        _lastGaspBeacon.value = beacon
+    }
+
+    fun clearLastGaspBeacon() {
+        prefs.edit().remove("last_gasp_beacon_json").apply()
+        _lastGaspBeacon.value = null
+    }
 
     private fun loadParkedSpot(): ParkedSpot? {
         val raw = prefs.getString("parked_spot_json", null) ?: return null
@@ -287,7 +346,9 @@ class LocationRepository(private val context: Context) {
             try {
                 loadGeofences()
                 restoreActiveSessionIfAny()
+                loadTripsInternal()
                 loadSessions()
+                loadSavedPlacesInternal()
                 loadAlerts()
                 loadOfflineMapRegions()
             } finally {
@@ -410,13 +471,18 @@ class LocationRepository(private val context: Context) {
         }
     }
 
-    suspend fun startNewSession(name: String = "Track ${System.currentTimeMillis() % 10000}", mode: TrackingMode = _trackingMode.value): TrackingSession = withContext(Dispatchers.IO) {
+    suspend fun startNewSession(
+        name: String = "Track ${System.currentTimeMillis() % 10000}",
+        mode: TrackingMode = _trackingMode.value,
+        tripId: String? = null
+    ): TrackingSession = withContext(Dispatchers.IO) {
         recordingMutex.withLock {
             val existing = _activeSession.value
             if (existing != null) {
                 stopCurrentSessionInternal(existing)
             }
             val id = UUID.randomUUID().toString()
+            val cleanedTripId = tripId?.takeIf { it.isNotBlank() }
             val session = TrackingSession(
                 id = id,
                 name = name.trim().ifBlank { "Field Trail" },
@@ -426,7 +492,8 @@ class LocationRepository(private val context: Context) {
                 isPaused = false,
                 pausedAccumulatedMs = 0L,
                 pauseStartedMs = null,
-                waypointCount = 0
+                waypointCount = 0,
+                tripId = cleanedTripId
             )
 
             val db = dbHelper.writableDatabase
@@ -444,6 +511,11 @@ class LocationRepository(private val context: Context) {
                 put("is_paused", 0)
                 put("paused_accumulated_ms", 0L)
                 putNull("pause_started_ms")
+                if (cleanedTripId != null) {
+                    put("trip_id", cleanedTripId)
+                } else {
+                    putNull("trip_id")
+                }
             }
             db.insert(LocationDbHelper.TABLE_SESSIONS, null, cv)
 
@@ -822,7 +894,56 @@ class LocationRepository(private val context: Context) {
         }
     }
 
-    suspend fun dropWaypoint(name: String, note: String = ""): TrailWaypoint? = withContext(Dispatchers.IO) {
+    suspend fun copyPhotoToAppStorage(uriString: String): String? = withContext(Dispatchers.IO) {
+        if (uriString.isBlank()) return@withContext null
+        return@withContext try {
+            val uri = Uri.parse(uriString)
+            val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, boundsOpts)
+            }
+            val rawW = boundsOpts.outWidth
+            val rawH = boundsOpts.outHeight
+            if (rawW <= 0 || rawH <= 0) return@withContext null
+
+            val targetMaxEdge = 1280
+            var sampleSize = 1
+            while ((rawW / sampleSize) > targetMaxEdge * 2 || (rawH / sampleSize) > targetMaxEdge * 2) {
+                sampleSize *= 2
+            }
+
+            val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+            val decoded = context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, decodeOpts)
+            } ?: return@withContext null
+
+            val maxDim = max(decoded.width, decoded.height)
+            val finalBitmap = if (maxDim > targetMaxEdge) {
+                val scale = targetMaxEdge.toFloat() / maxDim.toFloat()
+                val newW = (decoded.width * scale).roundToInt().coerceAtLeast(1)
+                val newH = (decoded.height * scale).roundToInt().coerceAtLeast(1)
+                Bitmap.createScaledBitmap(decoded, newW, newH, true).also {
+                    if (it !== decoded) decoded.recycle()
+                }
+            } else {
+                decoded
+            }
+
+            val dir = File(context.filesDir, "waypoint_photos").apply {
+                if (!exists()) mkdirs()
+            }
+            val outFile = File(dir, "${UUID.randomUUID()}.jpg")
+            FileOutputStream(outFile).use { fos ->
+                finalBitmap.compress(Bitmap.CompressFormat.JPEG, 82, fos)
+            }
+            finalBitmap.recycle()
+            outFile.absolutePath
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun dropWaypoint(name: String, note: String = "", photoUri: String = ""): TrailWaypoint? = withContext(Dispatchers.IO) {
         recordingMutex.withLock {
             val session = _activeSession.value ?: return@withLock null
             val loc = _currentLocation.value ?: return@withLock null
@@ -835,7 +956,8 @@ class LocationRepository(private val context: Context) {
                 longitude = loc.longitude,
                 altitude = loc.altitude,
                 accuracy = loc.accuracy,
-                timestamp = System.currentTimeMillis()
+                timestamp = System.currentTimeMillis(),
+                photoUri = photoUri.trim()
             )
             val db = dbHelper.writableDatabase
             val cv = ContentValues().apply {
@@ -848,6 +970,7 @@ class LocationRepository(private val context: Context) {
                 put("altitude", wp.altitude)
                 put("accuracy", wp.accuracy)
                 put("timestamp", wp.timestamp)
+                put("photo_uri", wp.photoUri)
             }
             db.insert(LocationDbHelper.TABLE_WAYPOINTS, null, cv)
 
@@ -941,6 +1064,7 @@ class LocationRepository(private val context: Context) {
         val pausedIdx = c.getColumnIndex("is_paused")
         val pausedAccIdx = c.getColumnIndex("paused_accumulated_ms")
         val pauseStartIdx = c.getColumnIndex("pause_started_ms")
+        val tripIdx = c.getColumnIndex("trip_id")
         return TrackingSession(
             id = c.getString(c.getColumnIndexOrThrow("id")),
             name = c.getString(c.getColumnIndexOrThrow("name")),
@@ -955,7 +1079,8 @@ class LocationRepository(private val context: Context) {
             isRecording = c.getInt(c.getColumnIndexOrThrow("is_recording")) == 1,
             isPaused = pausedIdx >= 0 && c.getInt(pausedIdx) == 1,
             pausedAccumulatedMs = if (pausedAccIdx >= 0) c.getLong(pausedAccIdx) else 0L,
-            pauseStartedMs = if (pauseStartIdx >= 0 && !c.isNull(pauseStartIdx)) c.getLong(pauseStartIdx) else null
+            pauseStartedMs = if (pauseStartIdx >= 0 && !c.isNull(pauseStartIdx)) c.getLong(pauseStartIdx) else null,
+            tripId = if (tripIdx >= 0 && !c.isNull(tripIdx)) c.getString(tripIdx) else null
         )
     }
 
@@ -1009,6 +1134,7 @@ class LocationRepository(private val context: Context) {
             "timestamp ASC"
         )
         cursor.use { c ->
+            val photoCol = c.getColumnIndex("photo_uri")
             while (c.moveToNext()) {
                 list.add(
                     TrailWaypoint(
@@ -1020,7 +1146,8 @@ class LocationRepository(private val context: Context) {
                         longitude = c.getDouble(c.getColumnIndexOrThrow("longitude")),
                         altitude = c.getDouble(c.getColumnIndexOrThrow("altitude")),
                         accuracy = c.getFloat(c.getColumnIndexOrThrow("accuracy")),
-                        timestamp = c.getLong(c.getColumnIndexOrThrow("timestamp"))
+                        timestamp = c.getLong(c.getColumnIndexOrThrow("timestamp")),
+                        photoUri = if (photoCol >= 0 && !c.isNull(photoCol)) c.getString(photoCol) else ""
                     )
                 )
             }
@@ -1682,6 +1809,7 @@ class LocationRepository(private val context: Context) {
             limit.toString()
         )
         cursor.use { c ->
+            val photoCol = c.getColumnIndex("photo_uri")
             while (c.moveToNext()) {
                 list.add(
                     TrailWaypoint(
@@ -1693,12 +1821,248 @@ class LocationRepository(private val context: Context) {
                         longitude = c.getDouble(c.getColumnIndexOrThrow("longitude")),
                         altitude = c.getDouble(c.getColumnIndexOrThrow("altitude")),
                         accuracy = c.getFloat(c.getColumnIndexOrThrow("accuracy")),
-                        timestamp = c.getLong(c.getColumnIndexOrThrow("timestamp"))
+                        timestamp = c.getLong(c.getColumnIndexOrThrow("timestamp")),
+                        photoUri = if (photoCol >= 0 && !c.isNull(photoCol)) c.getString(photoCol) else ""
                     )
                 )
             }
         }
         list
+    }
+
+    // --- Standalone Saved Places & Multi-Day Trips ---
+
+    private fun loadSavedPlacesInternal() {
+        val db = dbHelper.readableDatabase
+        val list = mutableListOf<SavedPlace>()
+        val cursor = db.query(
+            LocationDbHelper.TABLE_SAVED_PLACES,
+            null, null, null, null, null,
+            "created_at DESC"
+        )
+        cursor.use { c ->
+            val tripIdx = c.getColumnIndex("trip_id")
+            val photoIdx = c.getColumnIndex("photo_uri")
+            while (c.moveToNext()) {
+                list.add(
+                    SavedPlace(
+                        id = c.getString(c.getColumnIndexOrThrow("id")),
+                        name = c.getString(c.getColumnIndexOrThrow("name")),
+                        category = c.getString(c.getColumnIndexOrThrow("category")),
+                        note = c.getString(c.getColumnIndexOrThrow("note")),
+                        latitude = c.getDouble(c.getColumnIndexOrThrow("latitude")),
+                        longitude = c.getDouble(c.getColumnIndexOrThrow("longitude")),
+                        altitude = c.getDouble(c.getColumnIndexOrThrow("altitude")),
+                        photoUri = if (photoIdx >= 0 && !c.isNull(photoIdx)) c.getString(photoIdx) else "",
+                        tripId = if (tripIdx >= 0 && !c.isNull(tripIdx)) c.getString(tripIdx) else null,
+                        createdAt = c.getLong(c.getColumnIndexOrThrow("created_at"))
+                    )
+                )
+            }
+        }
+        _savedPlaces.value = list
+    }
+
+    suspend fun savePlace(
+        name: String,
+        category: String = "Spot",
+        note: String = "",
+        latitude: Double,
+        longitude: Double,
+        altitude: Double = 0.0,
+        photoUri: String = "",
+        tripId: String? = null
+    ): SavedPlace = withContext(Dispatchers.IO) {
+        val place = SavedPlace(
+            id = UUID.randomUUID().toString(),
+            name = name.trim().ifBlank { "Saved Spot" },
+            category = category.trim().ifBlank { "Spot" },
+            note = note.trim(),
+            latitude = latitude,
+            longitude = longitude,
+            altitude = altitude,
+            photoUri = photoUri.trim(),
+            tripId = tripId?.takeIf { it.isNotBlank() },
+            createdAt = System.currentTimeMillis()
+        )
+        val db = dbHelper.writableDatabase
+        val cv = ContentValues().apply {
+            put("id", place.id)
+            put("name", place.name)
+            put("category", place.category)
+            put("note", place.note)
+            put("latitude", place.latitude)
+            put("longitude", place.longitude)
+            put("altitude", place.altitude)
+            put("photo_uri", place.photoUri)
+            if (place.tripId != null) put("trip_id", place.tripId) else putNull("trip_id")
+            put("created_at", place.createdAt)
+        }
+        db.insertWithOnConflict(
+            LocationDbHelper.TABLE_SAVED_PLACES,
+            null,
+            cv,
+            android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
+        )
+        loadSavedPlacesInternal()
+        place
+    }
+
+    suspend fun deleteSavedPlace(id: String) = withContext(Dispatchers.IO) {
+        dbHelper.writableDatabase.delete(LocationDbHelper.TABLE_SAVED_PLACES, "id = ?", arrayOf(id))
+        loadSavedPlacesInternal()
+    }
+
+    suspend fun assignPlaceToTrip(placeId: String, tripId: String?) = withContext(Dispatchers.IO) {
+        val cleaned = tripId?.takeIf { it.isNotBlank() }
+        val cv = ContentValues().apply {
+            if (cleaned != null) put("trip_id", cleaned) else putNull("trip_id")
+        }
+        dbHelper.writableDatabase.update(LocationDbHelper.TABLE_SAVED_PLACES, cv, "id = ?", arrayOf(placeId))
+        loadSavedPlacesInternal()
+    }
+
+    suspend fun searchSavedPlaces(query: String, limit: Int = 20): List<SavedPlace> = withContext(Dispatchers.IO) {
+        val trimmed = query.trim()
+        val list = mutableListOf<SavedPlace>()
+        val db = dbHelper.readableDatabase
+        val cursor = if (trimmed.isBlank()) {
+            db.query(
+                LocationDbHelper.TABLE_SAVED_PLACES,
+                null, null, null, null, null,
+                "created_at DESC",
+                limit.toString()
+            )
+        } else {
+            val likeArg = "%$trimmed%"
+            db.query(
+                LocationDbHelper.TABLE_SAVED_PLACES,
+                null,
+                "name LIKE ? COLLATE NOCASE OR category LIKE ? COLLATE NOCASE OR note LIKE ? COLLATE NOCASE",
+                arrayOf(likeArg, likeArg, likeArg),
+                null, null,
+                "created_at DESC",
+                limit.toString()
+            )
+        }
+        cursor.use { c ->
+            val tripIdx = c.getColumnIndex("trip_id")
+            val photoIdx = c.getColumnIndex("photo_uri")
+            while (c.moveToNext()) {
+                list.add(
+                    SavedPlace(
+                        id = c.getString(c.getColumnIndexOrThrow("id")),
+                        name = c.getString(c.getColumnIndexOrThrow("name")),
+                        category = c.getString(c.getColumnIndexOrThrow("category")),
+                        note = c.getString(c.getColumnIndexOrThrow("note")),
+                        latitude = c.getDouble(c.getColumnIndexOrThrow("latitude")),
+                        longitude = c.getDouble(c.getColumnIndexOrThrow("longitude")),
+                        altitude = c.getDouble(c.getColumnIndexOrThrow("altitude")),
+                        photoUri = if (photoIdx >= 0 && !c.isNull(photoIdx)) c.getString(photoIdx) else "",
+                        tripId = if (tripIdx >= 0 && !c.isNull(tripIdx)) c.getString(tripIdx) else null,
+                        createdAt = c.getLong(c.getColumnIndexOrThrow("created_at"))
+                    )
+                )
+            }
+        }
+        list
+    }
+
+    private fun loadTripsInternal() {
+        val db = dbHelper.readableDatabase
+        val list = mutableListOf<TripGroup>()
+        val cursor = db.query(
+            LocationDbHelper.TABLE_TRIPS,
+            null, null, null, null, null,
+            "start_date DESC"
+        )
+        cursor.use { c ->
+            val endIdx = c.getColumnIndex("end_date")
+            while (c.moveToNext()) {
+                list.add(
+                    TripGroup(
+                        id = c.getString(c.getColumnIndexOrThrow("id")),
+                        name = c.getString(c.getColumnIndexOrThrow("name")),
+                        notes = c.getString(c.getColumnIndexOrThrow("notes")),
+                        startDate = c.getLong(c.getColumnIndexOrThrow("start_date")),
+                        endDate = if (endIdx >= 0 && !c.isNull(endIdx)) c.getLong(endIdx) else null,
+                        createdAt = c.getLong(c.getColumnIndexOrThrow("created_at"))
+                    )
+                )
+            }
+        }
+        _trips.value = list
+    }
+
+    suspend fun createTrip(name: String, notes: String = ""): TripGroup = withContext(Dispatchers.IO) {
+        val now = System.currentTimeMillis()
+        val trip = TripGroup(
+            id = UUID.randomUUID().toString(),
+            name = name.trim().ifBlank { "Expedition" },
+            notes = notes.trim(),
+            startDate = now,
+            endDate = null,
+            createdAt = now
+        )
+        val cv = ContentValues().apply {
+            put("id", trip.id)
+            put("name", trip.name)
+            put("notes", trip.notes)
+            put("start_date", trip.startDate)
+            putNull("end_date")
+            put("created_at", trip.createdAt)
+        }
+        dbHelper.writableDatabase.insertWithOnConflict(
+            LocationDbHelper.TABLE_TRIPS,
+            null,
+            cv,
+            android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
+        )
+        loadTripsInternal()
+        trip
+    }
+
+    suspend fun deleteTrip(tripId: String) = withContext(Dispatchers.IO) {
+        recordingMutex.withLock {
+            val db = dbHelper.writableDatabase
+            db.beginTransaction()
+            try {
+                val clearCv = ContentValues().apply { putNull("trip_id") }
+                db.update(LocationDbHelper.TABLE_SESSIONS, clearCv, "trip_id = ?", arrayOf(tripId))
+                db.update(LocationDbHelper.TABLE_SAVED_PLACES, clearCv, "trip_id = ?", arrayOf(tripId))
+                db.delete(LocationDbHelper.TABLE_TRIPS, "id = ?", arrayOf(tripId))
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            val current = _activeSession.value
+            if (current != null && current.tripId == tripId) {
+                _activeSession.value = current.copy(tripId = null)
+            }
+            loadTripsInternal()
+            loadSessionsInternal()
+            loadSavedPlacesInternal()
+        }
+    }
+
+    suspend fun assignSessionToTrip(sessionId: String, tripId: String?) = withContext(Dispatchers.IO) {
+        val cleaned = tripId?.takeIf { it.isNotBlank() }
+        recordingMutex.withLock {
+            val cv = ContentValues().apply {
+                if (cleaned != null) put("trip_id", cleaned) else putNull("trip_id")
+            }
+            dbHelper.writableDatabase.update(
+                LocationDbHelper.TABLE_SESSIONS,
+                cv,
+                "id = ?",
+                arrayOf(sessionId)
+            )
+            val current = _activeSession.value
+            if (current != null && current.id == sessionId) {
+                _activeSession.value = current.copy(tripId = cleaned)
+            }
+            loadSessionsInternal()
+        }
     }
 
     suspend fun saveOfflineMapRegion(region: OfflineMapRegion) = withContext(Dispatchers.IO) {

@@ -14,6 +14,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,11 +38,14 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Flag
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Save
@@ -95,15 +99,21 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import coil.compose.AsyncImage
 import com.geotrace.data.export.ExportFormat
 import com.geotrace.data.export.TrackExporter
 import com.geotrace.model.CoordinateFormat
+import com.geotrace.model.SavedPlace
 import com.geotrace.model.SpeedUnit
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
 import com.geotrace.model.TrailWaypoint
+import com.geotrace.model.TripGroup
 import com.geotrace.service.ElevationSummary
 import com.geotrace.ui.components.GeoTraceTopBar
 import com.geotrace.ui.components.ScreenListContentPadding
@@ -141,11 +151,14 @@ fun HistoryScreen(
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
     val sessions by viewModel.allSessions.collectAsState()
+    val trips by viewModel.trips.collectAsState()
+    val savedPlaces by viewModel.savedPlaces.collectAsState()
     val settings by viewModel.settings.collectAsState()
     val exportingSessionId by viewModel.exportingSessionId.collectAsState()
 
     var historyQuery by rememberSaveable { mutableStateOf("") }
     var selectedModeFilter by rememberSaveable { mutableStateOf<TrackingMode?>(null) }
+    var selectedTripFilterId by rememberSaveable { mutableStateOf<String?>(null) }
 
     val hasLiveActiveSession = remember(sessions) { sessions.any { it.isRecording && !it.isPaused } }
     var liveNowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -159,19 +172,32 @@ fun HistoryScreen(
     var pendingExport by remember { mutableStateOf<TrackerViewModel.ExportPayload?>(null) }
     var sessionToDelete by remember { mutableStateOf<TrackingSession?>(null) }
     var sessionToRename by remember { mutableStateOf<TrackingSession?>(null) }
+    var sessionToAssignTrip by remember { mutableStateOf<TrackingSession?>(null) }
     var renameInput by rememberSaveable { mutableStateOf("") }
+    var showCreateTripDialog by rememberSaveable { mutableStateOf(false) }
+    var newTripNameInput by rememberSaveable { mutableStateOf("") }
+    var newTripNotesInput by rememberSaveable { mutableStateOf("") }
+    var tripToDelete by remember { mutableStateOf<TripGroup?>(null) }
     var waypointDialogSession by remember { mutableStateOf<TrackingSession?>(null) }
     var sessionWaypoints by remember { mutableStateOf<List<TrailWaypoint>>(emptyList()) }
     var isLoadingWaypoints by remember { mutableStateOf(false) }
+    var expandedPhotoPath by rememberSaveable { mutableStateOf<String?>(null) }
     var elevationDialogSession by remember { mutableStateOf<TrackingSession?>(null) }
     var elevationSummary by remember { mutableStateOf<ElevationSummary?>(null) }
     var isLoadingElevation by remember { mutableStateOf(false) }
 
-    val filteredSessions = remember(sessions, historyQuery, selectedModeFilter) {
+    val tripNameById = remember(trips) { trips.associate { it.id to it.name } }
+
+    val filteredSessions = remember(sessions, historyQuery, selectedModeFilter, selectedTripFilterId) {
         val q = historyQuery.trim()
         sessions.filter { s ->
             val modeMatches = selectedModeFilter == null || s.trackingMode == selectedModeFilter
-            if (!modeMatches) {
+            val tripMatches = when (selectedTripFilterId) {
+                null -> true
+                "__UNASSIGNED__" -> s.tripId.isNullOrBlank()
+                else -> s.tripId == selectedTripFilterId
+            }
+            if (!modeMatches || !tripMatches) {
                 false
             } else if (q.isEmpty()) {
                 true
@@ -341,6 +367,156 @@ fun HistoryScreen(
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
+                }
+            }
+
+            // Multi-Day Expedition / Trip Groups Strip
+            item(key = "trip_groups_strip") {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        val tripChipColors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = colorScheme.secondary.copy(alpha = 0.16f),
+                            selectedLabelColor = colorScheme.secondary
+                        )
+                        FilterChip(
+                            selected = selectedTripFilterId == null,
+                            onClick = { selectedTripFilterId = null },
+                            leadingIcon = {
+                                Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(15.dp))
+                            },
+                            label = { Text("All Trips", fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                            shape = CircleShape,
+                            colors = tripChipColors,
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("trip_filter_all")
+                        )
+                        for (trip in trips) {
+                            val tripSessionCount = sessions.count { it.tripId == trip.id }
+                            FilterChip(
+                                selected = selectedTripFilterId == trip.id,
+                                onClick = {
+                                    selectedTripFilterId = if (selectedTripFilterId == trip.id) null else trip.id
+                                },
+                                label = {
+                                    Text("${trip.name} ($tripSessionCount)", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                },
+                                shape = CircleShape,
+                                colors = tripChipColors,
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("trip_filter_${trip.id}")
+                            )
+                        }
+                        if (trips.isNotEmpty()) {
+                            val unassignedCount = sessions.count { it.tripId.isNullOrBlank() }
+                            FilterChip(
+                                selected = selectedTripFilterId == "__UNASSIGNED__",
+                                onClick = {
+                                    selectedTripFilterId = if (selectedTripFilterId == "__UNASSIGNED__") null else "__UNASSIGNED__"
+                                },
+                                label = { Text("No Trip ($unassignedCount)", fontSize = 11.sp) },
+                                shape = CircleShape,
+                                colors = tripChipColors,
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            )
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                newTripNameInput = ""
+                                newTripNotesInput = ""
+                                showCreateTripDialog = true
+                            },
+                            shape = CircleShape,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("create_trip_btn")
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("New Trip", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    val selectedTrip = trips.firstOrNull { it.id == selectedTripFilterId }
+                    if (selectedTrip != null) {
+                        val tripSessions = sessions.filter { it.tripId == selectedTrip.id }
+                        val tripPlacesCount = savedPlaces.count { it.tripId == selectedTrip.id }
+                        val tripDistMeters = tripSessions.sumOf { it.totalDistanceMeters }
+                        val tripDurSec = tripSessions.sumOf { it.currentDurationSeconds(liveNowMs) }
+                        val tripDistLabel = if (tripDistMeters >= 1000.0) {
+                            String.format(Locale.US, "%.2f km", tripDistMeters / 1000.0)
+                        } else {
+                            String.format(Locale.US, "%.0f m", tripDistMeters)
+                        }
+                        val tripDurLabel = run {
+                            val h = tripDurSec / 3600
+                            val m = (tripDurSec % 3600) / 60
+                            if (h > 0) "${h}h ${m}m" else "${m}m"
+                        }
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("selected_trip_summary_card"),
+                            shape = RoundedCornerShape(22.dp),
+                            colors = CardDefaults.cardColors(containerColor = colorScheme.secondaryContainer.copy(alpha = 0.25f)),
+                            border = BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.45f))
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = selectedTrip.name,
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = colorScheme.onSurface
+                                        )
+                                        if (selectedTrip.notes.isNotBlank()) {
+                                            Text(
+                                                text = selectedTrip.notes,
+                                                fontSize = 11.sp,
+                                                color = colorScheme.onSurfaceVariant,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = { tripToDelete = selectedTrip },
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Delete Trip Group",
+                                            tint = colorScheme.error,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    MetricItem("DAYS / TRAILS", "${tripSessions.size}", colorScheme.primary)
+                                    MetricItem("TRIP DIST", tripDistLabel, colorScheme.secondary)
+                                    MetricItem("TIME", tripDurLabel, colorScheme.onSurface)
+                                    MetricItem("BOOKMARKS", "$tripPlacesCount", colorScheme.tertiary)
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
@@ -574,6 +750,7 @@ fun HistoryScreen(
                                     onClick = {
                                         historyQuery = ""
                                         selectedModeFilter = null
+                                        selectedTripFilterId = null
                                     },
                                     shape = CircleShape,
                                     modifier = Modifier.height(48.dp)
@@ -587,6 +764,7 @@ fun HistoryScreen(
                     items(filteredSessions, key = { it.id }) { session ->
                         SessionHistoryCard(
                             session = session,
+                            tripName = session.tripId?.let { tripNameById[it] },
                             liveNowMs = liveNowMs,
                             speedUnit = settings.speedUnit,
                             isExporting = exportingSessionId == session.id,
@@ -598,6 +776,7 @@ fun HistoryScreen(
                                 { openWaypointsDialog(session) }
                             } else null,
                             onViewElevation = { openElevationDialog(session) },
+                            onAssignTrip = { sessionToAssignTrip = session },
                             onExport = { format -> triggerExport(session, format) },
                             onRename = {
                                 renameInput = session.name
@@ -630,6 +809,7 @@ fun HistoryScreen(
             waypoints = sessionWaypoints,
             isLoading = isLoadingWaypoints,
             coordinateFormat = settings.coordinateFormat,
+            onOpenPhoto = { path -> expandedPhotoPath = path },
             onCopyCoordinates = { wp ->
                 val formatted = formatCoordinates(wp.latitude, wp.longitude, settings.coordinateFormat)
                 clipboard.setText(AnnotatedString(formatted))
@@ -642,6 +822,239 @@ fun HistoryScreen(
                 }
             },
             onDismiss = { waypointDialogSession = null }
+        )
+    }
+
+    // Full-Screen Waypoint Photo Viewer Dialog
+    if (expandedPhotoPath != null) {
+        val photoFile = File(expandedPhotoPath!!)
+        Dialog(
+            onDismissRequest = { expandedPhotoPath = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(colorScheme.scrim.copy(alpha = 0.92f)),
+                color = colorScheme.scrim.copy(alpha = 0.92f)
+            ) {
+                Box(modifier = Modifier.fillMaxSize()) {
+                    AsyncImage(
+                        model = photoFile,
+                        contentDescription = "Full screen waypoint photo",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp)
+                    )
+                    IconButton(
+                        onClick = { expandedPhotoPath = null },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(16.dp)
+                            .size(48.dp)
+                            .background(colorScheme.surface.copy(alpha = 0.85f), CircleShape)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close photo preview",
+                            tint = colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // Create New Trip Dialog
+    if (showCreateTripDialog) {
+        AlertDialog(
+            onDismissRequest = { showCreateTripDialog = false },
+            title = { Text("New Multi-Day Trip", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = newTripNameInput,
+                        onValueChange = { newTripNameInput = it },
+                        label = { Text("Trip Name", fontSize = 12.sp) },
+                        placeholder = { Text("e.g. Rwenzori 4-Day Trek", fontSize = 12.sp) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Words,
+                            imeAction = ImeAction.Next
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("create_trip_name_input")
+                    )
+                    OutlinedTextField(
+                        value = newTripNotesInput,
+                        onValueChange = { newTripNotesInput = it },
+                        label = { Text("Itinerary Notes (Optional)", fontSize = 12.sp) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.Done
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.createTrip(newTripNameInput, newTripNotesInput) { trip ->
+                            selectedTripFilterId = trip.id
+                            Toast.makeText(context, "Created trip \"${trip.name}\"", Toast.LENGTH_SHORT).show()
+                        }
+                        showCreateTripDialog = false
+                    },
+                    enabled = newTripNameInput.isNotBlank(),
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("confirm_create_trip_btn")
+                ) {
+                    Text("Create Trip", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showCreateTripDialog = false },
+                    shape = CircleShape,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Cancel", fontSize = 12.sp)
+                }
+            },
+            shape = RoundedCornerShape(28.dp),
+            containerColor = colorScheme.surface
+        )
+    }
+
+    // Delete Trip Confirmation Dialog (keeps trails intact)
+    if (tripToDelete != null) {
+        val targetTrip = tripToDelete!!
+        AlertDialog(
+            onDismissRequest = { tripToDelete = null },
+            title = { Text("Delete Trip Group?", fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+            text = {
+                Text(
+                    text = "Remove trip folder \"${targetTrip.name}\"? Recorded trails and saved places inside it will remain safe in your history.",
+                    fontSize = 13.sp,
+                    color = colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (selectedTripFilterId == targetTrip.id) selectedTripFilterId = null
+                        viewModel.deleteTrip(targetTrip.id)
+                        tripToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = colorScheme.error, contentColor = colorScheme.onError),
+                    shape = CircleShape,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Remove Folder", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { tripToDelete = null },
+                    shape = CircleShape,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Cancel", fontSize = 12.sp)
+                }
+            },
+            shape = RoundedCornerShape(28.dp),
+            containerColor = colorScheme.surface
+        )
+    }
+
+    // Assign Session to Trip Dialog
+    if (sessionToAssignTrip != null) {
+        val targetSession = sessionToAssignTrip!!
+        AlertDialog(
+            onDismissRequest = { sessionToAssignTrip = null },
+            title = {
+                Column {
+                    Text("Assign Trail to Trip", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        text = targetSession.name,
+                        fontSize = 11.sp,
+                        color = colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 260.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = targetSession.tripId == null,
+                        onClick = {
+                            viewModel.assignSessionToTrip(targetSession.id, null)
+                            sessionToAssignTrip = null
+                        },
+                        label = { Text("No Trip (Standalone Trail)", fontSize = 12.sp) },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                    )
+                    for (trip in trips) {
+                        FilterChip(
+                            selected = targetSession.tripId == trip.id,
+                            onClick = {
+                                viewModel.assignSessionToTrip(targetSession.id, trip.id)
+                                sessionToAssignTrip = null
+                            },
+                            label = { Text(trip.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            sessionToAssignTrip = null
+                            newTripNameInput = ""
+                            newTripNotesInput = ""
+                            showCreateTripDialog = true
+                        },
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Create New Trip", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { sessionToAssignTrip = null },
+                    shape = CircleShape,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Close", fontSize = 12.sp)
+                }
+            },
+            shape = RoundedCornerShape(28.dp),
+            containerColor = colorScheme.surface
         )
     }
 
@@ -903,6 +1316,7 @@ private fun TrailWaypointsDialog(
     waypoints: List<TrailWaypoint>,
     isLoading: Boolean,
     coordinateFormat: CoordinateFormat,
+    onOpenPhoto: (String) -> Unit,
     onCopyCoordinates: (TrailWaypoint) -> Unit,
     onDeleteWaypoint: (TrailWaypoint) -> Unit,
     onDismiss: () -> Unit
@@ -970,6 +1384,19 @@ private fun TrailWaypointsDialog(
                                         .padding(start = 10.dp, top = 8.dp, bottom = 8.dp, end = 4.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
+                                    if (wp.photoUri.isNotBlank()) {
+                                        AsyncImage(
+                                            model = File(wp.photoUri),
+                                            contentDescription = "${wp.name} field photo",
+                                            contentScale = ContentScale.Crop,
+                                            modifier = Modifier
+                                                .size(52.dp)
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(10.dp))
+                                                .clickable { onOpenPhoto(wp.photoUri) }
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = "W${idx + 1} • ${wp.name}",
@@ -1055,6 +1482,7 @@ private fun TrailWaypointsDialog(
 @Composable
 private fun SessionHistoryCard(
     session: TrackingSession,
+    tripName: String?,
     liveNowMs: Long,
     speedUnit: SpeedUnit,
     isExporting: Boolean,
@@ -1062,6 +1490,7 @@ private fun SessionHistoryCard(
     onViewOnMap: (() -> Unit)?,
     onViewWaypoints: (() -> Unit)?,
     onViewElevation: () -> Unit,
+    onAssignTrip: () -> Unit,
     onExport: (ExportFormat) -> Unit,
     onRename: () -> Unit,
     onDeleteRequest: () -> Unit
@@ -1124,7 +1553,10 @@ private fun SessionHistoryCard(
                                 }
                             }
                         }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.horizontalScroll(rememberScrollState())
+                        ) {
                             Text(
                                 text = dateStr,
                                 fontSize = 11.sp,
@@ -1144,6 +1576,41 @@ private fun SessionHistoryCard(
                                     color = colorScheme.primary,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                 )
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .clip(CircleShape)
+                                    .clickable { onAssignTrip() }
+                                    .testTag("assign_trip_badge_${session.id}")
+                            ) {
+                                Surface(
+                                    shape = CircleShape,
+                                    color = if (tripName != null) colorScheme.secondary.copy(alpha = 0.14f) else customColors.surfaceContainerLow,
+                                    border = BorderStroke(1.dp, if (tripName != null) colorScheme.secondary.copy(alpha = 0.4f) else colorScheme.outlineVariant)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Bookmark,
+                                            contentDescription = "Assign to Trip",
+                                            tint = if (tripName != null) colorScheme.secondary else colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Text(
+                                            text = tripName ?: "+ Trip",
+                                            fontSize = 9.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (tripName != null) colorScheme.secondary else colorScheme.onSurfaceVariant,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

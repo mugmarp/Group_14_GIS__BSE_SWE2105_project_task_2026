@@ -438,12 +438,25 @@ object TrackExporter {
 
     fun buildEmergencyShareMessage(
         point: LocationPoint?,
-        cellTower: CellTowerInfo?
+        cellTower: CellTowerInfo?,
+        batteryPercent: Int? = null,
+        altitudeMeters: Double? = null
     ): String {
         if (point == null) return "Emergency Alert: Location tracking active, awaiting GPS lock."
 
-        val mapsUrl = "https://maps.google.com/?q=${point.latitude},${point.longitude}"
+        val latStr = String.format(Locale.US, "%.5f", point.latitude)
+        val lonStr = String.format(Locale.US, "%.5f", point.longitude)
+        val mapsUrl = "https://maps.google.com/?q=$latStr,$lonStr"
+        val geoUri = "geo:$latStr,$lonStr?q=$latStr,$lonStr"
         val timeStr = SimpleDateFormat("HH:mm:ss dd-MMM-yyyy", Locale.getDefault()).format(Date(point.timestamp))
+
+        val resolvedAltitude = altitudeMeters ?: point.altitude.takeIf { it != 0.0 }
+        val altLine = resolvedAltitude?.let {
+            "\n⛰️ Altitude: ${it.toInt()} m"
+        } ?: ""
+        val batteryLine = batteryPercent?.let {
+            "\n🔋 Battery: $it%"
+        } ?: ""
 
         val cellDetails = if (cellTower != null) {
             val sigLabel = cellTower.signalDbm?.let { "$it dBm" } ?: "N/A"
@@ -452,10 +465,11 @@ object TrackExporter {
 
         return """
 🚨 *GIS TRACKER EMERGENCY ALERT*
-📍 Position: ${String.format(Locale.US, "%.5f", point.latitude)}, ${String.format(Locale.US, "%.5f", point.longitude)}
+📍 Position: $latStr, $lonStr
 🎯 Accuracy: ±${String.format(Locale.US, "%.1f", point.accuracy)} meters
-⚡ Speed: ${String.format(Locale.US, "%.1f", point.speedKmh)} km/h
+⚡ Speed: ${String.format(Locale.US, "%.1f", point.speedKmh)} km/h$altLine$batteryLine
 ⏰ Time: $timeStr$cellDetails
+🧭 Nav URI: $geoUri
 🔗 Live Map: $mapsUrl
         """.trimIndent()
     }

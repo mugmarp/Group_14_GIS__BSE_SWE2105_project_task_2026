@@ -7,12 +7,15 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
+import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -24,6 +27,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.geotrace.LocationTrackerApp
 import com.geotrace.MainActivity
+import com.geotrace.model.LastGaspBeacon
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.TrackingMode
 import com.google.android.gms.location.FusedLocationProviderClient
@@ -53,7 +57,9 @@ class LocationForegroundService : Service() {
         private const val TAG = "LocationFgService"
         private const val LEGACY_CHANNEL_ID = "gis_tracker_channel"
         const val CHANNEL_ID = "geotrace_protection_channel_v2"
+        const val BATTERY_SAFETY_CHANNEL_ID = "geotrace_battery_safety_channel"
         const val NOTIFICATION_ID = 1001
+        const val BATTERY_SAFETY_NOTIFICATION_ID = 4199
 
         const val ACTION_START = "ACTION_START_TRACKING"
         const val ACTION_START_PAUSED = "ACTION_START_PAUSED_TRACKING"
@@ -297,6 +303,13 @@ class LocationForegroundService : Service() {
     private var lastModeSwitchElapsedNs: Long = 0L
     private var lastBgCellularFallbackKey: String? = null
     private var lastBgCellularFallbackMs: Long = 0L
+    private var batteryReceiver: BroadcastReceiver? = null
+    @Volatile
+    private var batteryReceiverRegistered = false
+    @Volatile
+    private var lastTriggeredBatteryThreshold = 100
+    @Volatile
+    private var lastSafetyNotifiedThreshold = 100
 
     private fun syncProtectionRuntimeState() {
         _isProtectionPausedFlow.value = isProtectionPaused
@@ -310,6 +323,7 @@ class LocationForegroundService : Service() {
         systemLocationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         cellManager = CellularDiagnosticManager(this)
         createNotificationChannel()
+        registerBatteryReceiver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -1370,7 +1384,146 @@ class LocationForegroundService : Service() {
                 setShowBadge(false)
             }
             nm.createNotificationChannel(channel)
+
+            if (nm.getNotificationChannel(BATTERY_SAFETY_CHANNEL_ID) == null) {
+                val safetyChannel = NotificationChannel(
+                    BATTERY_SAFETY_CHANNEL_ID,
+                    "Low-Battery Safety Beacon",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Alerts when battery drops critically low and Last-Gasp location beacon is saved"
+                    enableVibration(true)
+                }
+                nm.createNotificationChannel(safetyChannel)
+            }
         }
+    }
+
+    private fun registerBatteryReceiver() {
+        if (batteryReceiverRegistered) return
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action != Intent.ACTION_BATTERY_CHANGED) return
+                val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100).coerceAtLeast(1)
+                if (level < 0) return
+                val pct = ((level * 100f) / scale.toFloat()).toInt().coerceIn(0, 100)
+                val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                val plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
+                val isCharging = plugged != 0 ||
+                    status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                    status == BatteryManager.BATTERY_STATUS_FULL
+                evaluateLowBattery(pct, isCharging)
+            }
+        }
+        batteryReceiver = receiver
+        try {
+            val sticky = registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            batteryReceiverRegistered = true
+            sticky?.let { receiver.onReceive(this, it) }
+        } catch (_: Exception) {
+            batteryReceiverRegistered = false
+        }
+    }
+
+    private fun evaluateLowBattery(pct: Int, isCharging: Boolean) {
+        if (isCharging || pct > 20) {
+            lastTriggeredBatteryThreshold = 100
+            lastSafetyNotifiedThreshold = 100
+            if (isCharging && pct > 20) {
+                try {
+                    (getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager)
+                        ?.cancel(BATTERY_SAFETY_NOTIFICATION_ID)
+                } catch (_: Exception) {}
+            }
+            return
+        }
+
+        val crossedThreshold = when {
+            pct <= 5 -> 5
+            pct <= 10 -> 10
+            pct <= 15 -> 15
+            else -> null
+        } ?: return
+
+        if (crossedThreshold < lastTriggeredBatteryThreshold) {
+            lastTriggeredBatteryThreshold = crossedThreshold
+            val app = application as LocationTrackerApp
+            val repo = app.repository
+            val groupRepo = app.groupRepository
+            val point = repo.currentLocation.value
+            if (point != null) {
+                val servingCell = repo.cellTowers.value.firstOrNull { it.isRegistered } ?: repo.cellTowers.value.firstOrNull()
+                val cellSummary = servingCell?.let {
+                    "${it.operatorDisplayName} (CID ${it.cid ?: "N/A"}, LAC ${it.lac ?: "N/A"})"
+                } ?: ""
+                repo.saveLastGaspBeacon(
+                    LastGaspBeacon(
+                        latitude = point.latitude,
+                        longitude = point.longitude,
+                        accuracy = point.accuracy,
+                        altitude = point.altitude,
+                        batteryPercent = pct,
+                        timestamp = System.currentTimeMillis(),
+                        cellSummary = cellSummary
+                    )
+                )
+                serviceScope.launch {
+                    groupRepo.syncDeviceAndGroupTelemetry(
+                        location = point,
+                        trackingModeName = currentMode.name,
+                        force = true,
+                        includeP2PBroadcast = true
+                    )
+                }
+            }
+
+            if (pct <= 12 && crossedThreshold < lastSafetyNotifiedThreshold && hasNotificationPermission(this)) {
+                lastSafetyNotifiedThreshold = crossedThreshold
+                postLowBatterySafetyNotification(pct, hasPoint = point != null)
+            }
+        }
+    }
+
+    private fun postLowBatterySafetyNotification(pct: Int, hasPoint: Boolean) {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingOpen = PendingIntent.getActivity(
+            this, 4199, openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val body = if (hasPoint) {
+            "Last-Gasp location beacon saved at $pct%. Switch to Power Saver to extend range."
+        } else {
+            "Battery at $pct%. Switch to Power Saver to preserve positioning."
+        }
+        val builder = NotificationCompat.Builder(this, BATTERY_SAFETY_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("Low Battery ($pct%) • Beacon Saved")
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(pendingOpen)
+            .setAutoCancel(true)
+
+        if (currentMode != TrackingMode.POWER_SAVER) {
+            val powerSaverIntent = Intent(this, LocationForegroundService::class.java).apply {
+                action = ACTION_UPDATE_MODE
+                putExtra(EXTRA_MODE, TrackingMode.POWER_SAVER.name)
+            }
+            val pendingPowerSaver = PendingIntent.getService(
+                this, 4200, powerSaverIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.addAction(
+                android.R.drawable.ic_lock_idle_low_battery,
+                "Power Saver",
+                pendingPowerSaver
+            )
+        }
+        nm.notify(BATTERY_SAFETY_NOTIFICATION_ID, builder.build())
     }
 
     private fun stopTrackingOrDowngradeInternal() {
@@ -1451,6 +1604,12 @@ class LocationForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        if (batteryReceiverRegistered) {
+            try {
+                batteryReceiver?.let { unregisterReceiver(it) }
+            } catch (_: Exception) {}
+            batteryReceiverRegistered = false
+        }
         isServiceActive = false
         isProtectionActive = false
         isProtectionPaused = false

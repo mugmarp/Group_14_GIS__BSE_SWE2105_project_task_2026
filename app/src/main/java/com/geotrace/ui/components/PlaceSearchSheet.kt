@@ -318,6 +318,7 @@ private fun SearchResultRow(
     val customColors = LocalCustomColors.current
     val (icon, tintColor) = when (place.source) {
         SearchResultSource.COORDINATE -> Icons.Default.MyLocation to colorScheme.primary
+        SearchResultSource.SAVED_PLACE -> Icons.Default.Bookmark to colorScheme.secondary
         SearchResultSource.SAFE_ZONE -> Icons.Default.Shield to colorScheme.tertiary
         SearchResultSource.WAYPOINT -> Icons.Default.Flag to customColors.warning
         SearchResultSource.OFFLINE_REGION -> Icons.Default.Map to colorScheme.secondary

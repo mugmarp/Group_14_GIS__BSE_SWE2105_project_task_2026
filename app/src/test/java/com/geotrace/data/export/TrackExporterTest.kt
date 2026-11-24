@@ -142,4 +142,47 @@ class TrackExporterTest {
         assertTrue(kml.contains("<Folder>"))
         assertTrue(kml.contains("<gx:MultiTrack>"))
     }
+
+    @Test
+    fun `buildEmergencyShareMessage includes battery altitude cell tower and geo URI`() {
+        val tower = com.geotrace.model.CellTowerInfo(
+            type = "LTE",
+            mcc = 641,
+            mnc = 10,
+            cid = 123456L,
+            lac = 4010,
+            signalDbm = -87,
+            signalLevel = 3,
+            isRegistered = true,
+            operatorName = "MTN Uganda"
+        )
+        val msg = TrackExporter.buildEmergencyShareMessage(
+            point = samplePoints.first(),
+            cellTower = tower,
+            batteryPercent = 14,
+            altitudeMeters = 1430.0
+        )
+
+        assertTrue(msg.contains("-0.59470, 30.65450"))
+        assertTrue(msg.contains("Altitude: 1430 m"))
+        assertTrue(msg.contains("Battery: 14%"))
+        assertTrue(msg.contains("Nav URI: geo:-0.59470,30.65450?q=-0.59470,30.65450"))
+        assertTrue(msg.contains("Live Map: https://maps.google.com/?q=-0.59470,30.65450"))
+        assertTrue(msg.contains("MTN Uganda"))
+        assertTrue(msg.contains("-87 dBm"))
+    }
+
+    @Test
+    fun `buildEmergencyShareMessage handles null point and omits battery when null`() {
+        val waiting = TrackExporter.buildEmergencyShareMessage(point = null, cellTower = null)
+        assertTrue(waiting.contains("awaiting GPS lock"))
+
+        val noExtras = TrackExporter.buildEmergencyShareMessage(
+            point = samplePoints.first().copy(altitude = 0.0),
+            cellTower = null
+        )
+        assertFalse(noExtras.contains("Battery:"))
+        assertFalse(noExtras.contains("Altitude:"))
+        assertTrue(noExtras.contains("geo:-0.59470,30.65450"))
+    }
 }

@@ -14,16 +14,19 @@ import com.geotrace.model.ActiveGuideTarget
 import com.geotrace.model.CellTowerInfo
 import com.geotrace.model.GeofenceCategory
 import com.geotrace.model.GeofenceZone
+import com.geotrace.model.LastGaspBeacon
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineDownloadProgress
 import com.geotrace.model.OfflineMapRegion
 import com.geotrace.model.ParkedSpot
+import com.geotrace.model.SavedPlace
 import com.geotrace.model.SearchPlaceResult
 import com.geotrace.model.SearchResultSource
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
 import com.geotrace.model.TrailWaypoint
+import com.geotrace.model.TripGroup
 import com.geotrace.service.ElevationAnalyzer
 import com.geotrace.service.ElevationSummary
 import com.geotrace.service.LocationForegroundService
@@ -61,6 +64,9 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val filteredJitterMeters: StateFlow<Double> = repository.filteredJitterMeters
     val filteredJitterCount: StateFlow<Int> = repository.filteredJitterCount
     val parkedSpot: StateFlow<ParkedSpot?> = repository.parkedSpot
+    val savedPlaces: StateFlow<List<SavedPlace>> = repository.savedPlaces
+    val trips: StateFlow<List<TripGroup>> = repository.trips
+    val lastGaspBeacon: StateFlow<LastGaspBeacon?> = repository.lastGaspBeacon
 
     private val _importedRoute = MutableStateFlow<ImportedRoute?>(null)
     val importedRoute: StateFlow<ImportedRoute?> = _importedRoute.asStateFlow()
@@ -798,7 +804,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         repository.awaitInitialRestore()
     }
 
-    fun startTracking(sessionName: String, mode: TrackingMode): Boolean {
+    fun startTracking(sessionName: String, mode: TrackingMode, tripId: String? = null): Boolean {
         if (!LocationForegroundService.hasLocationPermission(getApplication())) {
             return false
         }
@@ -806,7 +812,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             _inspectedTrail.value = null
             stopStandbyLocationUpdates()
             repository.setTrackingMode(mode)
-            repository.startNewSession(sessionName, mode)
+            repository.startNewSession(sessionName, mode, tripId)
             LocationForegroundService.startService(getApplication(), mode)
         }
         return true
@@ -834,11 +840,113 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun dropWaypoint(name: String, note: String = "", onResult: ((TrailWaypoint?) -> Unit)? = null) {
+    fun dropWaypoint(
+        name: String,
+        note: String = "",
+        photoPickerUri: String? = null,
+        onResult: ((TrailWaypoint?) -> Unit)? = null
+    ) {
         viewModelScope.launch {
-            val wp = repository.dropWaypoint(name, note)
+            val savedPath = photoPickerUri?.takeIf { it.isNotBlank() }?.let {
+                repository.copyPhotoToAppStorage(it)
+            } ?: ""
+            val wp = repository.dropWaypoint(name, note, savedPath)
             onResult?.invoke(wp)
         }
+    }
+
+    fun savePlace(
+        name: String,
+        category: String = "Spot",
+        note: String = "",
+        latitude: Double,
+        longitude: Double,
+        altitude: Double = 0.0,
+        photoPickerUri: String? = null,
+        tripId: String? = null,
+        onSaved: ((SavedPlace) -> Unit)? = null
+    ) {
+        if (!latitude.isFinite() || !longitude.isFinite() || (latitude == 0.0 && longitude == 0.0)) return
+        viewModelScope.launch {
+            val savedPath = photoPickerUri?.takeIf { it.isNotBlank() }?.let {
+                repository.copyPhotoToAppStorage(it)
+            } ?: ""
+            val place = repository.savePlace(
+                name = name,
+                category = category,
+                note = note,
+                latitude = latitude,
+                longitude = longitude,
+                altitude = altitude,
+                photoUri = savedPath,
+                tripId = tripId
+            )
+            onSaved?.invoke(place)
+        }
+    }
+
+    fun deleteSavedPlace(id: String) {
+        viewModelScope.launch {
+            repository.deleteSavedPlace(id)
+        }
+    }
+
+    fun assignPlaceToTrip(placeId: String, tripId: String?) {
+        viewModelScope.launch {
+            repository.assignPlaceToTrip(placeId, tripId)
+        }
+    }
+
+    fun createTrip(name: String, notes: String = "", onCreated: ((TripGroup) -> Unit)? = null) {
+        viewModelScope.launch {
+            val trip = repository.createTrip(name, notes)
+            onCreated?.invoke(trip)
+        }
+    }
+
+    fun deleteTrip(tripId: String) {
+        viewModelScope.launch {
+            repository.deleteTrip(tripId)
+            val currentInspected = _inspectedTrail.value
+            if (currentInspected != null && currentInspected.session.tripId == tripId) {
+                _inspectedTrail.value = currentInspected.copy(
+                    session = currentInspected.session.copy(tripId = null)
+                )
+            }
+        }
+    }
+
+    fun assignSessionToTrip(sessionId: String, tripId: String?) {
+        viewModelScope.launch {
+            repository.assignSessionToTrip(sessionId, tripId)
+            val currentInspected = _inspectedTrail.value
+            if (currentInspected != null && currentInspected.session.id == sessionId) {
+                _inspectedTrail.value = currentInspected.copy(
+                    session = currentInspected.session.copy(tripId = tripId)
+                )
+            }
+        }
+    }
+
+    fun clearLastGaspBeacon() {
+        repository.clearLastGaspBeacon()
+    }
+
+    fun buildCurrentSosMessage(batteryPercent: Int? = null): String {
+        val point = currentLocation.value
+        val servingCell = cellTowers.value.firstOrNull { it.isRegistered } ?: cellTowers.value.firstOrNull()
+        val resolvedBattery = batteryPercent ?: try {
+            val bm = getApplication<Application>().getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
+            bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 0..100 }
+        } catch (_: Exception) {
+            null
+        }
+        return TrackExporter.buildEmergencyShareMessage(
+            point = point,
+            cellTower = servingCell,
+            batteryPercent = resolvedBattery,
+            altitudeMeters = point?.altitude?.takeIf { it != 0.0 }
+        )
     }
 
     override fun onCleared() {
@@ -1262,6 +1370,23 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         return offlineMapManager.estimateRegionTilesAndMb(box, tileType, minZoom, maxZoom)
     }
 
+    fun estimateCorridorRegion(
+        points: List<LocationPoint>,
+        halfWidthKm: Double = 1.5,
+        tileType: MapTileType,
+        minZoom: Int,
+        maxZoom: Int
+    ): Pair<Int, Float> {
+        val (tiles, mb, _) = com.geotrace.service.OfflineMapManager.estimateCorridorTilesAndMb(
+            points = points,
+            halfWidthKm = halfWidthKm,
+            tileType = tileType,
+            minZoom = minZoom,
+            maxZoom = maxZoom
+        )
+        return tiles to mb
+    }
+
     fun startOfflineRegionDownload(
         name: String,
         box: org.osmdroid.util.BoundingBox,
@@ -1281,6 +1406,40 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     // Best-effort offline POI & street index pre-cache inside downloaded bounding box
                     launch(Dispatchers.IO) {
                         val pois = placeSearchManager.fetchRegionPoisForOfflineCache(region)
+                        if (pois.isNotEmpty()) {
+                            repository.saveOfflinePlaces(region.id, pois)
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    fun startCorridorOfflineDownload(
+        name: String,
+        points: List<LocationPoint>,
+        halfWidthKm: Double = 1.5,
+        tileType: MapTileType,
+        minZoom: Int,
+        maxZoom: Int
+    ) {
+        offlineMapManager.startCorridorDownload(
+            name = name,
+            points = points,
+            halfWidthKm = halfWidthKm,
+            tileType = tileType,
+            minZoom = minZoom,
+            maxZoom = maxZoom,
+            onCompleted = { region ->
+                viewModelScope.launch {
+                    repository.saveOfflineMapRegion(region)
+                    launch(Dispatchers.IO) {
+                        val pois = placeSearchManager.fetchCorridorPoisForOfflineCache(
+                            points = points,
+                            regionId = region.id,
+                            regionName = region.name,
+                            halfWidthKm = halfWidthKm
+                        )
                         if (pois.isNotEmpty()) {
                             repository.saveOfflinePlaces(region.id, pois)
                         }
@@ -1562,15 +1721,36 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 } else emptyList()
             } ?: emptyList()
 
+            // 7c. Standalone Saved Places (offline SQLite bookmarks)
+            val savedPlaceMatches = repository.searchSavedPlaces(trimmed, limit = if (trimmed.isBlank()) 4 else 10)
+                .map { sp ->
+                    withDist(
+                        SearchPlaceResult(
+                            id = "saved_${sp.id}",
+                            name = sp.name,
+                            subtitle = listOfNotNull(
+                                sp.category.takeIf { it.isNotBlank() },
+                                sp.note.takeIf { it.isNotBlank() },
+                                "Saved Place"
+                            ).joinToString(" • "),
+                            latitude = sp.latitude,
+                            longitude = sp.longitude,
+                            source = SearchResultSource.SAVED_PLACE
+                        )
+                    )
+                }
+
             if (trimmed.isBlank()) {
-                // On blank query show Recents first, then Parked Spot, Safe Zones & Offline Regions
+                // On blank query show Recents, Saved Places, Parked Spot, Safe Zones & Offline Regions
                 localMatches.addAll(parkedMatches)
+                localMatches.addAll(savedPlaceMatches)
                 localMatches.addAll(recents)
                 localMatches.addAll(safeZoneMatches)
                 localMatches.addAll(regionMatches)
             } else {
                 // On active search prefer authoritative typed local sources before Recents
                 localMatches.addAll(parkedMatches)
+                localMatches.addAll(savedPlaceMatches)
                 localMatches.addAll(safeZoneMatches)
                 localMatches.addAll(wpts)
                 localMatches.addAll(deviceMatches)

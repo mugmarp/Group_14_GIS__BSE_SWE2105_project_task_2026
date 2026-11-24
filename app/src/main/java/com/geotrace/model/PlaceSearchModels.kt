@@ -2,6 +2,7 @@ package com.geotrace.model
 
 enum class SearchResultSource(val badge: String) {
     COORDINATE("COORDS"),
+    SAVED_PLACE("SAVED"),
     SAFE_ZONE("SAFE ZONE"),
     WAYPOINT("WAYPOINT"),
     OFFLINE_REGION("OFFLINE AREA"),

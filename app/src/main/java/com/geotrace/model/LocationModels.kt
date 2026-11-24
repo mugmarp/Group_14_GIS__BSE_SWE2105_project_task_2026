@@ -81,7 +81,8 @@ data class TrailWaypoint(
     val longitude: Double,
     val altitude: Double = 0.0,
     val accuracy: Float = 0f,
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = System.currentTimeMillis(),
+    val photoUri: String = ""
 )
 
 data class TrackingSession(
@@ -98,7 +99,8 @@ data class TrackingSession(
     val isRecording: Boolean = false,
     val isPaused: Boolean = false,
     val pausedAccumulatedMs: Long = 0L,
-    val pauseStartedMs: Long? = null
+    val pauseStartedMs: Long? = null,
+    val tripId: String? = null
 ) {
     fun currentDurationSeconds(nowMs: Long = System.currentTimeMillis()): Long {
         val effectiveEnd = endTime ?: pauseStartedMs ?: nowMs
@@ -247,4 +249,36 @@ data class ActiveGuideTarget(
     val badge: String = "TARGET",
     val latitude: Double,
     val longitude: Double
+)
+
+data class SavedPlace(
+    val id: String,
+    val name: String,
+    val category: String = "Spot",
+    val note: String = "",
+    val latitude: Double,
+    val longitude: Double,
+    val altitude: Double = 0.0,
+    val photoUri: String = "",
+    val tripId: String? = null,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+data class TripGroup(
+    val id: String,
+    val name: String,
+    val notes: String = "",
+    val startDate: Long = System.currentTimeMillis(),
+    val endDate: Long? = null,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+data class LastGaspBeacon(
+    val latitude: Double,
+    val longitude: Double,
+    val accuracy: Float = 0f,
+    val altitude: Double = 0.0,
+    val batteryPercent: Int,
+    val timestamp: Long = System.currentTimeMillis(),
+    val cellSummary: String = ""
 )

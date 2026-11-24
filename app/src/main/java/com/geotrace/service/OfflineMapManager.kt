@@ -10,6 +10,7 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.geotrace.model.LocationPoint
 import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineDownloadProgress
 import com.geotrace.model.OfflineMapRegion
@@ -41,12 +42,153 @@ import kotlin.math.tan
  */
 class OfflineMapManager(private val context: Context) {
 
+    data class CorridorTileBox(
+        val north: Double,
+        val south: Double,
+        val east: Double,
+        val west: Double
+    )
+
     companion object {
         private const val TAG = "OfflineMapManager"
         const val MAX_TILES_PER_DOWNLOAD = 2500
         const val MAX_CACHE_BYTES_MB = 512
         private const val NOTIFICATION_CHANNEL_ID = "offline_maps_channel"
         private const val NOTIFICATION_ID = 4102
+
+        private fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+            val r = 6371000.0
+            val dLat = Math.toRadians(lat2 - lat1)
+            val dLon = Math.toRadians(lon2 - lon1)
+            val a = kotlin.math.sin(dLat / 2) * kotlin.math.sin(dLat / 2) +
+                cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) *
+                kotlin.math.sin(dLon / 2) * kotlin.math.sin(dLon / 2)
+            return r * 2.0 * kotlin.math.atan2(kotlin.math.sqrt(a), kotlin.math.sqrt(1.0 - a))
+        }
+
+        private fun latToTileYStatic(latDeg: Double, n: Long): Long {
+            val latRad = Math.toRadians(latDeg)
+            val merc = ln(tan(latRad) + 1.0 / cos(latRad))
+            val y = floor((1.0 - merc / PI) / 2.0 * n).toLong()
+            return y.coerceIn(0L, n - 1L)
+        }
+
+        /**
+         * Samples a polyline at `spacingMeters` intervals (plus start & end) and builds
+         * overlapping ±halfWidthKm square corridor boxes along the route.
+         */
+        fun computeCorridorBoxes(
+            points: List<LocationPoint>,
+            halfWidthKm: Double = 1.5,
+            spacingMeters: Double = 1000.0
+        ): List<CorridorTileBox> {
+            if (points.isEmpty()) return emptyList()
+            val safeHalfKm = halfWidthKm.coerceIn(0.3, 15.0)
+            val safeSpacing = spacingMeters.coerceAtLeast(250.0)
+            val sampled = mutableListOf<LocationPoint>()
+            var lastKept: LocationPoint? = null
+            for (pt in points) {
+                if (lastKept == null || haversineMeters(lastKept.latitude, lastKept.longitude, pt.latitude, pt.longitude) >= safeSpacing) {
+                    sampled.add(pt)
+                    lastKept = pt
+                }
+            }
+            val endPt = points.last()
+            if (sampled.lastOrNull() !== endPt) {
+                sampled.add(endPt)
+            }
+
+            return sampled.map { pt ->
+                val latDelta = safeHalfKm / 111.32
+                val cosLat = cos(Math.toRadians(pt.latitude)).coerceAtLeast(0.15)
+                val lngDelta = safeHalfKm / (111.32 * cosLat)
+                CorridorTileBox(
+                    north = (pt.latitude + latDelta).coerceAtMost(85.0),
+                    south = (pt.latitude - latDelta).coerceAtLeast(-85.0),
+                    east = (pt.longitude + lngDelta).coerceAtMost(180.0),
+                    west = (pt.longitude - lngDelta).coerceAtLeast(-180.0)
+                )
+            }
+        }
+
+        fun unionBoundingBox(boxes: List<CorridorTileBox>): CorridorTileBox? {
+            if (boxes.isEmpty()) return null
+            var n = -90.0
+            var s = 90.0
+            var e = -180.0
+            var w = 180.0
+            for (b in boxes) {
+                if (b.north > n) n = b.north
+                if (b.south < s) s = b.south
+                if (b.east > e) e = b.east
+                if (b.west < w) w = b.west
+            }
+            return CorridorTileBox(north = n, south = s, east = e, west = w)
+        }
+
+        fun kbPerTileFor(tileType: MapTileType): Float = when (tileType) {
+            MapTileType.SATELLITE -> 42f
+            MapTileType.HYBRID -> 28f
+            MapTileType.TOPO -> 28f
+            MapTileType.HUMANITARIAN, MapTileType.STANDARD -> 18f
+        }
+
+        /**
+         * Estimates exact deduplicated tile count across route corridor boxes using packed 64-bit `(z, x, y)` keys.
+         * Returns Triple(totalTilesIncludingOverlay, estimatedMb, corridorBoxes).
+         */
+        fun estimateCorridorTilesAndMb(
+            points: List<LocationPoint>,
+            halfWidthKm: Double,
+            tileType: MapTileType,
+            minZoom: Int,
+            maxZoom: Int
+        ): Triple<Int, Float, List<CorridorTileBox>> {
+            val boxes = computeCorridorBoxes(points, halfWidthKm = halfWidthKm)
+            if (boxes.isEmpty()) return Triple(0, 0f, emptyList())
+
+            val safeMin = minZoom.coerceIn(4, 17)
+            val safeMax = maxZoom.coerceIn(safeMin, 18)
+            val seenKeys = HashSet<Long>()
+            val cap = 100_000
+
+            outer@ for (box in boxes) {
+                val north = box.north.coerceIn(-85.0511, 85.0511)
+                val south = box.south.coerceIn(-85.0511, 85.0511)
+                val west = box.west.coerceIn(-180.0, 180.0)
+                val east = box.east.coerceIn(-180.0, 180.0)
+                if (north <= south) continue
+
+                for (z in safeMin..safeMax) {
+                    val n = 1L shl z
+                    val xMin = floor(((west + 180.0) / 360.0) * n).toLong().coerceIn(0L, n - 1L)
+                    val xMax = floor(((east + 180.0) / 360.0) * n).toLong().coerceIn(0L, n - 1L)
+                    val yMin = latToTileYStatic(north, n)
+                    val yMax = latToTileYStatic(south, n)
+                    val yLow = minOf(yMin, yMax)
+                    val yHigh = maxOf(yMin, yMax)
+
+                    if (west <= east) {
+                        for (x in xMin..xMax) {
+                            for (y in yLow..yHigh) {
+                                val key = (z.toLong() shl 52) or (x shl 26) or y
+                                seenKeys.add(key)
+                                if (seenKeys.size >= cap) break@outer
+                            }
+                        }
+                    }
+                }
+            }
+
+            val baseCount = seenKeys.size.toLong()
+            val totalTiles = if (tileType == MapTileType.HYBRID) {
+                (baseCount * 2L).coerceAtMost(1_000_000L).toInt()
+            } else {
+                baseCount.coerceAtMost(1_000_000L).toInt()
+            }
+            val estimatedMb = (totalTiles * kbPerTileFor(tileType)) / 1024f
+            return Triple(totalTiles, estimatedMb, boxes)
+        }
     }
 
     private val ioScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -268,6 +410,162 @@ class OfflineMapManager(private val context: Context) {
             Log.e(TAG, "Failed to initialize CacheManager: ${e.message}", e)
             finishWithError(e.localizedMessage ?: "Offline map download failed.")
         }
+    }
+
+    /**
+     * Downloads tiles strictly along a trail/route corridor strip (±halfWidthKm buffer) to save
+     * significant storage vs a wide rectangular bounding box. Supports Hybrid two-pass labels automatically.
+     */
+    fun startCorridorDownload(
+        name: String,
+        points: List<LocationPoint>,
+        halfWidthKm: Double = 1.5,
+        tileType: MapTileType,
+        minZoom: Int,
+        maxZoom: Int,
+        onCompleted: (OfflineMapRegion) -> Unit
+    ) {
+        if (_downloadProgress.value.isDownloading) return
+
+        val effectiveType = if (tileType.supportsOfflineBulkDownload) tileType else MapTileType.HUMANITARIAN
+        val safeMin = minZoom.coerceIn(4, 17)
+        val safeMax = maxZoom.coerceIn(safeMin, 18)
+        val (estTiles, estMb, rawBoxes) = estimateCorridorTilesAndMb(
+            points = points,
+            halfWidthKm = halfWidthKm,
+            tileType = effectiveType,
+            minZoom = safeMin,
+            maxZoom = safeMax
+        )
+
+        if (estTiles <= 0 || rawBoxes.isEmpty()) {
+            _downloadProgress.value = OfflineDownloadProgress(
+                isDownloading = false,
+                errorMessage = "Route corridor contains no valid tiles."
+            )
+            return
+        }
+
+        if (estTiles > MAX_TILES_PER_DOWNLOAD) {
+            _downloadProgress.value = OfflineDownloadProgress(
+                isDownloading = false,
+                errorMessage = "Corridor too detailed ($estTiles tiles). Lower max zoom (max $MAX_TILES_PER_DOWNLOAD tiles)."
+            )
+            return
+        }
+
+        val overallUnion = unionBoundingBox(rawBoxes) ?: return
+        val overallBox = BoundingBox(overallUnion.north, overallUnion.east, overallUnion.south, overallUnion.west)
+
+        isCancelled = false
+        completionDispatched.set(false)
+        lastNotificationTimeMs = 0L
+        lastNotifiedPercent = -1
+        acquireDownloadWakeLock()
+        val cleanName = name.trim().ifBlank { "Route Corridor (${effectiveType.label})" }
+
+        val tileWriter = SqlTileWriter()
+        activeTileWriter = tileWriter
+        val baseSource = MapTileSources.baseTileSourceFor(effectiveType)
+        val overlaySource = MapTileSources.overlayTileSourceFor(effectiveType)
+
+        data class DownloadPassJob(
+            val source: org.osmdroid.tileprovider.tilesource.ITileSource,
+            val box: BoundingBox,
+            val boxWeightTiles: Int
+        )
+
+        val jobs = mutableListOf<DownloadPassJob>()
+        val perBoxBaseWeights = rawBoxes.map { b ->
+            val bb = BoundingBox(b.north, b.east, b.south, b.west)
+            estimateRegionTilesAndMb(bb, MapTileType.HUMANITARIAN, safeMin, safeMax).first.coerceAtLeast(1)
+        }
+        val rawSum = perBoxBaseWeights.sum().coerceAtLeast(1)
+        val baseTarget = if (overlaySource != null) estTiles / 2 else estTiles
+
+        rawBoxes.forEachIndexed { idx, b ->
+            val bb = BoundingBox(b.north, b.east, b.south, b.west)
+            val scaledWeight = ((perBoxBaseWeights[idx].toDouble() / rawSum) * baseTarget).toInt().coerceAtLeast(1)
+            jobs.add(DownloadPassJob(baseSource, bb, scaledWeight))
+        }
+        if (overlaySource != null) {
+            rawBoxes.forEachIndexed { idx, b ->
+                val bb = BoundingBox(b.north, b.east, b.south, b.west)
+                val scaledWeight = ((perBoxBaseWeights[idx].toDouble() / rawSum) * (estTiles - baseTarget)).toInt().coerceAtLeast(1)
+                jobs.add(DownloadPassJob(overlaySource, bb, scaledWeight))
+            }
+        }
+
+        _downloadProgress.value = OfflineDownloadProgress(
+            isDownloading = true,
+            regionName = cleanName,
+            completedTiles = 0,
+            totalTiles = estTiles,
+            currentZoom = safeMin,
+            errorMessage = null
+        )
+        postProgressNotification(cleanName, 0, estTiles, force = true)
+
+        fun runJob(jobIndex: Int, accumulatedProgress: Int, cumulativeErrors: Int) {
+            if (isCancelled) {
+                finishWithError("Download cancelled.")
+                return
+            }
+            if (jobIndex >= jobs.size) {
+                completeSuccess(cleanName, overallBox, effectiveType, safeMin, safeMax, estTiles, estMb, onCompleted)
+                return
+            }
+            val job = jobs[jobIndex]
+            try {
+                val mgr = CacheManager(job.source, tileWriter, safeMin, safeMax)
+                activeCacheManager = mgr
+                mgr.downloadAreaAsyncNoUI(
+                    context,
+                    job.box,
+                    safeMin,
+                    safeMax,
+                    object : CacheManager.CacheManagerCallback {
+                        override fun onTaskComplete() {
+                            val nextAccum = (accumulatedProgress + job.boxWeightTiles).coerceIn(0, estTiles)
+                            _downloadProgress.value = _downloadProgress.value.copy(completedTiles = nextAccum)
+                            postProgressNotification(cleanName, nextAccum, estTiles)
+                            runJob(jobIndex + 1, nextAccum, cumulativeErrors)
+                        }
+
+                        override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {
+                            val approx = (accumulatedProgress + progress.coerceIn(0, job.boxWeightTiles)).coerceIn(0, estTiles)
+                            _downloadProgress.value = _downloadProgress.value.copy(
+                                completedTiles = approx,
+                                currentZoom = currentZoomLevel
+                            )
+                            postProgressNotification(cleanName, approx, estTiles)
+                        }
+
+                        override fun downloadStarted() {}
+                        override fun setPossibleTilesInArea(total: Int) {}
+
+                        override fun onTaskFailed(errors: Int) {
+                            if (isCancelled) {
+                                finishWithError("Download cancelled.")
+                                return
+                            }
+                            val nextErr = cumulativeErrors + errors
+                            if (nextErr < max(4, estTiles / 2)) {
+                                val nextAccum = (accumulatedProgress + job.boxWeightTiles).coerceIn(0, estTiles)
+                                runJob(jobIndex + 1, nextAccum, nextErr)
+                            } else {
+                                finishWithError("Corridor download failed ($nextErr tiles could not be fetched). Check network.")
+                            }
+                        }
+                    }
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Corridor job $jobIndex error: ${e.message}", e)
+                finishWithError(e.localizedMessage ?: "Corridor download failed.")
+            }
+        }
+
+        runJob(0, 0, 0)
     }
 
     private fun startOverlayPass(

@@ -19,7 +19,7 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
 
     companion object {
         const val DATABASE_NAME = "gis_tracker.db"
-        const val DATABASE_VERSION = 6
+        const val DATABASE_VERSION = 7
 
         const val TABLE_POINTS = "location_points"
         const val TABLE_SESSIONS = "tracking_sessions"
@@ -28,6 +28,8 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         const val TABLE_ALERTS = "geofence_alerts"
         const val TABLE_OFFLINE_MAPS = "offline_map_regions"
         const val TABLE_OFFLINE_PLACES = "offline_places"
+        const val TABLE_TRIPS = "trips"
+        const val TABLE_SAVED_PLACES = "saved_places"
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -36,6 +38,19 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
     }
 
     override fun onCreate(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE $TABLE_TRIPS (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                notes TEXT NOT NULL DEFAULT '',
+                start_date INTEGER NOT NULL,
+                end_date INTEGER,
+                created_at INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+
         db.execSQL(
             """
             CREATE TABLE $TABLE_SESSIONS (
@@ -52,10 +67,13 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
                 is_recording INTEGER NOT NULL DEFAULT 0,
                 is_paused INTEGER NOT NULL DEFAULT 0,
                 paused_accumulated_ms INTEGER NOT NULL DEFAULT 0,
-                pause_started_ms INTEGER
+                pause_started_ms INTEGER,
+                trip_id TEXT,
+                FOREIGN KEY (trip_id) REFERENCES $TABLE_TRIPS(id) ON DELETE SET NULL
             )
             """.trimIndent()
         )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_sessions_trip ON $TABLE_SESSIONS(trip_id)")
 
         db.execSQL(
             """
@@ -89,6 +107,7 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
                 altitude REAL NOT NULL DEFAULT 0.0,
                 accuracy REAL NOT NULL DEFAULT 0.0,
                 timestamp INTEGER NOT NULL,
+                photo_uri TEXT NOT NULL DEFAULT '',
                 FOREIGN KEY (session_id) REFERENCES $TABLE_SESSIONS(id) ON DELETE CASCADE
             )
             """.trimIndent()
@@ -161,6 +180,26 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         )
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_offline_places_name ON $TABLE_OFFLINE_PLACES(name)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_offline_places_region ON $TABLE_OFFLINE_PLACES(region_id)")
+
+        db.execSQL(
+            """
+            CREATE TABLE $TABLE_SAVED_PLACES (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                category TEXT NOT NULL DEFAULT 'Spot',
+                note TEXT NOT NULL DEFAULT '',
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                altitude REAL NOT NULL DEFAULT 0.0,
+                photo_uri TEXT NOT NULL DEFAULT '',
+                trip_id TEXT,
+                created_at INTEGER NOT NULL,
+                FOREIGN KEY (trip_id) REFERENCES $TABLE_TRIPS(id) ON DELETE SET NULL
+            )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_saved_places_name ON $TABLE_SAVED_PLACES(name)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_saved_places_trip ON $TABLE_SAVED_PLACES(trip_id)")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -231,6 +270,42 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         if (oldVersion < 6) {
             db.execSQL("ALTER TABLE $TABLE_GEOFENCES ADD COLUMN is_enabled INTEGER NOT NULL DEFAULT 0")
             db.execSQL("UPDATE $TABLE_GEOFENCES SET is_inside = 0")
+        }
+        if (oldVersion < 7) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS $TABLE_TRIPS (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    notes TEXT NOT NULL DEFAULT '',
+                    start_date INTEGER NOT NULL,
+                    end_date INTEGER,
+                    created_at INTEGER NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("ALTER TABLE $TABLE_SESSIONS ADD COLUMN trip_id TEXT")
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_sessions_trip ON $TABLE_SESSIONS(trip_id)")
+            db.execSQL("ALTER TABLE $TABLE_WAYPOINTS ADD COLUMN photo_uri TEXT NOT NULL DEFAULT ''")
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS $TABLE_SAVED_PLACES (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL DEFAULT 'Spot',
+                    note TEXT NOT NULL DEFAULT '',
+                    latitude REAL NOT NULL,
+                    longitude REAL NOT NULL,
+                    altitude REAL NOT NULL DEFAULT 0.0,
+                    photo_uri TEXT NOT NULL DEFAULT '',
+                    trip_id TEXT,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY (trip_id) REFERENCES $TABLE_TRIPS(id) ON DELETE SET NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_saved_places_name ON $TABLE_SAVED_PLACES(name)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_saved_places_trip ON $TABLE_SAVED_PLACES(trip_id)")
         }
     }
 }
