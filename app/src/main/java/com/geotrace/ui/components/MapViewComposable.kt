@@ -359,6 +359,7 @@ fun MapViewComposable(
     onOpenOfflineMaps: (() -> Unit)? = null,
     onMapBoundsChanged: ((BoundingBox) -> Unit)? = null,
     initialMapCenter: GeoPoint? = null,
+    fallbackCachedCenter: GeoPoint? = null,
     initialMapZoom: Double? = null,
     initialMapOrientation: Float = 0f,
     onSaveMapCamera: ((GeoPoint, Double, Float) -> Unit)? = null,
@@ -403,6 +404,7 @@ fun MapViewComposable(
 
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
     var hasCenteredOnFirstFix by remember { mutableStateOf(initialMapCenter != null) }
+    var hasCenteredOnCachedFallback by remember { mutableStateOf(initialMapCenter != null || currentLocation != null || fallbackCachedCenter != null) }
     var isUserInteractingWithMap by remember { mutableStateOf(false) }
     var liveMapOrientation by remember { mutableStateOf(initialMapOrientation) }
     var liveZoomLevel by remember { mutableStateOf(initialMapZoom ?: 16.5) }
@@ -626,6 +628,24 @@ fun MapViewComposable(
                 hybridLabelsProvider.setTileRequestCompleteHandler(map.tileRequestCompleteHandler)
             }
             map.invalidate()
+        }
+    }
+
+    LaunchedEffect(fallbackCachedCenter, currentLocation, mapViewRef) {
+        val map = mapViewRef ?: return@LaunchedEffect
+        val fallback = fallbackCachedCenter ?: return@LaunchedEffect
+        if (!hasCenteredOnCachedFallback &&
+            !hasCenteredOnFirstFix &&
+            initialMapCenter == null &&
+            currentLocation == null &&
+            inspectedTrailName == null &&
+            focusedTarget == null &&
+            selectedSearchPin == null &&
+            !isUserInteractingWithMap
+        ) {
+            map.controller.setCenter(fallback)
+            map.controller.setZoom(15.5)
+            hasCenteredOnCachedFallback = true
         }
     }
 
@@ -927,6 +947,9 @@ fun MapViewComposable(
                     } else if (currentLocation != null) {
                         controller.setCenter(GeoPoint(currentLocation.latitude, currentLocation.longitude))
                         controller.setZoom(16.5)
+                    } else if (fallbackCachedCenter != null) {
+                        controller.setCenter(fallbackCachedCenter)
+                        controller.setZoom(15.5)
                     } else {
                         // Global neutral view, awaiting genuine GNSS fix
                         controller.setCenter(GeoPoint(0.0, 0.0))

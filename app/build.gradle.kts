@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.google.services)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -120,6 +121,11 @@ dependencies {
 
     // Phase 2: Nearby Connections P2P Mesh
     implementation(libs.play.services.nearby)
+
+    // Room Offline Persistence Cache
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
     // Local JVM Unit Tests
     testImplementation("junit:junit:4.13.2")

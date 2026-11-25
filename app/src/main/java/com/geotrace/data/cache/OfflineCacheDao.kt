@@ -1,0 +1,93 @@
+package com.geotrace.data.cache
+
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import androidx.room.Transaction
+import kotlinx.coroutines.flow.Flow
+
+@Dao
+interface CellTowerCacheDao {
+    @Query(
+        "SELECT * FROM cached_cell_towers " +
+            "WHERE mcc = :mcc AND mnc = :mnc AND lac = :lac AND cid = :cid LIMIT 1"
+    )
+    suspend fun findTower(mcc: Int, mnc: Int, lac: Int, cid: Long): CachedCellTowerEntity?
+
+    @Query("SELECT * FROM cached_cell_towers ORDER BY last_seen_at_ms DESC")
+    fun observeAllTowers(): Flow<List<CachedCellTowerEntity>>
+
+    @Query("SELECT COUNT(*) FROM cached_cell_towers")
+    fun observeTowerCount(): Flow<Int>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertTower(entity: CachedCellTowerEntity)
+
+    @Query(
+        "UPDATE cached_cell_towers SET last_seen_at_ms = :seenAtMs " +
+            "WHERE mcc = :mcc AND mnc = :mnc AND lac = :lac AND cid = :cid"
+    )
+    suspend fun touchTower(mcc: Int, mnc: Int, lac: Int, cid: Long, seenAtMs: Long)
+
+    @Query(
+        "DELETE FROM cached_cell_towers WHERE rowid IN (" +
+            "SELECT rowid FROM cached_cell_towers ORDER BY last_seen_at_ms DESC LIMIT -1 OFFSET :maxKeep" +
+            ")"
+    )
+    suspend fun pruneOldestTowers(maxKeep: Int)
+
+    @Query("DELETE FROM cached_cell_towers")
+    suspend fun clearAll()
+}
+
+@Dao
+interface ObservedCellDao {
+    @Query("SELECT * FROM cached_observed_cells ORDER BY is_registered DESC, observed_at_ms DESC")
+    fun observeLatestCells(): Flow<List<CachedObservedCellEntity>>
+
+    @Query("SELECT * FROM cached_observed_cells ORDER BY is_registered DESC, observed_at_ms DESC")
+    suspend fun getLatestCells(): List<CachedObservedCellEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(cells: List<CachedObservedCellEntity>)
+
+    @Query("DELETE FROM cached_observed_cells")
+    suspend fun clearAll()
+
+    @Transaction
+    suspend fun replaceLatestSnapshot(cells: List<CachedObservedCellEntity>) {
+        clearAll()
+        if (cells.isNotEmpty()) {
+            insertAll(cells)
+        }
+    }
+}
+
+@Dao
+interface LocationFixCacheDao {
+    @Query("SELECT * FROM cached_location_fixes ORDER BY timestamp DESC LIMIT 1")
+    fun observeLatestFix(): Flow<CachedLocationFixEntity?>
+
+    @Query("SELECT * FROM cached_location_fixes ORDER BY timestamp DESC LIMIT 1")
+    suspend fun getLatestFix(): CachedLocationFixEntity?
+
+    @Query("SELECT * FROM cached_location_fixes ORDER BY timestamp DESC LIMIT :limit")
+    fun observeRecentFixes(limit: Int): Flow<List<CachedLocationFixEntity>>
+
+    @Query("SELECT COUNT(*) FROM cached_location_fixes")
+    fun observeFixCount(): Flow<Int>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertFix(entity: CachedLocationFixEntity)
+
+    @Query(
+        "DELETE FROM cached_location_fixes WHERE id NOT IN (" +
+            "SELECT id FROM cached_location_fixes ORDER BY timestamp DESC LIMIT :maxKeep" +
+            ")"
+    )
+    suspend fun pruneOldestFixes(maxKeep: Int)
+
+    @Query("DELETE FROM cached_location_fixes")
+    suspend fun clearAll()
+}

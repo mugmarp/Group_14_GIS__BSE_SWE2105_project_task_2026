@@ -182,6 +182,7 @@ fun MapScreen(
     val customColors = LocalCustomColors.current
 
     val currentLocation by viewModel.currentLocation.collectAsState()
+    val lastKnownCachedLocation by viewModel.lastKnownCachedLocation.collectAsState()
     val activeSession by viewModel.activeSession.collectAsState()
     val trailPoints by viewModel.activeTrailPoints.collectAsState()
     val activeWaypoints by viewModel.activeWaypoints.collectAsState()
@@ -546,6 +547,7 @@ fun MapScreen(
                 viewModel.updateMapViewportBounds(bounds)
             },
             initialMapCenter = viewModel.savedMapCenter,
+            fallbackCachedCenter = lastKnownCachedLocation?.let { org.osmdroid.util.GeoPoint(it.latitude, it.longitude) },
             initialMapZoom = viewModel.savedMapZoom,
             initialMapOrientation = viewModel.savedMapOrientation,
             onSaveMapCamera = { center, zoom, orientation ->
@@ -680,10 +682,12 @@ fun MapScreen(
                                 )
                                 Text(
                                     text = if (!isHeaderExpanded) {
-                                        val fixText = if (currentLocation != null) {
-                                            "${String.format(Locale.US, "%.1f", compactSpeed)} ${settings.speedUnit.label} • ±${currentLocation?.accuracy?.toInt()}m"
-                                        } else {
-                                            "Awaiting fix"
+                                        val fixText = when {
+                                            currentLocation != null ->
+                                                "${String.format(Locale.US, "%.1f", compactSpeed)} ${settings.speedUnit.label} • ±${currentLocation?.accuracy?.toInt()}m"
+                                            lastKnownCachedLocation != null ->
+                                                "Cached fix (±${lastKnownCachedLocation?.accuracy?.toInt() ?: 0}m) • Awaiting GNSS"
+                                            else -> "Awaiting fix"
                                         }
                                         when {
                                             activeSession?.isPaused == true -> "PAUSED • $fixText"
@@ -697,6 +701,7 @@ fun MapScreen(
                                             trackingMode == TrackingMode.POWER_SAVER -> "CELLULAR ONLY • BASE STATION TELEMETRY"
                                             currentLocation?.provider == "cellular" -> "CELLULAR FIX • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
                                             currentLocation != null -> "POSITION LOCKED • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
+                                            lastKnownCachedLocation != null -> "OFFLINE CACHED FIX (±${lastKnownCachedLocation?.accuracy?.toInt() ?: 0}M) • AWAITING GNSS"
                                             else -> "STANDBY • AWAITING LOCATION FIX"
                                         }
                                     },

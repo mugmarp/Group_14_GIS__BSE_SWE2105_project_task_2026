@@ -120,6 +120,8 @@ fun CellularDiagnosticScreen(
     }
 
     val cellTowers by viewModel.cellTowers.collectAsState()
+    val cachedObservedCells by viewModel.cachedObservedCells.collectAsState()
+    val cachedCellTowerCount by viewModel.cachedCellTowerCount.collectAsState()
     val cellTowerLocation by viewModel.cellTowerLocation.collectAsState()
     val allCellTowerLocations by viewModel.allCellTowerLocations.collectAsState()
     val openCellIdStatus by viewModel.openCellIdStatus.collectAsState()
@@ -280,12 +282,13 @@ fun CellularDiagnosticScreen(
         }
 
         // OpenCellID Geolocation & Mast Map Status Card
-        if (hasLocationPermission && (servingCell != null || openCellIdStatus.state != OpenCellIdLookupState.IDLE)) {
+        if (hasLocationPermission && (servingCell != null || cachedObservedCells.isNotEmpty() || openCellIdStatus.state != OpenCellIdLookupState.IDLE)) {
             item {
                 OpenCellIdStatusCard(
                     status = openCellIdStatus,
                     servingTowerLocation = cellTowerLocation,
                     resolvedCount = allCellTowerLocations.size,
+                    cachedRoomTowerCount = cachedCellTowerCount,
                     onLocateTowerOnMap = onLocateTowerOnMap,
                     onOpenSettings = onOpenSettings
                 )
@@ -416,19 +419,24 @@ private fun OpenCellIdStatusCard(
     status: OpenCellIdStatus,
     servingTowerLocation: CellTowerLocation?,
     resolvedCount: Int,
+    cachedRoomTowerCount: Int,
     onLocateTowerOnMap: ((CellTowerLocation) -> Unit)?,
     onOpenSettings: (() -> Unit)?
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
 
-    val (badgeLabel, badgeTone) = when (status.state) {
-        OpenCellIdLookupState.RESOLVED -> "MAST RESOLVED" to StatusBadgeTone.NOMINAL
-        OpenCellIdLookupState.NO_API_KEY -> "LOCAL FALLBACK" to StatusBadgeTone.NEUTRAL
-        OpenCellIdLookupState.AUTH_ERROR -> "API AUTH ERROR" to StatusBadgeTone.ERROR
-        OpenCellIdLookupState.RATE_LIMITED, OpenCellIdLookupState.NETWORK_ERROR -> "LOOKUP DEGRADED" to StatusBadgeTone.WARNING
-        OpenCellIdLookupState.NOT_FOUND -> "UNINDEXED SECTOR" to StatusBadgeTone.NEUTRAL
-        OpenCellIdLookupState.IDLE -> "OPENCELLID STANDBY" to StatusBadgeTone.NEUTRAL
+    val (badgeLabel, badgeTone) = when {
+        status.state == OpenCellIdLookupState.RESOLVED && servingTowerLocation?.isFromOfflineCache == true ->
+            "ROOM CACHE" to StatusBadgeTone.NOMINAL
+        status.state == OpenCellIdLookupState.RESOLVED ->
+            "MAST RESOLVED" to StatusBadgeTone.NOMINAL
+        status.state == OpenCellIdLookupState.NO_API_KEY -> "LOCAL FALLBACK" to StatusBadgeTone.NEUTRAL
+        status.state == OpenCellIdLookupState.AUTH_ERROR -> "API AUTH ERROR" to StatusBadgeTone.ERROR
+        status.state == OpenCellIdLookupState.RATE_LIMITED || status.state == OpenCellIdLookupState.NETWORK_ERROR ->
+            "LOOKUP DEGRADED" to StatusBadgeTone.WARNING
+        status.state == OpenCellIdLookupState.NOT_FOUND -> "UNINDEXED SECTOR" to StatusBadgeTone.NEUTRAL
+        else -> "OPENCELLID STANDBY" to StatusBadgeTone.NEUTRAL
     }
 
     Card(
@@ -464,6 +472,14 @@ private fun OpenCellIdStatusCard(
                 text = status.message,
                 fontSize = 12.sp,
                 color = colorScheme.onSurface
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = "Offline Room Mast Cache: $cachedRoomTowerCount tower(s) persisted locally",
+                fontSize = 11.sp,
+                color = colorScheme.onSurfaceVariant
             )
 
             if (servingTowerLocation != null) {

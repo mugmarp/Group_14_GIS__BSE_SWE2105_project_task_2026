@@ -7,6 +7,9 @@ import org.osmdroid.config.Configuration
 
 class LocationTrackerApp : Application() {
 
+    lateinit var offlineCacheRepository: com.geotrace.data.cache.OfflineCacheRepository
+        private set
+
     lateinit var repository: LocationRepository
         private set
 
@@ -34,7 +37,11 @@ class LocationTrackerApp : Application() {
         osmCfg.tileDownloadThreads = 2
         osmCfg.tileDownloadMaxQueueSize = 40
 
-        repository = LocationRepository(this)
+        val offlineCacheDb = com.geotrace.data.cache.OfflineCacheDatabase.getInstance(this)
+        offlineCacheRepository = com.geotrace.data.cache.OfflineCacheRepository(offlineCacheDb)
+        com.geotrace.service.OpenCellIdClient.attachPersistentStore(offlineCacheRepository)
+
+        repository = LocationRepository(this, offlineCacheRepository)
         cellManager = CellularDiagnosticManager(this)
         groupRepository = com.geotrace.data.GroupRepository(this)
 

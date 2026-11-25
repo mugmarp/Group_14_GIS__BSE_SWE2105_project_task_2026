@@ -53,6 +53,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private val cellManager = (application as LocationTrackerApp).cellManager
 
     val currentLocation: StateFlow<LocationPoint?> = repository.currentLocation
+    val lastKnownCachedLocation: StateFlow<LocationPoint?> = repository.lastKnownCachedLocation
+    val cachedObservedCells: StateFlow<List<CellTowerInfo>> = repository.cachedObservedCells
+    val cachedLocationFixCount: StateFlow<Int> = repository.cachedLocationFixCount
+    val cachedCellTowerCount: StateFlow<Int> = repository.cachedCellTowerCount
     val activeSession: StateFlow<TrackingSession?> = repository.activeSession
     val activeTrailPoints: StateFlow<List<LocationPoint>> = repository.activeTrailPoints
     val activeWaypoints: StateFlow<List<TrailWaypoint>> = repository.activeWaypoints
@@ -386,18 +390,28 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private data class CellLookupInputs(
+        val liveTowers: List<CellTowerInfo>,
+        val cachedTowers: List<CellTowerInfo>,
+        val mode: TrackingMode,
+        val apiKey: String
+    )
+
     private fun observeCellTowerLocation() {
         viewModelScope.launch {
             combine(
                 cellTowers,
+                cachedObservedCells,
                 trackingMode,
                 settings.map { it.openCellIdApiKey }.distinctUntilChanged(),
                 cellLookupRefreshTrigger
-            ) { towers, mode, apiKey, _ ->
-                Triple(towers, mode, apiKey)
-            }.collect { (towers, mode, apiKey) ->
-                val loc = currentLocation.value
-                val servingCell = towers.firstOrNull { it.isRegistered } ?: towers.firstOrNull()
+            ) { liveTowers, cachedTowers, mode, apiKey, _ ->
+                CellLookupInputs(liveTowers, cachedTowers, mode, apiKey)
+            }.collect { (liveTowers, cachedTowers, mode, apiKey) ->
+                val loc = currentLocation.value ?: lastKnownCachedLocation.value
+                val hasLiveRadioScan = liveTowers.isNotEmpty()
+                val effectiveTowers = if (hasLiveRadioScan) liveTowers else cachedTowers
+                val servingCell = effectiveTowers.firstOrNull { it.isRegistered } ?: effectiveTowers.firstOrNull()
 
                 if (servingCell != null) {
                     val location = com.geotrace.service.OpenCellIdClient.resolveCellLocation(
@@ -411,22 +425,23 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     _cellTowerLocation.value = null
                 }
 
-                // Resolve all visible towers detected by TelephonyManager
+                // Resolve all visible (or Room-cached fallback) towers detected by TelephonyManager
                 val allResolved = com.geotrace.service.OpenCellIdClient.resolveAllCellLocations(
-                    towers = towers,
+                    towers = effectiveTowers,
                     apiKey = apiKey,
                     userLatitude = loc?.latitude,
                     userLongitude = loc?.longitude
                 )
                 _allCellTowerLocations.value = allResolved
 
-                // In Cell-Only mode: fall back to OpenCellID-resolved serving tower immediately on switch, or on staleness when service diagnostics isn't driving it
-                if (mode == TrackingMode.POWER_SAVER) {
+                // In Cell-Only mode with a live modem scan: fall back to OpenCellID-resolved serving tower
+                if (hasLiveRadioScan && mode == TrackingMode.POWER_SAVER) {
+                    val liveLoc = currentLocation.value
                     _cellTowerLocation.value?.let { towerLoc ->
                         val now = System.currentTimeMillis()
                         val towerKey = "${towerLoc.cellId}_${towerLoc.lac}"
-                        val isCurrentNonCellular = loc != null && loc.provider != "cellular"
-                        val isCurrentStale = loc == null || (now - loc.timestamp > 25_000L)
+                        val isCurrentNonCellular = liveLoc != null && liveLoc.provider != "cellular"
+                        val isCurrentStale = liveLoc == null || (now - liveLoc.timestamp > 25_000L)
                         val changedTower = lastCellularFallbackKey != towerKey
                         val serviceDrivesCell = LocationForegroundService.isServiceActive &&
                             LocationForegroundService.isCellDiagnosticsActive &&
@@ -1078,6 +1093,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     sessionId = activeSession.value?.id ?: "last_gasp"
                 )
             }
+            ?: lastKnownCachedLocation.value?.let { cached ->
+                val tag = if (cached.provider.startsWith("cached_")) cached.provider else "cached_${cached.provider}"
+                cached.copy(provider = tag)
+            }
             ?: _cellTowerLocation.value?.let { tower ->
                 LocationPoint(
                     latitude = tower.latitude,
@@ -1091,7 +1110,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     sessionId = activeSession.value?.id ?: "cellular_fallback"
                 )
             }
-        val servingCell = cellTowers.value.firstOrNull { it.isRegistered } ?: cellTowers.value.firstOrNull()
+        val servingCell = cellTowers.value.firstOrNull { it.isRegistered }
+            ?: cellTowers.value.firstOrNull()
+            ?: cachedObservedCells.value.firstOrNull { it.isRegistered }
+            ?: cachedObservedCells.value.firstOrNull()
         val resolvedBattery = batteryPercent
             ?: lastGaspBeacon.value?.takeIf { currentLocation.value == null }?.batteryPercent
             ?: try {
@@ -1746,8 +1768,17 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         val cleaned = apiKey.trim()
         repository.saveOpenCellIdApiKey(cleaned)
         _settings.value = _settings.value.copy(openCellIdApiKey = cleaned)
-        com.geotrace.service.OpenCellIdClient.clearCache()
-        refreshCellTowers()
+        viewModelScope.launch {
+            com.geotrace.service.OpenCellIdClient.clearCache()
+            refreshCellTowers()
+        }
+    }
+
+    fun clearOfflineTelemetryCache() {
+        viewModelScope.launch {
+            repository.clearOfflineGpsAndCellCache()
+            refreshCellTowers()
+        }
     }
 
     fun toggleGeofenceNotifications(enabled: Boolean) {

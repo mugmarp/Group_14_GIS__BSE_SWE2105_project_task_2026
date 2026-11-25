@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BrightnessHigh
 import androidx.compose.material.icons.filled.CellTower
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Info
@@ -40,6 +41,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
@@ -551,6 +553,8 @@ internal fun CellularEngineSettingsPage(
     val customColors = LocalCustomColors.current
     val hasDefaultSecret = BuildConfig.OPENCELLID_API_KEY.isNotBlank()
     val hasCustomOverride = settings.openCellIdApiKey.isNotBlank()
+    val cachedCellTowerCount by viewModel.cachedCellTowerCount.collectAsState()
+    val cachedLocationFixCount by viewModel.cachedLocationFixCount.collectAsState()
     var apiKeyInput by rememberSaveable(settings.openCellIdApiKey) {
         mutableStateOf(settings.openCellIdApiKey)
     }
@@ -819,6 +823,41 @@ internal fun CellularEngineSettingsPage(
                 }
             }
         }
+
+            item {
+                SettingsSectionCard(
+                    title = "Offline Telemetry Cache (Room)",
+                    icon = Icons.Default.Storage
+                ) {
+                    Text(
+                        text = "Persists resolved cell tower coordinates ($cachedCellTowerCount) and recent GPS/cell fixes ($cachedLocationFixCount) locally via Room so positioning, mast lookup, and SOS fallback stay available during connectivity loss.",
+                        color = colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        enabled = cachedCellTowerCount > 0 || cachedLocationFixCount > 0,
+                        onClick = {
+                            viewModel.clearOfflineTelemetryCache()
+                            Toast.makeText(context, "Offline GPS & cell tower cache cleared", Toast.LENGTH_SHORT).show()
+                        },
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .testTag("clear_room_offline_cache_btn")
+                    ) {
+                        Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Clear Offline Cache ($cachedCellTowerCount towers • $cachedLocationFixCount fixes)",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
         }
     }
 }

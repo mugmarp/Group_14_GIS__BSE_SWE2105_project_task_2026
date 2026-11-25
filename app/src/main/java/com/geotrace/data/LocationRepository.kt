@@ -46,7 +46,15 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-class LocationRepository(private val context: Context) {
+import com.geotrace.data.cache.OfflineCacheDatabase
+import com.geotrace.data.cache.OfflineCacheRepository
+
+class LocationRepository(
+    private val context: Context,
+    private val offlineCacheRepository: OfflineCacheRepository = OfflineCacheRepository(
+        OfflineCacheDatabase.getInstance(context)
+    )
+) {
 
     private val dbHelper = LocationDbHelper(context)
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -55,6 +63,18 @@ class LocationRepository(private val context: Context) {
 
     private val _currentLocation = MutableStateFlow<LocationPoint?>(null)
     val currentLocation: StateFlow<LocationPoint?> = _currentLocation.asStateFlow()
+
+    private val _lastKnownCachedLocation = MutableStateFlow<LocationPoint?>(null)
+    val lastKnownCachedLocation: StateFlow<LocationPoint?> = _lastKnownCachedLocation.asStateFlow()
+
+    private val _cachedObservedCells = MutableStateFlow<List<CellTowerInfo>>(emptyList())
+    val cachedObservedCells: StateFlow<List<CellTowerInfo>> = _cachedObservedCells.asStateFlow()
+
+    private val _cachedLocationFixCount = MutableStateFlow(0)
+    val cachedLocationFixCount: StateFlow<Int> = _cachedLocationFixCount.asStateFlow()
+
+    private val _cachedCellTowerCount = MutableStateFlow(0)
+    val cachedCellTowerCount: StateFlow<Int> = _cachedCellTowerCount.asStateFlow()
 
     private val _activeSession = MutableStateFlow<TrackingSession?>(null)
     val activeSession: StateFlow<TrackingSession?> = _activeSession.asStateFlow()
@@ -345,7 +365,31 @@ class LocationRepository(private val context: Context) {
 
     private fun loadInitialData() {
         scope.launch {
+            offlineCacheRepository.latestCachedLocationFlow.collect { latest ->
+                if (latest != null) {
+                    _lastKnownCachedLocation.value = latest
+                }
+            }
+        }
+        scope.launch {
+            offlineCacheRepository.latestObservedCellsFlow.collect { cells ->
+                _cachedObservedCells.value = cells
+            }
+        }
+        scope.launch {
+            offlineCacheRepository.cachedLocationFixCountFlow.collect { count ->
+                _cachedLocationFixCount.value = count
+            }
+        }
+        scope.launch {
+            offlineCacheRepository.cachedCellTowerCountFlow.collect { count ->
+                _cachedCellTowerCount.value = count
+            }
+        }
+        scope.launch {
             try {
+                _lastKnownCachedLocation.value = offlineCacheRepository.getLatestCachedLocationSnapshot()
+                _cachedObservedCells.value = offlineCacheRepository.getLatestObservedCellsSnapshot()
                 loadGeofences()
                 restoreActiveSessionIfAny()
                 loadTripsInternal()
@@ -835,6 +879,7 @@ class LocationRepository(private val context: Context) {
 
             val point = safePoint.copy(speed = smoothedSpeedMps)
             _currentLocation.value = point
+            _lastKnownCachedLocation.value = point
 
             if (isActivelyRecording && session != null) {
                 val lastSaved = _activeTrailPoints.value.lastOrNull()
@@ -903,6 +948,10 @@ class LocationRepository(private val context: Context) {
         }
 
         if (pointForGeofence != null) {
+            try {
+                offlineCacheRepository.recordCachedLocationFix(pointForGeofence)
+            } catch (_: Exception) {
+            }
             // Check geofences with dual-radius hysteresis & accuracy gating
             checkGeofences(pointForGeofence.latitude, pointForGeofence.longitude, pointForGeofence.accuracy, pointForGeofence.provider)
         }
@@ -1153,6 +1202,22 @@ class LocationRepository(private val context: Context) {
 
     fun updateCellTowers(towers: List<CellTowerInfo>) {
         _cellTowers.value = towers
+        if (towers.isNotEmpty()) {
+            _cachedObservedCells.value = towers
+            scope.launch {
+                try {
+                    offlineCacheRepository.saveObservedCellSnapshot(towers)
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    suspend fun clearOfflineGpsAndCellCache() = withContext(Dispatchers.IO) {
+        _lastKnownCachedLocation.value = _currentLocation.value
+        _cachedObservedCells.value = _cellTowers.value
+        offlineCacheRepository.clearAllOfflineCaches()
+        com.geotrace.service.OpenCellIdClient.clearCache()
     }
 
     suspend fun loadSessions() = withContext(Dispatchers.IO) {
