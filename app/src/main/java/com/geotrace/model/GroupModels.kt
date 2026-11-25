@@ -193,6 +193,10 @@ data class MapFocusTarget(
     val longitude: Double,
     val subtitle: String = "",
     val targetZoom: Double? = null,
-    val requestedAtMs: Long = System.currentTimeMillis()
+    val requestedAtMs: Long = System.currentTimeMillis(),
+    val bboxNorth: Double? = null,
+    val bboxSouth: Double? = null,
+    val bboxEast: Double? = null,
+    val bboxWest: Double? = null
 )
 

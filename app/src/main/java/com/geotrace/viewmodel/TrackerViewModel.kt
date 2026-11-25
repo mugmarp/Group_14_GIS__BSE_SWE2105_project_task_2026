@@ -166,6 +166,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val offlineDownloadProgress: StateFlow<OfflineDownloadProgress> = offlineMapManager.downloadProgress
     val offlineCacheSizeMb: StateFlow<Float> = offlineMapManager.cacheSizeMb
     val offlinePlacesCount: StateFlow<Int> = repository.offlinePlacesCount
+    private val _offlinePoiStatus = MutableStateFlow<String?>(null)
+    val offlinePoiStatus: StateFlow<String?> = _offlinePoiStatus.asStateFlow()
 
     val placeSearchManager = PlaceSearchManager(application)
     private val _searchQuery = MutableStateFlow("")
@@ -844,14 +846,23 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         name: String,
         note: String = "",
         photoPickerUri: String? = null,
-        onResult: ((TrailWaypoint?) -> Unit)? = null
+        onResult: ((TrailWaypoint?, Boolean) -> Unit)? = null
     ) {
         viewModelScope.launch {
+            if (activeSession.value == null || currentLocation.value == null) {
+                onResult?.invoke(null, false)
+                return@launch
+            }
+            val hadPhoto = !photoPickerUri.isNullOrBlank()
             val savedPath = photoPickerUri?.takeIf { it.isNotBlank() }?.let {
                 repository.copyPhotoToAppStorage(it)
-            } ?: ""
-            val wp = repository.dropWaypoint(name, note, savedPath)
-            onResult?.invoke(wp)
+            }
+            val photoFailed = hadPhoto && savedPath == null
+            val wp = repository.dropWaypoint(name, note, savedPath ?: "")
+            if (wp == null && !savedPath.isNullOrBlank()) {
+                repository.deleteAppPhotoFileIfUnused(savedPath)
+            }
+            onResult?.invoke(wp, photoFailed)
         }
     }
 
@@ -864,13 +875,15 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         altitude: Double = 0.0,
         photoPickerUri: String? = null,
         tripId: String? = null,
-        onSaved: ((SavedPlace) -> Unit)? = null
+        onSaved: ((SavedPlace, Boolean) -> Unit)? = null
     ) {
         if (!latitude.isFinite() || !longitude.isFinite() || (latitude == 0.0 && longitude == 0.0)) return
         viewModelScope.launch {
+            val hadPhoto = !photoPickerUri.isNullOrBlank()
             val savedPath = photoPickerUri?.takeIf { it.isNotBlank() }?.let {
                 repository.copyPhotoToAppStorage(it)
-            } ?: ""
+            }
+            val photoFailed = hadPhoto && savedPath == null
             val place = repository.savePlace(
                 name = name,
                 category = category,
@@ -878,10 +891,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 latitude = latitude,
                 longitude = longitude,
                 altitude = altitude,
-                photoUri = savedPath,
+                photoUri = savedPath ?: "",
                 tripId = tripId
             )
-            onSaved?.invoke(place)
+            onSaved?.invoke(place, photoFailed)
         }
     }
 
@@ -1394,6 +1407,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         minZoom: Int,
         maxZoom: Int
     ) {
+        _offlinePoiStatus.value = null
         offlineMapManager.startRegionDownload(
             name = name,
             box = box,
@@ -1405,9 +1419,14 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     repository.saveOfflineMapRegion(region)
                     // Best-effort offline POI & street index pre-cache inside downloaded bounding box
                     launch(Dispatchers.IO) {
-                        val pois = placeSearchManager.fetchRegionPoisForOfflineCache(region)
-                        if (pois.isNotEmpty()) {
-                            repository.saveOfflinePlaces(region.id, pois)
+                        val outcome = placeSearchManager.fetchRegionPoisForOfflineCacheWithStatus(region)
+                        if (outcome.pois.isNotEmpty()) {
+                            repository.saveOfflinePlaces(region.id, outcome.pois)
+                            _offlinePoiStatus.value = "Cached ${outcome.pois.size} offline POIs for '${region.name}'"
+                        } else if (!outcome.succeeded) {
+                            _offlinePoiStatus.value = "Tiles saved for '${region.name}'; Overpass POI index unavailable offline"
+                        } else {
+                            _offlinePoiStatus.value = "Tiles saved for '${region.name}' (no mapped OSM POIs in bounds)"
                         }
                     }
                 }
@@ -1423,6 +1442,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         minZoom: Int,
         maxZoom: Int
     ) {
+        _offlinePoiStatus.value = null
         offlineMapManager.startCorridorDownload(
             name = name,
             points = points,
@@ -1434,19 +1454,28 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 viewModelScope.launch {
                     repository.saveOfflineMapRegion(region)
                     launch(Dispatchers.IO) {
-                        val pois = placeSearchManager.fetchCorridorPoisForOfflineCache(
+                        val outcome = placeSearchManager.fetchCorridorPoisForOfflineCacheWithStatus(
                             points = points,
                             regionId = region.id,
                             regionName = region.name,
                             halfWidthKm = halfWidthKm
                         )
-                        if (pois.isNotEmpty()) {
-                            repository.saveOfflinePlaces(region.id, pois)
+                        if (outcome.pois.isNotEmpty()) {
+                            repository.saveOfflinePlaces(region.id, outcome.pois)
+                            _offlinePoiStatus.value = "Cached ${outcome.pois.size} trail corridor POIs for '${region.name}'"
+                        } else if (!outcome.succeeded) {
+                            _offlinePoiStatus.value = "Corridor tiles saved for '${region.name}'; Overpass POI index unavailable"
+                        } else {
+                            _offlinePoiStatus.value = "Corridor tiles saved for '${region.name}' (no mapped POIs in strip)"
                         }
                     }
                 }
             }
         )
+    }
+
+    fun clearOfflinePoiStatus() {
+        _offlinePoiStatus.value = null
     }
 
     fun cancelOfflineRegionDownload() {
@@ -1798,8 +1827,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         return out
     }
 
-    fun selectSearchResult(place: SearchPlaceResult) {
-        if (place.source != SearchResultSource.DEVICE_OR_PEER) {
+    fun selectSearchResult(place: SearchPlaceResult, saveRecent: Boolean = true) {
+        if (saveRecent && place.source != SearchResultSource.DEVICE_OR_PEER) {
             placeSearchManager.saveRecentSearch(place)
         }
         _isMapFollowPaused.value = true

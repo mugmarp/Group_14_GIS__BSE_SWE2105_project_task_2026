@@ -407,6 +407,7 @@ fun MapViewComposable(
     var selectedMarkerInfo by remember { mutableStateOf<MarkerInspectData?>(null) }
     var droppedInspectPin by remember { mutableStateOf<GeoPoint?>(null) }
     var inspectCoordsCopied by remember { mutableStateOf(false) }
+    var expandedInspectPhotoPath by remember { mutableStateOf<String?>(null) }
     var localHandledFocusMs by remember(lastHandledFocusMs) { mutableStateOf(lastHandledFocusMs) }
     var localHandledSearchMs by remember(lastHandledSearchMs) { mutableStateOf(lastHandledSearchMs) }
     var localHandledTrailKey by remember(lastHandledInspectedTrail) { mutableStateOf(lastHandledInspectedTrail) }
@@ -568,8 +569,21 @@ fun MapViewComposable(
     val parkedPinDrawable = remember(context) {
         createPinBadgeDrawable(context, "P", android.graphics.Color.parseColor("#B45309"))
     }
-    val savedPlaceDrawable = remember(context) {
-        createPinBadgeDrawable(context, "★", android.graphics.Color.parseColor("#0D9488"))
+    val savedPlaceDrawableCache = remember { mutableMapOf<String, android.graphics.drawable.Drawable>() }
+    fun savedPlaceDrawableFor(category: String): android.graphics.drawable.Drawable {
+        val key = category.trim().lowercase(Locale.US)
+        return savedPlaceDrawableCache.getOrPut(key) {
+            val (badge, hex) = when (key) {
+                "lodge" -> "L" to "#0F766E"
+                "camp" -> "C" to "#15803D"
+                "water" -> "W" to "#0284C7"
+                "medical" -> "M" to "#DC2626"
+                "trailhead" -> "T" to "#7C3AED"
+                "viewpoint" -> "V" to "#D97706"
+                else -> "★" to "#0D9488"
+            }
+            createPinBadgeDrawable(context, badge, android.graphics.Color.parseColor(hex))
+        }
     }
     val routeStartDrawable = remember(context) {
         createPinBadgeDrawable(context, "A", android.graphics.Color.parseColor("#0D9488"))
@@ -683,12 +697,39 @@ fun MapViewComposable(
         onMarkImportedRouteHandled?.invoke(route.id)
     }
 
-    // Pan & zoom smoothly onto a requested remote device, group member, or P2P peer (only once per request)
+    // Pan & zoom smoothly onto a requested remote device, group member, P2P peer, or region bounds (only once per request)
     LaunchedEffect(focusedTarget?.requestedAtMs, mapViewRef) {
         val target = focusedTarget ?: return@LaunchedEffect
         val map = mapViewRef ?: return@LaunchedEffect
         if (target.requestedAtMs <= maxOf(lastHandledFocusMs, localHandledFocusMs)) return@LaunchedEffect
-        if (target.latitude != 0.0 || target.longitude != 0.0) {
+        val n = target.bboxNorth
+        val s = target.bboxSouth
+        val e = target.bboxEast
+        val w = target.bboxWest
+        if (n != null && s != null && e != null && w != null && (n - s) > 0.002 && w <= e) {
+            selectedMarkerInfo = null
+            droppedInspectPin = null
+            val box = BoundingBox(
+                n.coerceIn(-85.0, 85.0),
+                e.coerceIn(-180.0, 180.0),
+                s.coerceIn(-85.0, 85.0),
+                w.coerceIn(-180.0, 180.0)
+            )
+            map.post {
+                try {
+                    map.zoomToBoundingBox(box, true, 120)
+                } catch (_: Exception) {
+                    map.controller.animateTo(
+                        GeoPoint(target.latitude, target.longitude),
+                        target.targetZoom ?: 13.5,
+                        750L
+                    )
+                }
+            }
+            hasCenteredOnFirstFix = true
+            localHandledFocusMs = target.requestedAtMs
+            onMarkFocusHandled?.invoke(target.requestedAtMs)
+        } else if (target.latitude != 0.0 || target.longitude != 0.0) {
             selectedMarkerInfo = null
             droppedInspectPin = null
             map.controller.animateTo(
@@ -830,6 +871,7 @@ fun MapViewComposable(
             hybridLabelsProvider.detach()
             avatarDrawableCache.clear()
             waypointDrawableCache.clear()
+            savedPlaceDrawableCache.clear()
             mapViewRef?.onDetach()
         }
     }
@@ -1652,7 +1694,7 @@ fun MapViewComposable(
                                 snippet = "${place.category} • $notePrefix$coordStr"
                                 infoWindow = null
                                 setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                                icon = savedPlaceDrawable
+                                icon = savedPlaceDrawableFor(place.category)
                                 setOnMarkerClickListener { m, _ ->
                                     selectedMarkerInfo = MarkerInspectData(
                                         title = m.title ?: place.name,
@@ -1699,6 +1741,21 @@ fun MapViewComposable(
         // Unified Bottom-Start Marker Inspect / Search Pin / Inspected Trail / Target Focus Card (single contextual card, zero overlap)
         val activeFocus = if (!isMapPickMode && selectedMarkerInfo == null) focusedTarget else null
         val activeSearch = if (!isMapPickMode && selectedMarkerInfo == null && activeFocus == null) selectedSearchPin else null
+        val matchedSavedPlace = remember(activeSearch, savedPlaces) {
+            val s = activeSearch ?: return@remember null
+            if (!s.id.startsWith("saved_")) return@remember null
+            val targetId = s.id.removePrefix("saved_")
+            savedPlaces.firstOrNull { it.id == targetId }
+                ?: savedPlaces.firstOrNull {
+                    abs(it.latitude - s.latitude) < 1e-5 && abs(it.longitude - s.longitude) < 1e-5
+                }
+        }
+        val matchedSearchWaypoint = remember(activeSearch, trailWaypoints) {
+            val s = activeSearch ?: return@remember null
+            if (!s.id.startsWith("wpt_")) return@remember null
+            val targetId = s.id.removePrefix("wpt_")
+            trailWaypoints.firstOrNull { it.id == targetId }
+        }
         val isInspectingHistoryTrail = !isMapPickMode && selectedMarkerInfo == null && activeFocus == null && activeSearch == null && inspectedTrailName != null
         val inspectCardTitle = selectedMarkerInfo?.title
             ?: activeFocus?.label
@@ -1750,17 +1807,45 @@ fun MapViewComposable(
                         verticalAlignment = Alignment.Top
                     ) {
                         val inspectPhotoUri = selectedMarkerInfo?.photoUri
+                            ?: matchedSavedPlace?.photoUri?.takeIf { it.isNotBlank() }
+                            ?: matchedSearchWaypoint?.photoUri?.takeIf { it.isNotBlank() }
                         if (!inspectPhotoUri.isNullOrBlank()) {
-                            AsyncImage(
-                                model = if (inspectPhotoUri.startsWith("/")) File(inspectPhotoUri) else inspectPhotoUri,
-                                contentDescription = "Location Photo",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .padding(end = 10.dp)
-                                    .size(56.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(customColors.surfaceContainerLow)
-                            )
+                            val isLocalFile = inspectPhotoUri.startsWith("/")
+                            val photoFileAvailable = !isLocalFile || File(inspectPhotoUri).exists()
+                            if (photoFileAvailable) {
+                                AsyncImage(
+                                    model = if (isLocalFile) File(inspectPhotoUri) else inspectPhotoUri,
+                                    contentDescription = "Location Photo (tap to enlarge)",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier
+                                        .padding(end = 10.dp)
+                                        .size(56.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(customColors.surfaceContainerLow)
+                                        .clickable { expandedInspectPhotoPath = inspectPhotoUri }
+                                        .testTag("inspect_photo_thumbnail")
+                                )
+                            } else {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = customColors.surfaceContainerLow,
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, colorScheme.outlineVariant),
+                                    modifier = Modifier
+                                        .padding(end = 10.dp)
+                                        .size(56.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(4.dp)) {
+                                        Text(
+                                            text = "Photo\nMissing",
+                                            fontSize = 8.5.sp,
+                                            lineHeight = 10.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = colorScheme.onSurfaceVariant,
+                                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                        )
+                                    }
+                                }
+                            }
                         }
                         Column(
                             modifier = Modifier
@@ -2006,7 +2091,7 @@ fun MapViewComposable(
                                     }
                                 }
 
-                                val savedPlaceIdToDelete = selectedMarkerInfo?.savedPlaceId
+                                val savedPlaceIdToDelete = selectedMarkerInfo?.savedPlaceId ?: matchedSavedPlace?.id
                                 if (savedPlaceIdToDelete != null && onDeleteSavedPlace != null) {
                                     Surface(
                                         shape = CircleShape,
@@ -2018,6 +2103,9 @@ fun MapViewComposable(
                                             .clickable {
                                                 onDeleteSavedPlace(savedPlaceIdToDelete)
                                                 selectedMarkerInfo = null
+                                                if (matchedSavedPlace != null) {
+                                                    onClearSearchPin?.invoke()
+                                                }
                                             }
                                             .testTag("inspect_delete_saved_place_btn")
                                     ) {
@@ -2524,6 +2612,58 @@ fun MapViewComposable(
                         }
                     }
                     Spacer(modifier = Modifier.height(10.dp))
+                }
+            }
+        }
+
+        if (expandedInspectPhotoPath != null) {
+            val photoPath = expandedInspectPhotoPath!!
+            val isLocalFile = photoPath.startsWith("/")
+            val exists = !isLocalFile || File(photoPath).exists()
+            androidx.compose.ui.window.Dialog(
+                onDismissRequest = { expandedInspectPhotoPath = null },
+                properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(colorScheme.scrim.copy(alpha = 0.92f)),
+                    color = colorScheme.scrim.copy(alpha = 0.92f)
+                ) {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        if (exists) {
+                            AsyncImage(
+                                model = if (isLocalFile) File(photoPath) else photoPath,
+                                contentDescription = "Full screen location photo",
+                                contentScale = ContentScale.Fit,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(16.dp)
+                            )
+                        } else {
+                            Text(
+                                text = "Photo file is no longer available on device.",
+                                color = Color.White,
+                                fontSize = 13.sp,
+                                modifier = Modifier.align(Alignment.Center)
+                            )
+                        }
+                        IconButton(
+                            onClick = { expandedInspectPhotoPath = null },
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(16.dp)
+                                .size(48.dp)
+                                .background(colorScheme.surface.copy(alpha = 0.85f), CircleShape)
+                                .testTag("close_inspect_photo_dialog_btn")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close photo preview",
+                                tint = colorScheme.onSurface
+                            )
+                        }
+                    }
                 }
             }
         }

@@ -5,6 +5,8 @@ import android.content.Context
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import com.geotrace.model.AppThemeMode
 import com.geotrace.model.CellTowerInfo
@@ -481,8 +483,9 @@ class LocationRepository(private val context: Context) {
             if (existing != null) {
                 stopCurrentSessionInternal(existing)
             }
+            val db = dbHelper.writableDatabase
+            val validTripId = resolveExistingTripId(db, tripId)
             val id = UUID.randomUUID().toString()
-            val cleanedTripId = tripId?.takeIf { it.isNotBlank() }
             val session = TrackingSession(
                 id = id,
                 name = name.trim().ifBlank { "Field Trail" },
@@ -493,10 +496,9 @@ class LocationRepository(private val context: Context) {
                 pausedAccumulatedMs = 0L,
                 pauseStartedMs = null,
                 waypointCount = 0,
-                tripId = cleanedTripId
+                tripId = validTripId
             )
 
-            val db = dbHelper.writableDatabase
             val cv = ContentValues().apply {
                 put("id", session.id)
                 put("name", session.name)
@@ -511,15 +513,21 @@ class LocationRepository(private val context: Context) {
                 put("is_paused", 0)
                 put("paused_accumulated_ms", 0L)
                 putNull("pause_started_ms")
-                if (cleanedTripId != null) {
-                    put("trip_id", cleanedTripId)
+                if (validTripId != null) {
+                    put("trip_id", validTripId)
                 } else {
                     putNull("trip_id")
                 }
             }
-            db.insert(LocationDbHelper.TABLE_SESSIONS, null, cv)
+            var finalSession = session
+            val inserted = db.insert(LocationDbHelper.TABLE_SESSIONS, null, cv)
+            if (inserted == -1L && validTripId != null) {
+                cv.putNull("trip_id")
+                db.insert(LocationDbHelper.TABLE_SESSIONS, null, cv)
+                finalSession = session.copy(tripId = null)
+            }
 
-            _activeSession.value = session
+            _activeSession.value = finalSession
             _activeTrailPoints.value = emptyList()
             _activeWaypoints.value = emptyList()
             smoothedSpeedMps = 0f
@@ -527,7 +535,7 @@ class LocationRepository(private val context: Context) {
             consecutiveSlowSamples = 0
             resetAnchorOnNextFix = false
             loadSessionsInternal()
-            session
+            finalSession
         }
     }
 
@@ -894,10 +902,75 @@ class LocationRepository(private val context: Context) {
         }
     }
 
+    private fun resolveExistingTripId(
+        db: android.database.sqlite.SQLiteDatabase,
+        tripId: String?
+    ): String? {
+        val cleaned = tripId?.takeIf { it.isNotBlank() } ?: return null
+        return try {
+            db.rawQuery("SELECT 1 FROM ${LocationDbHelper.TABLE_TRIPS} WHERE id = ? LIMIT 1", arrayOf(cleaned)).use { c ->
+                if (c.moveToFirst()) cleaned else null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun deleteUnusedWaypointPhotos(
+        db: android.database.sqlite.SQLiteDatabase,
+        candidatePaths: Collection<String>
+    ) {
+        val photoDir = File(context.filesDir, "waypoint_photos")
+        val canonicalRoot = try {
+            photoDir.canonicalPath
+        } catch (_: Exception) {
+            photoDir.absolutePath
+        }
+        for (rawPath in candidatePaths) {
+            val trimmed = rawPath.trim()
+            if (trimmed.isBlank()) continue
+            try {
+                val file = File(trimmed)
+                if (!file.exists()) continue
+                val canonicalFile = file.canonicalPath
+                if (!canonicalFile.startsWith(canonicalRoot)) continue
+                val stillReferencedInWaypoints = db.rawQuery(
+                    "SELECT 1 FROM ${LocationDbHelper.TABLE_WAYPOINTS} WHERE photo_uri = ? LIMIT 1",
+                    arrayOf(trimmed)
+                ).use { it.moveToFirst() }
+                if (stillReferencedInWaypoints) continue
+                val stillReferencedInSaved = db.rawQuery(
+                    "SELECT 1 FROM ${LocationDbHelper.TABLE_SAVED_PLACES} WHERE photo_uri = ? LIMIT 1",
+                    arrayOf(trimmed)
+                ).use { it.moveToFirst() }
+                if (!stillReferencedInSaved) {
+                    file.delete()
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    suspend fun deleteAppPhotoFileIfUnused(path: String) = withContext(Dispatchers.IO) {
+        if (path.isBlank()) return@withContext
+        deleteUnusedWaypointPhotos(dbHelper.readableDatabase, listOf(path))
+    }
+
     suspend fun copyPhotoToAppStorage(uriString: String): String? = withContext(Dispatchers.IO) {
         if (uriString.isBlank()) return@withContext null
         return@withContext try {
             val uri = Uri.parse(uriString)
+            val exifOrientation = try {
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    ExifInterface(stream).getAttributeInt(
+                        ExifInterface.TAG_ORIENTATION,
+                        ExifInterface.ORIENTATION_NORMAL
+                    )
+                } ?: ExifInterface.ORIENTATION_NORMAL
+            } catch (_: Exception) {
+                ExifInterface.ORIENTATION_NORMAL
+            }
+
             val boundsOpts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             context.contentResolver.openInputStream(uri)?.use { stream ->
                 BitmapFactory.decodeStream(stream, null, boundsOpts)
@@ -917,16 +990,18 @@ class LocationRepository(private val context: Context) {
                 BitmapFactory.decodeStream(stream, null, decodeOpts)
             } ?: return@withContext null
 
-            val maxDim = max(decoded.width, decoded.height)
+            val orientedBitmap = applyExifOrientation(decoded, exifOrientation)
+
+            val maxDim = max(orientedBitmap.width, orientedBitmap.height)
             val finalBitmap = if (maxDim > targetMaxEdge) {
                 val scale = targetMaxEdge.toFloat() / maxDim.toFloat()
-                val newW = (decoded.width * scale).roundToInt().coerceAtLeast(1)
-                val newH = (decoded.height * scale).roundToInt().coerceAtLeast(1)
-                Bitmap.createScaledBitmap(decoded, newW, newH, true).also {
-                    if (it !== decoded) decoded.recycle()
+                val newW = (orientedBitmap.width * scale).roundToInt().coerceAtLeast(1)
+                val newH = (orientedBitmap.height * scale).roundToInt().coerceAtLeast(1)
+                Bitmap.createScaledBitmap(orientedBitmap, newW, newH, true).also {
+                    if (it !== orientedBitmap) orientedBitmap.recycle()
                 }
             } else {
-                decoded
+                orientedBitmap
             }
 
             val dir = File(context.filesDir, "waypoint_photos").apply {
@@ -940,6 +1015,33 @@ class LocationRepository(private val context: Context) {
             outFile.absolutePath
         } catch (_: Exception) {
             null
+        }
+    }
+
+    private fun applyExifOrientation(bitmap: Bitmap, orientation: Int): Bitmap {
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.postScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.postScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> {
+                matrix.postRotate(90f)
+                matrix.postScale(-1f, 1f)
+            }
+            ExifInterface.ORIENTATION_TRANSVERSE -> {
+                matrix.postRotate(270f)
+                matrix.postScale(-1f, 1f)
+            }
+            else -> return bitmap
+        }
+        return try {
+            val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            if (rotated !== bitmap) bitmap.recycle()
+            rotated
+        } catch (_: Exception) {
+            bitmap
         }
     }
 
@@ -992,7 +1094,21 @@ class LocationRepository(private val context: Context) {
     suspend fun deleteWaypoint(waypointId: String, sessionId: String): List<TrailWaypoint> = withContext(Dispatchers.IO) {
         recordingMutex.withLock {
             val db = dbHelper.writableDatabase
+            val photosToCleanup = mutableListOf<String>()
+            db.query(
+                LocationDbHelper.TABLE_WAYPOINTS,
+                arrayOf("photo_uri"),
+                "id = ?",
+                arrayOf(waypointId),
+                null, null, null
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val p = c.getString(0) ?: ""
+                    if (p.isNotBlank()) photosToCleanup.add(p)
+                }
+            }
             db.delete(LocationDbHelper.TABLE_WAYPOINTS, "id = ?", arrayOf(waypointId))
+            deleteUnusedWaypointPhotos(db, photosToCleanup)
             val remaining = queryWaypointsSync(db, sessionId)
             db.update(
                 LocationDbHelper.TABLE_SESSIONS,
@@ -1158,6 +1274,19 @@ class LocationRepository(private val context: Context) {
     suspend fun deleteSession(sessionId: String): Boolean = withContext(Dispatchers.IO) {
         recordingMutex.withLock {
             val db = dbHelper.writableDatabase
+            val photosToCleanup = mutableListOf<String>()
+            db.query(
+                LocationDbHelper.TABLE_WAYPOINTS,
+                arrayOf("photo_uri"),
+                "session_id = ?",
+                arrayOf(sessionId),
+                null, null, null
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val p = c.getString(0) ?: ""
+                    if (p.isNotBlank()) photosToCleanup.add(p)
+                }
+            }
             db.beginTransaction()
             try {
                 db.delete(LocationDbHelper.TABLE_WAYPOINTS, "session_id = ?", arrayOf(sessionId))
@@ -1167,6 +1296,7 @@ class LocationRepository(private val context: Context) {
             } finally {
                 db.endTransaction()
             }
+            deleteUnusedWaypointPhotos(db, photosToCleanup)
             val wasActive = _activeSession.value?.id == sessionId
             if (wasActive) {
                 _activeSession.value = null
@@ -1748,7 +1878,9 @@ class LocationRepository(private val context: Context) {
 
     suspend fun searchOfflinePlaces(query: String, limit: Int = 25): List<OfflinePlacePoi> = withContext(Dispatchers.IO) {
         val list = mutableListOf<OfflinePlacePoi>()
+        val seenKeys = HashSet<String>()
         val trimmed = query.trim()
+        val fetchCap = (limit * 3).coerceAtLeast(45)
         val db = dbHelper.readableDatabase
         val cursor = if (trimmed.isBlank()) {
             db.query(
@@ -1759,7 +1891,7 @@ class LocationRepository(private val context: Context) {
                 null,
                 null,
                 "name ASC",
-                limit.toString()
+                fetchCap.toString()
             )
         } else {
             val likeArg = "%$trimmed%"
@@ -1771,22 +1903,26 @@ class LocationRepository(private val context: Context) {
                 null,
                 null,
                 "name ASC",
-                limit.toString()
+                fetchCap.toString()
             )
         }
         cursor.use { c ->
-            while (c.moveToNext()) {
-                list.add(
-                    OfflinePlacePoi(
-                        id = c.getString(c.getColumnIndexOrThrow("id")),
-                        regionId = c.getString(c.getColumnIndexOrThrow("region_id")),
-                        name = c.getString(c.getColumnIndexOrThrow("name")),
-                        category = c.getString(c.getColumnIndexOrThrow("category")),
-                        subtitle = c.getString(c.getColumnIndexOrThrow("subtitle")),
-                        latitude = c.getDouble(c.getColumnIndexOrThrow("latitude")),
-                        longitude = c.getDouble(c.getColumnIndexOrThrow("longitude"))
-                    )
+            while (c.moveToNext() && list.size < limit) {
+                val poi = OfflinePlacePoi(
+                    id = c.getString(c.getColumnIndexOrThrow("id")),
+                    regionId = c.getString(c.getColumnIndexOrThrow("region_id")),
+                    name = c.getString(c.getColumnIndexOrThrow("name")),
+                    category = c.getString(c.getColumnIndexOrThrow("category")),
+                    subtitle = c.getString(c.getColumnIndexOrThrow("subtitle")),
+                    latitude = c.getDouble(c.getColumnIndexOrThrow("latitude")),
+                    longitude = c.getDouble(c.getColumnIndexOrThrow("longitude"))
                 )
+                val key = "${poi.name.trim().lowercase(java.util.Locale.US)}:${
+                    String.format(java.util.Locale.US, "%.4f,%.4f", poi.latitude, poi.longitude)
+                }"
+                if (seenKeys.add(key)) {
+                    list.add(poi)
+                }
             }
         }
         list
@@ -1873,6 +2009,8 @@ class LocationRepository(private val context: Context) {
         photoUri: String = "",
         tripId: String? = null
     ): SavedPlace = withContext(Dispatchers.IO) {
+        val db = dbHelper.writableDatabase
+        val validTripId = resolveExistingTripId(db, tripId)
         val place = SavedPlace(
             id = UUID.randomUUID().toString(),
             name = name.trim().ifBlank { "Saved Spot" },
@@ -1882,10 +2020,9 @@ class LocationRepository(private val context: Context) {
             longitude = longitude,
             altitude = altitude,
             photoUri = photoUri.trim(),
-            tripId = tripId?.takeIf { it.isNotBlank() },
+            tripId = validTripId,
             createdAt = System.currentTimeMillis()
         )
-        val db = dbHelper.writableDatabase
         val cv = ContentValues().apply {
             put("id", place.id)
             put("name", place.name)
@@ -1898,27 +2035,54 @@ class LocationRepository(private val context: Context) {
             if (place.tripId != null) put("trip_id", place.tripId) else putNull("trip_id")
             put("created_at", place.createdAt)
         }
-        db.insertWithOnConflict(
+        var savedPlace = place
+        val rowId = db.insertWithOnConflict(
             LocationDbHelper.TABLE_SAVED_PLACES,
             null,
             cv,
             android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
         )
+        if (rowId == -1L && validTripId != null) {
+            cv.putNull("trip_id")
+            db.insertWithOnConflict(
+                LocationDbHelper.TABLE_SAVED_PLACES,
+                null,
+                cv,
+                android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
+            )
+            savedPlace = place.copy(tripId = null)
+        }
         loadSavedPlacesInternal()
-        place
+        savedPlace
     }
 
     suspend fun deleteSavedPlace(id: String) = withContext(Dispatchers.IO) {
-        dbHelper.writableDatabase.delete(LocationDbHelper.TABLE_SAVED_PLACES, "id = ?", arrayOf(id))
+        val db = dbHelper.writableDatabase
+        val photosToCleanup = mutableListOf<String>()
+        db.query(
+            LocationDbHelper.TABLE_SAVED_PLACES,
+            arrayOf("photo_uri"),
+            "id = ?",
+            arrayOf(id),
+            null, null, null
+        ).use { c ->
+            while (c.moveToNext()) {
+                val p = c.getString(0) ?: ""
+                if (p.isNotBlank()) photosToCleanup.add(p)
+            }
+        }
+        db.delete(LocationDbHelper.TABLE_SAVED_PLACES, "id = ?", arrayOf(id))
+        deleteUnusedWaypointPhotos(db, photosToCleanup)
         loadSavedPlacesInternal()
     }
 
     suspend fun assignPlaceToTrip(placeId: String, tripId: String?) = withContext(Dispatchers.IO) {
-        val cleaned = tripId?.takeIf { it.isNotBlank() }
+        val db = dbHelper.writableDatabase
+        val validTripId = resolveExistingTripId(db, tripId)
         val cv = ContentValues().apply {
-            if (cleaned != null) put("trip_id", cleaned) else putNull("trip_id")
+            if (validTripId != null) put("trip_id", validTripId) else putNull("trip_id")
         }
-        dbHelper.writableDatabase.update(LocationDbHelper.TABLE_SAVED_PLACES, cv, "id = ?", arrayOf(placeId))
+        db.update(LocationDbHelper.TABLE_SAVED_PLACES, cv, "id = ?", arrayOf(placeId))
         loadSavedPlacesInternal()
     }
 
@@ -2046,12 +2210,13 @@ class LocationRepository(private val context: Context) {
     }
 
     suspend fun assignSessionToTrip(sessionId: String, tripId: String?) = withContext(Dispatchers.IO) {
-        val cleaned = tripId?.takeIf { it.isNotBlank() }
         recordingMutex.withLock {
+            val db = dbHelper.writableDatabase
+            val validTripId = resolveExistingTripId(db, tripId)
             val cv = ContentValues().apply {
-                if (cleaned != null) put("trip_id", cleaned) else putNull("trip_id")
+                if (validTripId != null) put("trip_id", validTripId) else putNull("trip_id")
             }
-            dbHelper.writableDatabase.update(
+            db.update(
                 LocationDbHelper.TABLE_SESSIONS,
                 cv,
                 "id = ?",
@@ -2059,7 +2224,7 @@ class LocationRepository(private val context: Context) {
             )
             val current = _activeSession.value
             if (current != null && current.id == sessionId) {
-                _activeSession.value = current.copy(tripId = cleaned)
+                _activeSession.value = current.copy(tripId = validTripId)
             }
             loadSessionsInternal()
         }

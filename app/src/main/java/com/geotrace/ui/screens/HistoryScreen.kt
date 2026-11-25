@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -109,6 +110,8 @@ import com.geotrace.data.export.ExportFormat
 import com.geotrace.data.export.TrackExporter
 import com.geotrace.model.CoordinateFormat
 import com.geotrace.model.SavedPlace
+import com.geotrace.model.SearchPlaceResult
+import com.geotrace.model.SearchResultSource
 import com.geotrace.model.SpeedUnit
 import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
@@ -185,6 +188,18 @@ fun HistoryScreen(
     var elevationDialogSession by remember { mutableStateOf<TrackingSession?>(null) }
     var elevationSummary by remember { mutableStateOf<ElevationSummary?>(null) }
     var isLoadingElevation by remember { mutableStateOf(false) }
+    var showSavedPlacesDialog by rememberSaveable { mutableStateOf(false) }
+    var savedPlacesTripFilterId by rememberSaveable { mutableStateOf<String?>(null) }
+    var placeToAssignTrip by remember { mutableStateOf<SavedPlace?>(null) }
+
+    LaunchedEffect(trips) {
+        if (selectedTripFilterId != null && selectedTripFilterId != "__UNASSIGNED__" && trips.none { it.id == selectedTripFilterId }) {
+            selectedTripFilterId = null
+        }
+        if (savedPlacesTripFilterId != null && savedPlacesTripFilterId != "__UNASSIGNED__" && trips.none { it.id == savedPlacesTripFilterId }) {
+            savedPlacesTripFilterId = null
+        }
+    }
 
     val tripNameById = remember(trips) { trips.associate { it.id to it.name } }
 
@@ -370,6 +385,33 @@ fun HistoryScreen(
                 }
             }
 
+            item(key = "saved_places_manager_entry") {
+                OutlinedButton(
+                    onClick = {
+                        savedPlacesTripFilterId = selectedTripFilterId
+                        showSavedPlacesDialog = true
+                    },
+                    shape = CircleShape,
+                    border = BorderStroke(1.dp, colorScheme.primary.copy(alpha = 0.45f)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = colorScheme.primary.copy(alpha = 0.07f),
+                        contentColor = colorScheme.primary
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("open_saved_places_btn")
+                ) {
+                    Icon(Icons.Default.Bookmark, contentDescription = null, modifier = Modifier.size(17.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Saved Places & Bookmarks (${savedPlaces.size})",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
             // Multi-Day Expedition / Trip Groups Strip
             item(key = "trip_groups_strip") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -507,12 +549,26 @@ fun HistoryScreen(
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     MetricItem("DAYS / TRAILS", "${tripSessions.size}", colorScheme.primary)
                                     MetricItem("TRIP DIST", tripDistLabel, colorScheme.secondary)
                                     MetricItem("TIME", tripDurLabel, colorScheme.onSurface)
-                                    MetricItem("BOOKMARKS", "$tripPlacesCount", colorScheme.tertiary)
+                                    Box(
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .clickable {
+                                                savedPlacesTripFilterId = selectedTrip.id
+                                                showSavedPlacesDialog = true
+                                            }
+                                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                                            .testTag("trip_bookmarks_metric_btn"),
+                                        contentAlignment = Alignment.CenterStart
+                                    ) {
+                                        MetricItem("BOOKMARKS", "$tripPlacesCount", colorScheme.tertiary, subtitle = "Manage")
+                                    }
                                 }
                             }
                         }
@@ -825,9 +881,11 @@ fun HistoryScreen(
         )
     }
 
-    // Full-Screen Waypoint Photo Viewer Dialog
+    // Full-Screen Waypoint / Saved Place Photo Viewer Dialog
     if (expandedPhotoPath != null) {
-        val photoFile = File(expandedPhotoPath!!)
+        val rawPath = expandedPhotoPath!!
+        val photoFile = File(rawPath)
+        val photoAvailable = !rawPath.startsWith("/") || photoFile.exists()
         Dialog(
             onDismissRequest = { expandedPhotoPath = null },
             properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -839,14 +897,23 @@ fun HistoryScreen(
                 color = colorScheme.scrim.copy(alpha = 0.92f)
             ) {
                 Box(modifier = Modifier.fillMaxSize()) {
-                    AsyncImage(
-                        model = photoFile,
-                        contentDescription = "Full screen waypoint photo",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp)
-                    )
+                    if (photoAvailable) {
+                        AsyncImage(
+                            model = if (rawPath.startsWith("/")) photoFile else rawPath,
+                            contentDescription = "Full screen waypoint photo",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(16.dp)
+                        )
+                    } else {
+                        Text(
+                            text = "Photo file is no longer available on device.",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
                     IconButton(
                         onClick = { expandedPhotoPath = null },
                         modifier = Modifier
@@ -1308,6 +1375,128 @@ fun HistoryScreen(
             containerColor = colorScheme.surface
         )
     }
+
+    // Saved Places Manager Dialog
+    if (showSavedPlacesDialog) {
+        SavedPlacesManagerDialog(
+            savedPlaces = savedPlaces,
+            trips = trips,
+            tripNameById = tripNameById,
+            selectedTripFilterId = savedPlacesTripFilterId,
+            coordinateFormat = settings.coordinateFormat,
+            onTripFilterSelected = { savedPlacesTripFilterId = it },
+            onShowOnMap = { place ->
+                val subtitle = listOfNotNull(
+                    place.category.takeIf { it.isNotBlank() },
+                    place.note.takeIf { it.isNotBlank() },
+                    "Saved Place"
+                ).joinToString(" • ")
+                viewModel.selectSearchResult(
+                    SearchPlaceResult(
+                        id = "saved_${place.id}",
+                        name = place.name,
+                        subtitle = subtitle,
+                        latitude = place.latitude,
+                        longitude = place.longitude,
+                        source = SearchResultSource.SAVED_PLACE
+                    ),
+                    saveRecent = false
+                )
+                showSavedPlacesDialog = false
+                onNavigateBack?.invoke()
+            },
+            onAssignTrip = { place -> placeToAssignTrip = place },
+            onOpenPhoto = { path -> expandedPhotoPath = path },
+            onDeletePlace = { place ->
+                viewModel.deleteSavedPlace(place.id)
+                Toast.makeText(context, "Removed \"${place.name}\"", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showSavedPlacesDialog = false }
+        )
+    }
+
+    // Assign Saved Place to Trip Dialog
+    if (placeToAssignTrip != null) {
+        val targetPlace = placeToAssignTrip!!
+        AlertDialog(
+            onDismissRequest = { placeToAssignTrip = null },
+            title = {
+                Column {
+                    Text("Assign Place to Trip", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        text = targetPlace.name,
+                        fontSize = 11.sp,
+                        color = colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 260.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    FilterChip(
+                        selected = targetPlace.tripId == null,
+                        onClick = {
+                            viewModel.assignPlaceToTrip(targetPlace.id, null)
+                            placeToAssignTrip = null
+                        },
+                        label = { Text("Standalone (No Trip)", fontSize = 12.sp) },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                    )
+                    for (trip in trips) {
+                        FilterChip(
+                            selected = targetPlace.tripId == trip.id,
+                            onClick = {
+                                viewModel.assignPlaceToTrip(targetPlace.id, trip.id)
+                                placeToAssignTrip = null
+                            },
+                            label = { Text(trip.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) },
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 48.dp)
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            placeToAssignTrip = null
+                            newTripNameInput = ""
+                            newTripNotesInput = ""
+                            showCreateTripDialog = true
+                        },
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Create New Trip", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { placeToAssignTrip = null },
+                    shape = CircleShape,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Close", fontSize = 12.sp)
+                }
+            },
+            shape = RoundedCornerShape(28.dp),
+            containerColor = colorScheme.surface
+        )
+    }
 }
 
 @Composable
@@ -1385,16 +1574,36 @@ private fun TrailWaypointsDialog(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     if (wp.photoUri.isNotBlank()) {
-                                        AsyncImage(
-                                            model = File(wp.photoUri),
-                                            contentDescription = "${wp.name} field photo",
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier
-                                                .size(52.dp)
-                                                .clip(RoundedCornerShape(10.dp))
-                                                .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(10.dp))
-                                                .clickable { onOpenPhoto(wp.photoUri) }
-                                        )
+                                        val wpPhotoAvailable = !wp.photoUri.startsWith("/") || File(wp.photoUri).exists()
+                                        if (wpPhotoAvailable) {
+                                            AsyncImage(
+                                                model = if (wp.photoUri.startsWith("/")) File(wp.photoUri) else wp.photoUri,
+                                                contentDescription = "${wp.name} field photo",
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier
+                                                    .size(52.dp)
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(10.dp))
+                                                    .clickable { onOpenPhoto(wp.photoUri) }
+                                            )
+                                        } else {
+                                            Surface(
+                                                shape = RoundedCornerShape(10.dp),
+                                                color = colorScheme.surface,
+                                                border = BorderStroke(1.dp, colorScheme.outlineVariant),
+                                                modifier = Modifier.size(52.dp)
+                                            ) {
+                                                Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(4.dp)) {
+                                                    Text(
+                                                        text = "Photo\nMissing",
+                                                        fontSize = 8.5.sp,
+                                                        lineHeight = 10.sp,
+                                                        color = colorScheme.onSurfaceVariant,
+                                                        textAlign = TextAlign.Center
+                                                    )
+                                                }
+                                            }
+                                        }
                                         Spacer(modifier = Modifier.width(8.dp))
                                     }
                                     Column(modifier = Modifier.weight(1f)) {
@@ -2098,3 +2307,341 @@ private fun TrailElevationDialog(
         containerColor = colorScheme.surface
     )
 }
+
+@Composable
+private fun SavedPlacesManagerDialog(
+    savedPlaces: List<SavedPlace>,
+    trips: List<TripGroup>,
+    tripNameById: Map<String, String>,
+    selectedTripFilterId: String?,
+    coordinateFormat: CoordinateFormat,
+    onTripFilterSelected: (String?) -> Unit,
+    onShowOnMap: (SavedPlace) -> Unit,
+    onAssignTrip: (SavedPlace) -> Unit,
+    onOpenPhoto: (String) -> Unit,
+    onDeletePlace: (SavedPlace) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val customColors = LocalCustomColors.current
+    val filteredPlaces = remember(savedPlaces, selectedTripFilterId) {
+        when (selectedTripFilterId) {
+            null -> savedPlaces
+            "__UNASSIGNED__" -> savedPlaces.filter { it.tripId.isNullOrBlank() }
+            else -> savedPlaces.filter { it.tripId == selectedTripFilterId }
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 24.dp)
+                .navigationBarsPadding(),
+            shape = RoundedCornerShape(28.dp),
+            color = colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(18.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Saved Places (${filteredPlaces.size})",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 17.sp,
+                            color = colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Offline bookmarks, trailheads, lodges & camps",
+                            fontSize = 11.sp,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                    }
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .testTag("close_saved_places_dialog_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close Saved Places",
+                            tint = colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                if (trips.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        FilterChip(
+                            selected = selectedTripFilterId == null,
+                            onClick = { onTripFilterSelected(null) },
+                            label = { Text("All (${savedPlaces.size})", fontSize = 11.sp) },
+                            shape = CircleShape,
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        )
+                        for (trip in trips) {
+                            val count = savedPlaces.count { it.tripId == trip.id }
+                            FilterChip(
+                                selected = selectedTripFilterId == trip.id,
+                                onClick = {
+                                    onTripFilterSelected(if (selectedTripFilterId == trip.id) null else trip.id)
+                                },
+                                label = { Text("${trip.name} ($count)", fontSize = 11.sp, maxLines = 1) },
+                                shape = CircleShape,
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            )
+                        }
+                        val standaloneCount = savedPlaces.count { it.tripId.isNullOrBlank() }
+                        FilterChip(
+                            selected = selectedTripFilterId == "__UNASSIGNED__",
+                            onClick = {
+                                onTripFilterSelected(if (selectedTripFilterId == "__UNASSIGNED__") null else "__UNASSIGNED__")
+                            },
+                            label = { Text("Standalone ($standaloneCount)", fontSize = 11.sp) },
+                            shape = CircleShape,
+                            modifier = Modifier.heightIn(min = 48.dp)
+                        )
+                    }
+                }
+
+                if (filteredPlaces.isEmpty()) {
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = customColors.surfaceContainerLow,
+                        border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(20.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Bookmark,
+                                contentDescription = null,
+                                tint = colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(30.dp)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "No saved places in this view",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Long-press anywhere on the map or tap Save Place on any pin to bookmark a spot offline.",
+                                fontSize = 11.sp,
+                                color = colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 380.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        for (place in filteredPlaces) {
+                            val assignedTripName = place.tripId?.let { tripNameById[it] }
+                            Surface(
+                                shape = RoundedCornerShape(18.dp),
+                                color = customColors.surfaceContainerLow,
+                                border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("saved_place_row_${place.id}")
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        if (place.photoUri.isNotBlank()) {
+                                            val photoAvailable = !place.photoUri.startsWith("/") || File(place.photoUri).exists()
+                                            if (photoAvailable) {
+                                                AsyncImage(
+                                                    model = if (place.photoUri.startsWith("/")) File(place.photoUri) else place.photoUri,
+                                                    contentDescription = "${place.name} photo",
+                                                    contentScale = ContentScale.Crop,
+                                                    modifier = Modifier
+                                                        .size(52.dp)
+                                                        .clip(RoundedCornerShape(10.dp))
+                                                        .border(1.dp, colorScheme.outlineVariant, RoundedCornerShape(10.dp))
+                                                        .clickable { onOpenPhoto(place.photoUri) }
+                                                )
+                                            } else {
+                                                Surface(
+                                                    shape = RoundedCornerShape(10.dp),
+                                                    color = colorScheme.surface,
+                                                    border = BorderStroke(1.dp, colorScheme.outlineVariant),
+                                                    modifier = Modifier.size(52.dp)
+                                                ) {
+                                                    Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(4.dp)) {
+                                                        Text(
+                                                            text = "Photo\nMissing",
+                                                            fontSize = 8.5.sp,
+                                                            lineHeight = 10.sp,
+                                                            color = colorScheme.onSurfaceVariant,
+                                                            textAlign = TextAlign.Center
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                        }
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Surface(
+                                                    shape = CircleShape,
+                                                    color = colorScheme.primary.copy(alpha = 0.14f)
+                                                ) {
+                                                    Text(
+                                                        text = place.category.ifBlank { "Spot" },
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        color = colorScheme.primary,
+                                                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                                    )
+                                                }
+                                                if (!assignedTripName.isNullOrBlank()) {
+                                                    Surface(
+                                                        shape = CircleShape,
+                                                        color = colorScheme.secondary.copy(alpha = 0.14f)
+                                                    ) {
+                                                        Text(
+                                                            text = assignedTripName,
+                                                            fontSize = 9.sp,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            color = colorScheme.secondary,
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            Spacer(modifier = Modifier.height(3.dp))
+                                            Text(
+                                                text = place.name,
+                                                fontSize = 13.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            if (place.note.isNotBlank()) {
+                                                Text(
+                                                    text = place.note,
+                                                    fontSize = 11.sp,
+                                                    color = colorScheme.onSurfaceVariant,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            Text(
+                                                text = formatCoordinates(place.latitude, place.longitude, coordinateFormat),
+                                                style = MaterialTheme.typography.bodySmall.copy(
+                                                    fontSize = 10.sp,
+                                                    fontFamily = JetBrainsMonoFontFamily,
+                                                    fontFeatureSettings = "tnum"
+                                                ),
+                                                color = colorScheme.primary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        OutlinedButton(
+                                            onClick = { onShowOnMap(place) },
+                                            shape = CircleShape,
+                                            contentPadding = PaddingValues(horizontal = 10.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .heightIn(min = 48.dp)
+                                                .testTag("saved_place_map_btn_${place.id}")
+                                        ) {
+                                            Icon(Icons.Default.Map, contentDescription = null, modifier = Modifier.size(15.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("Map", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                        }
+                                        OutlinedButton(
+                                            onClick = { onAssignTrip(place) },
+                                            shape = CircleShape,
+                                            contentPadding = PaddingValues(horizontal = 10.dp),
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .heightIn(min = 48.dp)
+                                                .testTag("saved_place_trip_btn_${place.id}")
+                                        ) {
+                                            Icon(Icons.Default.FolderOpen, contentDescription = null, modifier = Modifier.size(15.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = if (place.tripId.isNullOrBlank()) "Assign Trip" else "Move Trip",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                maxLines = 1
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { onDeletePlace(place) },
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .testTag("saved_place_delete_btn_${place.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Delete,
+                                                contentDescription = "Delete ${place.name}",
+                                                tint = colorScheme.error,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+

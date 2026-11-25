@@ -297,6 +297,14 @@ fun MapScreen(
     var savePlaceTripId by rememberSaveable { mutableStateOf<String?>(null) }
     var savePlacePhotoUriInput by rememberSaveable { mutableStateOf<String?>(null) }
     var activePhotoPickerTarget by rememberSaveable { mutableStateOf("waypoint") }
+    androidx.compose.runtime.LaunchedEffect(trips) {
+        if (selectedStartTripId != null && trips.none { it.id == selectedStartTripId }) {
+            selectedStartTripId = null
+        }
+        if (savePlaceTripId != null && trips.none { it.id == savePlaceTripId }) {
+            savePlaceTripId = null
+        }
+    }
     var showProfileDialog by rememberSaveable { mutableStateOf(false) }
     var showOfflineMapsDialog by rememberSaveable { mutableStateOf(false) }
     var showDevicesSheet by rememberSaveable { mutableStateOf(false) }
@@ -1861,6 +1869,7 @@ fun MapScreen(
                             onClick = {
                                 if (activeNavRoute != null) viewModel.clearImportedRoute()
                                 if (isBacktrackingActiveTrail) viewModel.stopBacktrackActiveTrail()
+                                if (activeGuideTarget?.badge == "ROUTE") viewModel.clearTargetFinder()
                             },
                             modifier = Modifier
                                 .size(48.dp)
@@ -1942,7 +1951,8 @@ fun MapScreen(
                                         latitude = beacon.latitude,
                                         longitude = beacon.longitude,
                                         source = SearchResultSource.SAVED_PLACE
-                                    )
+                                    ),
+                                    saveRecent = false
                                 )
                                 viewModel.setTargetFinder(
                                     label = "Last-Gasp (${beacon.batteryPercent}%)",
@@ -1952,11 +1962,32 @@ fun MapScreen(
                                 )
                             },
                             shape = CircleShape,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
                             modifier = Modifier
                                 .heightIn(min = 48.dp)
                                 .testTag("focus_last_gasp_btn")
                         ) {
                             Text("Locate", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colorScheme.error)
+                        }
+                        TextButton(
+                            onClick = {
+                                savePlaceNameInput = "Last-Gasp (${beacon.batteryPercent}%)"
+                                savePlaceCategory = "Spot"
+                                savePlaceNoteInput = beacon.cellSummary
+                                savePlaceLat = beacon.latitude
+                                savePlaceLon = beacon.longitude
+                                savePlaceAlt = beacon.altitude
+                                savePlacePhotoUriInput = null
+                                savePlaceTripId = null
+                                showSavePlaceDialog = true
+                            },
+                            shape = CircleShape,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .testTag("save_last_gasp_btn")
+                        ) {
+                            Text("Save", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = colorScheme.primary)
                         }
                         IconButton(
                             onClick = { viewModel.clearLastGaspBeacon() },
@@ -2111,12 +2142,17 @@ fun MapScreen(
         val loc = currentLocation
         val focusManager = LocalFocusManager.current
         val submitWaypoint = {
-            viewModel.dropWaypoint(waypointNameInput, waypointNoteInput, waypointPhotoUriInput) { wp ->
+            viewModel.dropWaypoint(waypointNameInput, waypointNoteInput, waypointPhotoUriInput) { wp, photoFailed ->
                 if (wp != null) {
+                    val msg = if (photoFailed) {
+                        "Pinned ${wp.name} (photo could not be attached)"
+                    } else {
+                        "Pinned ${wp.name}"
+                    }
                     android.widget.Toast.makeText(
                         context,
-                        "Pinned ${wp.name}",
-                        android.widget.Toast.LENGTH_SHORT
+                        msg,
+                        if (photoFailed) android.widget.Toast.LENGTH_LONG else android.widget.Toast.LENGTH_SHORT
                     ).show()
                 } else {
                     android.widget.Toast.makeText(
@@ -2462,8 +2498,17 @@ fun MapScreen(
                             altitude = savePlaceAlt,
                             photoPickerUri = savePlacePhotoUriInput,
                             tripId = savePlaceTripId
-                        ) { saved ->
-                            Toast.makeText(context, "Saved \"${saved.name}\"", Toast.LENGTH_SHORT).show()
+                        ) { saved, photoFailed ->
+                            val msg = if (photoFailed) {
+                                "Saved \"${saved.name}\" (photo could not be attached)"
+                            } else {
+                                "Saved \"${saved.name}\""
+                            }
+                            Toast.makeText(
+                                context,
+                                msg,
+                                if (photoFailed) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+                            ).show()
                         }
                         savePlacePhotoUriInput = null
                         showSavePlaceDialog = false

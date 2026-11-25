@@ -108,6 +108,7 @@ fun OfflineMapsDialog(
     val savedRegions by viewModel.offlineMapRegions.collectAsState()
     val progress by viewModel.offlineDownloadProgress.collectAsState()
     val cacheSizeMb by viewModel.offlineCacheSizeMb.collectAsState()
+    val offlinePoiStatus by viewModel.offlinePoiStatus.collectAsState()
     val importedRoute by viewModel.importedRoute.collectAsState()
     val inspectedTrail by viewModel.inspectedTrail.collectAsState()
     val activeTrailPoints by viewModel.activeTrailPoints.collectAsState()
@@ -146,11 +147,18 @@ fun OfflineMapsDialog(
         )
     }
     var detailTier by rememberSaveable { mutableStateOf(OfflineDetailTier.STANDARD) }
+    var corridorHalfWidthKm by rememberSaveable { mutableStateOf(1.5) }
     var regionName by rememberSaveable { mutableStateOf("") }
     var showClearCacheConfirm by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.refreshTileCacheSize()
+    }
+
+    LaunchedEffect(progress.isDownloading) {
+        if (progress.isDownloading) {
+            regionName = ""
+        }
     }
 
     val targetBox: BoundingBox? = remember(areaMode, currentMapBounds, currentLocation) {
@@ -166,12 +174,12 @@ fun OfflineMapsDialog(
         }
     }
 
-    val estimate = remember(areaMode, targetBox, activeCorridorPoints, selectedType, detailTier) {
+    val estimate = remember(areaMode, targetBox, activeCorridorPoints, corridorHalfWidthKm, selectedType, detailTier) {
         if (areaMode == OfflineAreaMode.ROUTE_CORRIDOR) {
             if (activeCorridorPoints.size >= 2) {
                 viewModel.estimateCorridorRegion(
                     points = activeCorridorPoints,
-                    halfWidthKm = 1.5,
+                    halfWidthKm = corridorHalfWidthKm,
                     tileType = selectedType,
                     minZoom = detailTier.minZoom,
                     maxZoom = detailTier.maxZoom
@@ -372,8 +380,42 @@ fun OfflineMapsDialog(
                                         color = colorScheme.onErrorContainer
                                     )
                                 }
-                                TextButton(onClick = { viewModel.clearOfflineDownloadError() }) {
+                                TextButton(
+                                    onClick = { viewModel.clearOfflineDownloadError() },
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                ) {
                                     Text("Dismiss", fontSize = 11.sp)
+                                }
+                            }
+                        }
+                    }
+
+                    if (offlinePoiStatus != null) {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                            border = BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.45f)),
+                            modifier = Modifier.fillMaxWidth().testTag("offline_poi_status_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(start = 10.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                    Icon(Icons.Default.OfflinePin, contentDescription = null, tint = colorScheme.secondary, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = offlinePoiStatus!!,
+                                        fontSize = 11.sp,
+                                        color = colorScheme.onSecondaryContainer
+                                    )
+                                }
+                                TextButton(
+                                    onClick = { viewModel.clearOfflinePoiStatus() },
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                ) {
+                                    Text("OK", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -440,10 +482,26 @@ fun OfflineMapsDialog(
                             }
                             if (areaMode == OfflineAreaMode.ROUTE_CORRIDOR && activeCorridorPoints.size >= 2) {
                                 Text(
-                                    text = "Caches a ±1.5 km strip & tourism POIs along \"$activeCorridorLabel\" to save storage.",
+                                    text = "Caches a ±${String.format(Locale.US, "%.1f", corridorHalfWidthKm)} km strip & POIs along \"$activeCorridorLabel\".",
                                     fontSize = 10.sp,
                                     color = colorScheme.primary
                                 )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    listOf(1.0 to "±1 km", 1.5 to "±1.5 km", 3.0 to "±3 km").forEach { (widthKm, label) ->
+                                        FilterChip(
+                                            selected = corridorHalfWidthKm == widthKm,
+                                            enabled = !progress.isDownloading,
+                                            onClick = { corridorHalfWidthKm = widthKm },
+                                            label = { Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                                            shape = CircleShape,
+                                            colors = offlineChipColors,
+                                            modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                                        )
+                                    }
+                                }
                             }
 
                             // Tile Layer Selection
@@ -550,7 +608,11 @@ fun OfflineMapsDialog(
                                             latitude = region.centerLat,
                                             longitude = region.centerLng,
                                             subtitle = "Offline ${region.tileType.label} (Z${region.minZoom}–${region.maxZoom})",
-                                            targetZoom = region.maxZoom.toDouble().coerceIn(13.0, 17.5)
+                                            targetZoom = region.maxZoom.toDouble().coerceIn(13.0, 17.5),
+                                            bboxNorth = region.northLat,
+                                            bboxSouth = region.southLat,
+                                            bboxEast = region.eastLng,
+                                            bboxWest = region.westLng
                                         )
                                     )
                                     onDismiss()
@@ -612,7 +674,7 @@ fun OfflineMapsDialog(
                             viewModel.startCorridorOfflineDownload(
                                 name = finalName,
                                 points = activeCorridorPoints,
-                                halfWidthKm = 1.5,
+                                halfWidthKm = corridorHalfWidthKm,
                                 tileType = selectedType,
                                 minZoom = detailTier.minZoom,
                                 maxZoom = detailTier.maxZoom
@@ -627,7 +689,6 @@ fun OfflineMapsDialog(
                                 maxZoom = detailTier.maxZoom
                             )
                         }
-                        regionName = ""
                     },
                     enabled = canDownload && !exceedsCap && !progress.isDownloading && estTiles > 0,
                     shape = CircleShape,

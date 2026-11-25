@@ -73,22 +73,46 @@ class OfflineMapManager(private val context: Context) {
             return y.coerceIn(0L, n - 1L)
         }
 
+        fun normalizeLongitude(lon: Double): Double {
+            if (!lon.isFinite()) return 0.0
+            var wrapped = ((lon + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
+            if (wrapped == -180.0 && lon > 0.0) wrapped = 180.0
+            return wrapped
+        }
+
+        fun splitBoxAtAntimeridian(box: CorridorTileBox): List<CorridorTileBox> {
+            return if (box.west <= box.east) {
+                listOf(box)
+            } else {
+                listOf(
+                    CorridorTileBox(north = box.north, south = box.south, east = 180.0, west = box.west),
+                    CorridorTileBox(north = box.north, south = box.south, east = box.east, west = -180.0)
+                )
+            }
+        }
+
         /**
          * Samples a polyline at `spacingMeters` intervals (plus start & end) and builds
          * overlapping ±halfWidthKm square corridor boxes along the route.
+         * When `spacingMeters <= 0`, automatically scales spacing to `max(1000m, halfWidth * 1.4)`
+         * to minimize tile overlap while guaranteeing corner-free coverage.
          */
         fun computeCorridorBoxes(
             points: List<LocationPoint>,
             halfWidthKm: Double = 1.5,
-            spacingMeters: Double = 1000.0
+            spacingMeters: Double = -1.0
         ): List<CorridorTileBox> {
             if (points.isEmpty()) return emptyList()
             val safeHalfKm = halfWidthKm.coerceIn(0.3, 15.0)
-            val safeSpacing = spacingMeters.coerceAtLeast(250.0)
+            val resolvedSpacing = if (spacingMeters > 0.0) {
+                spacingMeters.coerceAtLeast(250.0)
+            } else {
+                maxOf(1000.0, safeHalfKm * 1000.0 * 1.4)
+            }
             val sampled = mutableListOf<LocationPoint>()
             var lastKept: LocationPoint? = null
             for (pt in points) {
-                if (lastKept == null || haversineMeters(lastKept.latitude, lastKept.longitude, pt.latitude, pt.longitude) >= safeSpacing) {
+                if (lastKept == null || haversineMeters(lastKept.latitude, lastKept.longitude, pt.latitude, pt.longitude) >= resolvedSpacing) {
                     sampled.add(pt)
                     lastKept = pt
                 }
@@ -101,12 +125,12 @@ class OfflineMapManager(private val context: Context) {
             return sampled.map { pt ->
                 val latDelta = safeHalfKm / 111.32
                 val cosLat = cos(Math.toRadians(pt.latitude)).coerceAtLeast(0.15)
-                val lngDelta = safeHalfKm / (111.32 * cosLat)
+                val lngDelta = (safeHalfKm / (111.32 * cosLat)).coerceAtMost(179.0)
                 CorridorTileBox(
                     north = (pt.latitude + latDelta).coerceAtMost(85.0),
                     south = (pt.latitude - latDelta).coerceAtLeast(-85.0),
-                    east = (pt.longitude + lngDelta).coerceAtMost(180.0),
-                    west = (pt.longitude - lngDelta).coerceAtLeast(-180.0)
+                    east = normalizeLongitude(pt.longitude + lngDelta),
+                    west = normalizeLongitude(pt.longitude - lngDelta)
                 )
             }
         }
@@ -115,15 +139,35 @@ class OfflineMapManager(private val context: Context) {
             if (boxes.isEmpty()) return null
             var n = -90.0
             var s = 90.0
-            var e = -180.0
-            var w = 180.0
             for (b in boxes) {
                 if (b.north > n) n = b.north
                 if (b.south < s) s = b.south
-                if (b.east > e) e = b.east
-                if (b.west < w) w = b.west
             }
-            return CorridorTileBox(north = n, south = s, east = e, west = w)
+            val crossesAntimeridian = boxes.any { it.west > it.east }
+            if (!crossesAntimeridian) {
+                var e = -180.0
+                var w = 180.0
+                for (b in boxes) {
+                    if (b.east > e) e = b.east
+                    if (b.west < w) w = b.west
+                }
+                return CorridorTileBox(north = n, south = s, east = e, west = w)
+            }
+            // Shift longitudes onto [0, 360) for antimeridian-crossing unions
+            var minShifted = 360.0
+            var maxShifted = 0.0
+            for (b in boxes) {
+                val wS = if (b.west < 0.0) b.west + 360.0 else b.west
+                val eS = if (b.east < 0.0) b.east + 360.0 else b.east
+                if (wS < minShifted) minShifted = wS
+                if (eS > maxShifted) maxShifted = eS
+            }
+            return CorridorTileBox(
+                north = n,
+                south = s,
+                east = normalizeLongitude(maxShifted),
+                west = normalizeLongitude(minShifted)
+            )
         }
 
         fun kbPerTileFor(tileType: MapTileType): Float = when (tileType) {
@@ -135,6 +179,7 @@ class OfflineMapManager(private val context: Context) {
 
         /**
          * Estimates exact deduplicated tile count across route corridor boxes using packed 64-bit `(z, x, y)` keys.
+         * Supports boxes crossing the ±180° antimeridian.
          * Returns Triple(totalTilesIncludingOverlay, estimatedMb, corridorBoxes).
          */
         fun estimateCorridorTilesAndMb(
@@ -157,7 +202,7 @@ class OfflineMapManager(private val context: Context) {
                 val south = box.south.coerceIn(-85.0511, 85.0511)
                 val west = box.west.coerceIn(-180.0, 180.0)
                 val east = box.east.coerceIn(-180.0, 180.0)
-                if (north <= south) continue
+                if (north <= south || west == east) continue
 
                 for (z in safeMin..safeMax) {
                     val n = 1L shl z
@@ -170,6 +215,21 @@ class OfflineMapManager(private val context: Context) {
 
                     if (west <= east) {
                         for (x in xMin..xMax) {
+                            for (y in yLow..yHigh) {
+                                val key = (z.toLong() shl 52) or (x shl 26) or y
+                                seenKeys.add(key)
+                                if (seenKeys.size >= cap) break@outer
+                            }
+                        }
+                    } else {
+                        for (x in xMin until n) {
+                            for (y in yLow..yHigh) {
+                                val key = (z.toLong() shl 52) or (x shl 26) or y
+                                seenKeys.add(key)
+                                if (seenKeys.size >= cap) break@outer
+                            }
+                        }
+                        for (x in 0L..xMax) {
                             for (y in yLow..yHigh) {
                                 val key = (z.toLong() shl 52) or (x shl 26) or y
                                 seenKeys.add(key)
@@ -396,8 +456,8 @@ class OfflineMapManager(private val context: Context) {
                         if (isCancelled) {
                             finishWithError("Download cancelled.")
                         } else {
-                            // Even if a few edge tiles 404/timeout, save partial region if most succeeded
-                            if (errors < max(1, baseCount / 3)) {
+                            // Fail when more than ~12.5% of base tiles fail to download
+                            if (errors <= max(2, baseCount / 8)) {
                                 completeSuccess(cleanName, box, effectiveType, safeMin, safeMax, estTiles, estMb, onCompleted)
                             } else {
                                 finishWithError("Download failed ($errors tiles could not be fetched). Check network connection.")
@@ -472,27 +532,31 @@ class OfflineMapManager(private val context: Context) {
         data class DownloadPassJob(
             val source: org.osmdroid.tileprovider.tilesource.ITileSource,
             val box: BoundingBox,
-            val boxWeightTiles: Int
+            val boxWeightTiles: Int,
+            val estimatedBoxTiles: Int
         )
 
+        val splitBoxes = rawBoxes.flatMap { splitBoxAtAntimeridian(it) }
         val jobs = mutableListOf<DownloadPassJob>()
-        val perBoxBaseWeights = rawBoxes.map { b ->
+        val perBoxBaseWeights = splitBoxes.map { b ->
             val bb = BoundingBox(b.north, b.east, b.south, b.west)
             estimateRegionTilesAndMb(bb, MapTileType.HUMANITARIAN, safeMin, safeMax).first.coerceAtLeast(1)
         }
         val rawSum = perBoxBaseWeights.sum().coerceAtLeast(1)
         val baseTarget = if (overlaySource != null) estTiles / 2 else estTiles
 
-        rawBoxes.forEachIndexed { idx, b ->
+        splitBoxes.forEachIndexed { idx, b ->
             val bb = BoundingBox(b.north, b.east, b.south, b.west)
-            val scaledWeight = ((perBoxBaseWeights[idx].toDouble() / rawSum) * baseTarget).toInt().coerceAtLeast(1)
-            jobs.add(DownloadPassJob(baseSource, bb, scaledWeight))
+            val estBoxTiles = perBoxBaseWeights[idx]
+            val scaledWeight = ((estBoxTiles.toDouble() / rawSum) * baseTarget).toInt().coerceAtLeast(1)
+            jobs.add(DownloadPassJob(baseSource, bb, scaledWeight, estBoxTiles))
         }
         if (overlaySource != null) {
-            rawBoxes.forEachIndexed { idx, b ->
+            splitBoxes.forEachIndexed { idx, b ->
                 val bb = BoundingBox(b.north, b.east, b.south, b.west)
-                val scaledWeight = ((perBoxBaseWeights[idx].toDouble() / rawSum) * (estTiles - baseTarget)).toInt().coerceAtLeast(1)
-                jobs.add(DownloadPassJob(overlaySource, bb, scaledWeight))
+                val estBoxTiles = perBoxBaseWeights[idx]
+                val scaledWeight = ((estBoxTiles.toDouble() / rawSum) * (estTiles - baseTarget)).toInt().coerceAtLeast(1)
+                jobs.add(DownloadPassJob(overlaySource, bb, scaledWeight, estBoxTiles))
             }
         }
 
@@ -516,6 +580,7 @@ class OfflineMapManager(private val context: Context) {
                 return
             }
             val job = jobs[jobIndex]
+            var activeBoxTotal = job.estimatedBoxTiles.coerceAtLeast(1)
             try {
                 val mgr = CacheManager(job.source, tileWriter, safeMin, safeMax)
                 activeCacheManager = mgr
@@ -533,7 +598,10 @@ class OfflineMapManager(private val context: Context) {
                         }
 
                         override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {
-                            val approx = (accumulatedProgress + progress.coerceIn(0, job.boxWeightTiles)).coerceIn(0, estTiles)
+                            val scaledBoxProgress = ((progress.toDouble() / activeBoxTotal.toDouble()) * job.boxWeightTiles)
+                                .toInt()
+                                .coerceIn(0, job.boxWeightTiles)
+                            val approx = (accumulatedProgress + scaledBoxProgress).coerceIn(0, estTiles)
                             _downloadProgress.value = _downloadProgress.value.copy(
                                 completedTiles = approx,
                                 currentZoom = currentZoomLevel
@@ -542,7 +610,9 @@ class OfflineMapManager(private val context: Context) {
                         }
 
                         override fun downloadStarted() {}
-                        override fun setPossibleTilesInArea(total: Int) {}
+                        override fun setPossibleTilesInArea(total: Int) {
+                            if (total > 0) activeBoxTotal = total
+                        }
 
                         override fun onTaskFailed(errors: Int) {
                             if (isCancelled) {
@@ -550,7 +620,7 @@ class OfflineMapManager(private val context: Context) {
                                 return
                             }
                             val nextErr = cumulativeErrors + errors
-                            if (nextErr < max(4, estTiles / 2)) {
+                            if (nextErr <= max(4, estTiles / 8)) {
                                 val nextAccum = (accumulatedProgress + job.boxWeightTiles).coerceIn(0, estTiles)
                                 runJob(jobIndex + 1, nextAccum, nextErr)
                             } else {
@@ -614,7 +684,7 @@ class OfflineMapManager(private val context: Context) {
                             finishWithError("Download cancelled.")
                         } else {
                             val overlayCount = max(1, totalTiles - baseCount)
-                            if (errors < max(1, overlayCount / 2)) {
+                            if (errors <= max(2, overlayCount / 5)) {
                                 completeSuccess(cleanName, box, effectiveType, minZoom, maxZoom, totalTiles, estMb, onCompleted)
                             } else {
                                 finishWithError("Reference labels failed ($errors tiles). Satellite imagery cached; check network to retry.")
@@ -681,11 +751,19 @@ class OfflineMapManager(private val context: Context) {
 
     fun cancelActiveDownload() {
         isCancelled = true
+        val pendingWriter = activeTileWriter
         try {
             activeCacheManager?.cancelAllJobs()
         } catch (_: Exception) {}
-        // Avoid detaching SqlTileWriter immediately while osmdroid workers wind down; let GC/callback finalize safely
         finishWithError("Download cancelled.", detachWriter = false)
+        if (pendingWriter != null) {
+            ioScope.launch {
+                kotlinx.coroutines.delay(2500L)
+                try {
+                    pendingWriter.onDetach()
+                } catch (_: Exception) {}
+            }
+        }
     }
 
     fun clearDownloadError() {

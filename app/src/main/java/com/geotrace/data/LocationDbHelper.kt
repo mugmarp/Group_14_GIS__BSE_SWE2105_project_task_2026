@@ -19,7 +19,7 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
 
     companion object {
         const val DATABASE_NAME = "gis_tracker.db"
-        const val DATABASE_VERSION = 7
+        const val DATABASE_VERSION = 8
 
         const val TABLE_POINTS = "location_points"
         const val TABLE_SESSIONS = "tracking_sessions"
@@ -306,6 +306,10 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
             )
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_saved_places_name ON $TABLE_SAVED_PLACES(name)")
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_saved_places_trip ON $TABLE_SAVED_PLACES(trip_id)")
+        }
+        if (oldVersion < 8) {
+            db.execSQL("UPDATE $TABLE_SESSIONS SET trip_id = NULL WHERE trip_id IS NOT NULL AND trip_id NOT IN (SELECT id FROM $TABLE_TRIPS)")
+            db.execSQL("UPDATE $TABLE_SAVED_PLACES SET trip_id = NULL WHERE trip_id IS NOT NULL AND trip_id NOT IN (SELECT id FROM $TABLE_TRIPS)")
         }
     }
 }

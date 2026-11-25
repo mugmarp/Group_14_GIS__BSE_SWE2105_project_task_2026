@@ -94,4 +94,42 @@ class CorridorTilePlannerTest {
         assertTrue(satTiles > 0)
         assertEquals(satTiles * 2, hybridTiles)
     }
+
+    @Test
+    fun `normalizeLongitude and splitBoxAtAntimeridian wrap and split 180 meridian crossings`() {
+        assertEquals(179.0, OfflineMapManager.normalizeLongitude(-181.0), 1e-6)
+        assertEquals(-179.0, OfflineMapManager.normalizeLongitude(181.0), 1e-6)
+        assertEquals(180.0, OfflineMapManager.normalizeLongitude(180.0), 1e-6)
+
+        val crossingBox = OfflineMapManager.CorridorTileBox(
+            north = -16.7,
+            south = -16.9,
+            east = -179.8,
+            west = 179.8
+        )
+        val splits = OfflineMapManager.splitBoxAtAntimeridian(crossingBox)
+        assertEquals(2, splits.size)
+        assertEquals(179.8, splits[0].west, 1e-6)
+        assertEquals(180.0, splits[0].east, 1e-6)
+        assertEquals(-180.0, splits[1].west, 1e-6)
+        assertEquals(-179.8, splits[1].east, 1e-6)
+    }
+
+    @Test
+    fun `estimateCorridorTilesAndMb handles antimeridian route without scanning entire globe`() {
+        val fijiRoute = listOf(
+            pt(-16.80, 179.995, ts = 1_700_000_000_000L),
+            pt(-16.80, -179.995, ts = 1_700_000_060_000L)
+        )
+        val (tiles, _, boxes) = OfflineMapManager.estimateCorridorTilesAndMb(
+            points = fijiRoute,
+            halfWidthKm = 1.5,
+            tileType = MapTileType.HUMANITARIAN,
+            minZoom = 12,
+            maxZoom = 14
+        )
+        assertTrue(tiles in 1..150)
+        val union = OfflineMapManager.unionBoundingBox(boxes)!!
+        assertTrue("Expected union west (${union.west}) > east (${union.east}) across antimeridian", union.west > union.east)
+    }
 }

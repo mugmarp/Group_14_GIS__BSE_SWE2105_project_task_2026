@@ -185,4 +185,30 @@ class TrackExporterTest {
         assertFalse(noExtras.contains("Altitude:"))
         assertTrue(noExtras.contains("geo:-0.59470,30.65450"))
     }
+
+    @Test
+    fun `exports include tripId and sanitized photo filename without leaking internal filesystem path`() {
+        val secretDirPath = "/data/user/0/com.geotrace.secret/files/photos/field_camp_01.jpg"
+        val tripSession = baseSession.copy(tripId = "trip-rwenzori-2026")
+        val photoWaypoints = listOf(
+            sampleWaypoints.first().copy(photoUri = secretDirPath)
+        )
+
+        val gpx = TrackExporter.toGpx(tripSession, samplePoints, photoWaypoints)
+        assertTrue(gpx.contains("<geotrace:trip_id>trip-rwenzori-2026</geotrace:trip_id>"))
+        assertTrue(gpx.contains("<geotrace:photo>field_camp_01.jpg</geotrace:photo>"))
+        assertFalse(gpx.contains("/data/user/0/"))
+
+        val kml = TrackExporter.toKml(tripSession, samplePoints, photoWaypoints)
+        assertTrue(kml.contains("""<Data name="tripId"><value>trip-rwenzori-2026</value></Data>"""))
+        assertTrue(kml.contains("""<Data name="photoFile"><value>field_camp_01.jpg</value></Data>"""))
+        assertFalse(kml.contains("/data/user/0/"))
+
+        val geoJson = TrackExporter.toGeoJson(tripSession, samplePoints, photoWaypoints)
+        val root = JSONObject(geoJson)
+        val features = root.getJSONArray("features")
+        assertEquals("trip-rwenzori-2026", features.getJSONObject(0).getJSONObject("properties").getString("tripId"))
+        assertEquals("field_camp_01.jpg", features.getJSONObject(1).getJSONObject("properties").getString("photoFile"))
+        assertFalse(geoJson.contains("/data/user/0/"))
+    }
 }

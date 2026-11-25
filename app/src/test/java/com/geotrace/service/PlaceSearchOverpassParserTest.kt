@@ -89,4 +89,57 @@ class PlaceSearchOverpassParserTest {
         assertTrue(pois[1].subtitle.contains("Kampala"))
         assertEquals("Alpha Supermarket", pois[2].name)
     }
+
+    @Test
+    fun `parseOverpassElementsJson keeps higher priority POI when generic POI appears first at same coordinate`() {
+        val json = """
+            {
+              "elements": [
+                {
+                  "type": "node",
+                  "id": 10,
+                  "lat": 0.3100,
+                  "lon": 32.5800,
+                  "tags": { "name": "Community Borehole", "highway": "track" }
+                },
+                {
+                  "type": "node",
+                  "id": 11,
+                  "lat": 0.3100,
+                  "lon": 32.5800,
+                  "tags": { "amenity": "drinking_water", "name": "Community Borehole" }
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val pois = PlaceSearchManager.parseOverpassElementsJson(
+            responseText = json,
+            regionId = "reg-1",
+            regionName = "Region"
+        )
+        assertEquals(1, pois.size)
+        assertEquals("Community Borehole", pois[0].name)
+        assertEquals("Drinking water", pois[0].category)
+    }
+
+    @Test
+    fun `parseOverpassElementsJson handles malformed JSON without throwing`() {
+        val empty = PlaceSearchManager.parseOverpassElementsJson("{not valid json", "r1", "R1")
+        assertTrue(empty.isEmpty())
+    }
+
+    @Test
+    fun `parseDirectCoordinates prioritizes q param over geo 0 0 and rejects bare Null Island`() {
+        val androidGeoIntent = PlaceSearchManager.parseDirectCoordinates("geo:0,0?q=-0.5947,30.6545(Base Camp)")
+        assertEquals(-0.5947, androidGeoIntent!!.latitude, 1e-4)
+        assertEquals(30.6545, androidGeoIntent.longitude, 1e-4)
+
+        val bareNullIsland = PlaceSearchManager.parseDirectCoordinates("geo:0,0")
+        assertNull(bareNullIsland)
+
+        val mapsAt = PlaceSearchManager.parseDirectCoordinates("https://maps.google.com/@-0.5947,30.6545,15z")
+        assertEquals(-0.5947, mapsAt!!.latitude, 1e-4)
+        assertEquals(30.6545, mapsAt.longitude, 1e-4)
+    }
 }

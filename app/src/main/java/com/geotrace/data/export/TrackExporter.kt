@@ -110,9 +110,15 @@ object TrackExporter {
             "    <desc>${escapeXml("Distance: ${session.formattedDistance} | Duration: ${session.formattedDuration} | Mode: ${session.trackingMode.name}")}</desc>\n"
         )
         sb.append("    <time>${formatIsoUtc(session.startTime)}</time>\n")
+        session.tripId?.takeIf { it.isNotBlank() }?.let { tripId ->
+            sb.append("    <extensions>\n")
+            sb.append("      <geotrace:trip_id>${escapeXml(tripId)}</geotrace:trip_id>\n")
+            sb.append("    </extensions>\n")
+        }
         sb.append("  </metadata>\n")
 
         for (w in validWaypoints) {
+            val photoFileName = sanitizePhotoFileName(w.photoUri)
             sb.append("""  <wpt lat="${w.latitude}" lon="${w.longitude}">""").append('\n')
             sb.append("    <ele>${w.altitude.finiteOr()}</ele>\n")
             sb.append("    <time>${formatIsoUtc(w.timestamp)}</time>\n")
@@ -123,6 +129,9 @@ object TrackExporter {
             sb.append("    <sym>Flag</sym>\n")
             sb.append("    <extensions>\n")
             sb.append("      <geotrace:accuracy>${w.accuracy.finiteOr()}</geotrace:accuracy>\n")
+            if (photoFileName != null) {
+                sb.append("      <geotrace:photo>${escapeXml(photoFileName)}</geotrace:photo>\n")
+            }
             sb.append("    </extensions>\n")
             sb.append("  </wpt>\n")
         }
@@ -170,6 +179,9 @@ object TrackExporter {
         sb.append(
             "    <description>${escapeXml("GeoTrace Trail - Distance: ${session.formattedDistance}, Duration: ${session.formattedDuration}, Trackpoints: ${validPoints.size}, Waypoints: ${validWaypoints.size}")}</description>\n"
         )
+        session.tripId?.takeIf { it.isNotBlank() }?.let { tripId ->
+            sb.append("    <ExtendedData><Data name=\"tripId\"><value>${escapeXml(tripId)}</value></Data></ExtendedData>\n")
+        }
         sb.append("    <Style id=\"trackStyle\">\n")
         sb.append("      <LineStyle>\n")
         sb.append("        <color>ff946100</color>\n")
@@ -187,6 +199,7 @@ object TrackExporter {
             sb.append("    <Folder>\n")
             sb.append("      <name>Waypoints</name>\n")
             for (w in validWaypoints) {
+                val photoFileName = sanitizePhotoFileName(w.photoUri)
                 sb.append("      <Placemark>\n")
                 sb.append("        <name>${escapeXml(w.name)}</name>\n")
                 val desc = buildString {
@@ -195,6 +208,9 @@ object TrackExporter {
                 }
                 sb.append("        <description>${escapeXml(desc)}</description>\n")
                 sb.append("        <TimeStamp><when>${formatIsoUtc(w.timestamp)}</when></TimeStamp>\n")
+                if (photoFileName != null) {
+                    sb.append("        <ExtendedData><Data name=\"photoFile\"><value>${escapeXml(photoFileName)}</value></Data></ExtendedData>\n")
+                }
                 sb.append("        <styleUrl>#waypointStyle</styleUrl>\n")
                 sb.append("        <Point><coordinates>${w.longitude},${w.latitude},${w.altitude.finiteOr()}</coordinates></Point>\n")
                 sb.append("      </Placemark>\n")
@@ -295,6 +311,7 @@ object TrackExporter {
         fun buildTrackProperties(pointCount: Int): JSONObject = JSONObject().apply {
             put("featureType", "track")
             put("sessionId", session.id)
+            session.tripId?.takeIf { it.isNotBlank() }?.let { put("tripId", it) }
             put("name", session.name)
             put("trackingMode", session.trackingMode.name)
             put("startTimeUtc", formatIsoUtc(session.startTime))
@@ -385,6 +402,7 @@ object TrackExporter {
                 put("id", w.id)
                 put("name", w.name)
                 if (w.note.isNotBlank()) put("note", w.note)
+                sanitizePhotoFileName(w.photoUri)?.let { put("photoFile", it) }
                 put("accuracyMeters", w.accuracy.finiteOr().toDouble())
                 put("timestampUtc", formatIsoUtc(w.timestamp))
             }
@@ -498,5 +516,13 @@ object TrackExporter {
         }
         val needsQuotes = safeValue.contains(',') || safeValue.contains('"') || safeValue != cleaned
         return if (!needsQuotes) safeValue else "\"${safeValue.replace("\"", "\"\"")}\""
+    }
+
+    private fun sanitizePhotoFileName(photoUri: String): String? {
+        val raw = photoUri.trim()
+        if (raw.isEmpty()) return null
+        val candidate = File(raw.substringBefore('?').substringBefore('#')).name.trim()
+        if (candidate.isEmpty() || candidate == "." || candidate == "..") return null
+        return candidate
     }
 }
