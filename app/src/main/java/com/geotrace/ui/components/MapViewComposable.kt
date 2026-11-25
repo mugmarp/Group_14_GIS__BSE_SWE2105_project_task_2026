@@ -143,6 +143,7 @@ private data class MarkerInspectData(
     val badge: String,
     val latitude: Double? = null,
     val longitude: Double? = null,
+    val altitude: Double = 0.0,
     val photoUri: String = "",
     val savedPlaceId: String? = null
 )
@@ -196,10 +197,16 @@ private data class UserTargetLayerSig(
     val focusedTarget: com.geotrace.model.MapFocusTarget?,
     val selectedSearchPin: com.geotrace.model.SearchPlaceResult?,
     val droppedInspectPin: GeoPoint?,
-    val parkedSpot: ParkedSpot?,
-    val savedPlaces: List<SavedPlace>,
     val activeGuideTarget: ActiveGuideTarget?,
     val userPinColorArgb: Int
+)
+
+private data class StaticPinsLayerSig(
+    val droppedInspectPin: GeoPoint?,
+    val parkedSpot: ParkedSpot?,
+    val savedPlaces: List<SavedPlace>,
+    val selectedSearchPin: com.geotrace.model.SearchPlaceResult?,
+    val coordinateFormat: com.geotrace.model.CoordinateFormat
 )
 
 private fun normalizeMapOrientationSigned(degrees: Float): Float {
@@ -368,7 +375,7 @@ fun MapViewComposable(
     onClearGuideTarget: (() -> Unit)? = null,
     onSaveParkedSpot: ((Double, Double, String) -> Unit)? = null,
     onClearParkedSpot: (() -> Unit)? = null,
-    onOpenSavePlaceDialog: ((String, Double, Double) -> Unit)? = null,
+    onOpenSavePlaceDialog: ((String, Double, Double, Double) -> Unit)? = null,
     onDeleteSavedPlace: ((String) -> Unit)? = null,
     onCompassStateChanged: ((Float?, Boolean) -> Unit)? = null,
     bottomOverlayPadding: Dp = 0.dp,
@@ -784,6 +791,7 @@ fun MapViewComposable(
     val referenceRouteLayer = remember { FolderOverlay() }
     val trailLayer = remember { FolderOverlay() }
     val peersLayer = remember { FolderOverlay() }
+    val staticPinsLayer = remember { FolderOverlay() }
     val userTargetLayer = remember { FolderOverlay() }
 
     val lastGeofenceSigHolder = remember { arrayOfNulls<GeofenceLayerSig>(1) }
@@ -791,6 +799,7 @@ fun MapViewComposable(
     val lastReferenceRouteSigHolder = remember { arrayOfNulls<ReferenceRouteLayerSig>(1) }
     val lastTrailSigHolder = remember { arrayOfNulls<TrailLayerSig>(1) }
     val lastPeersSigHolder = remember { arrayOfNulls<PeersLayerSig>(1) }
+    val lastStaticPinsSigHolder = remember { arrayOfNulls<StaticPinsLayerSig>(1) }
     val lastUserTargetSigHolder = remember { arrayOfNulls<UserTargetLayerSig>(1) }
     val hasAttachedBaseLayersHolder = remember { booleanArrayOf(false) }
 
@@ -1022,6 +1031,7 @@ fun MapViewComposable(
                     map.overlays.add(referenceRouteLayer)
                     map.overlays.add(trailLayer)
                     map.overlays.add(peersLayer)
+                    map.overlays.add(staticPinsLayer)
                     map.overlays.add(userTargetLayer)
                     map.overlays.add(persistentEventsOverlay)
                     map.overlays.add(persistentRotationOverlay)
@@ -1055,15 +1065,34 @@ fun MapViewComposable(
                     if (route != null) {
                         val routeTeal = android.graphics.Color.parseColor("#0D9488")
                         if (route.points.size >= 2) {
-                            val refGeoPts = route.points.map { GeoPoint(it.latitude, it.longitude) }
-                            referenceRouteLayer.add(Polyline(map).apply {
-                                outlinePaint.color = routeTeal
-                                outlinePaint.strokeWidth = 8f
-                                outlinePaint.strokeCap = Paint.Cap.ROUND
-                                outlinePaint.strokeJoin = Paint.Join.ROUND
-                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(20f, 10f), 0f)
-                                setPoints(refGeoPts)
-                            })
+                            val currentSeg = mutableListOf<GeoPoint>()
+                            for (pt in route.points) {
+                                val geoPt = GeoPoint(pt.latitude, pt.longitude)
+                                if (currentSeg.isNotEmpty() && currentSeg.last().distanceToAsDouble(geoPt) > 5000.0) {
+                                    if (currentSeg.size >= 2) {
+                                        referenceRouteLayer.add(Polyline(map).apply {
+                                            outlinePaint.color = routeTeal
+                                            outlinePaint.strokeWidth = 8f
+                                            outlinePaint.strokeCap = Paint.Cap.ROUND
+                                            outlinePaint.strokeJoin = Paint.Join.ROUND
+                                            outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(20f, 10f), 0f)
+                                            setPoints(currentSeg.toList())
+                                        })
+                                    }
+                                    currentSeg.clear()
+                                }
+                                currentSeg.add(geoPt)
+                            }
+                            if (currentSeg.size >= 2) {
+                                referenceRouteLayer.add(Polyline(map).apply {
+                                    outlinePaint.color = routeTeal
+                                    outlinePaint.strokeWidth = 8f
+                                    outlinePaint.strokeCap = Paint.Cap.ROUND
+                                    outlinePaint.strokeJoin = Paint.Join.ROUND
+                                    outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(20f, 10f), 0f)
+                                    setPoints(currentSeg)
+                                })
+                            }
                             val first = route.points.first()
                             val last = route.points.last()
                             referenceRouteLayer.add(Marker(map).apply {
@@ -1079,7 +1108,8 @@ fun MapViewComposable(
                                         detail = m.snippet ?: "",
                                         badge = "ROUTE START",
                                         latitude = first.latitude,
-                                        longitude = first.longitude
+                                        longitude = first.longitude,
+                                        altitude = first.altitude
                                     )
                                     true
                                 }
@@ -1097,7 +1127,8 @@ fun MapViewComposable(
                                         detail = m.snippet ?: "",
                                         badge = "ROUTE END",
                                         latitude = last.latitude,
-                                        longitude = last.longitude
+                                        longitude = last.longitude,
+                                        altitude = last.altitude
                                     )
                                     true
                                 }
@@ -1122,7 +1153,8 @@ fun MapViewComposable(
                                             detail = m.snippet ?: "",
                                             badge = "ROUTE WPT",
                                             latitude = wp.latitude,
-                                            longitude = wp.longitude
+                                            longitude = wp.longitude,
+                                            altitude = wp.altitude
                                         )
                                         true
                                     }
@@ -1201,7 +1233,8 @@ fun MapViewComposable(
                                     detail = m.snippet ?: "",
                                     badge = "START",
                                     latitude = startPt.latitude,
-                                    longitude = startPt.longitude
+                                    longitude = startPt.longitude,
+                                    altitude = startPt.altitude
                                 )
                                 true
                             }
@@ -1220,7 +1253,8 @@ fun MapViewComposable(
                                     detail = m.snippet ?: "",
                                     badge = "END",
                                     latitude = endPt.latitude,
-                                    longitude = endPt.longitude
+                                    longitude = endPt.longitude,
+                                    altitude = endPt.altitude
                                 )
                                 true
                             }
@@ -1249,6 +1283,7 @@ fun MapViewComposable(
                                         badge = "WAYPOINT",
                                         latitude = wp.latitude,
                                         longitude = wp.longitude,
+                                        altitude = wp.altitude,
                                         photoUri = wp.photoUri
                                     )
                                     true
@@ -1542,7 +1577,105 @@ fun MapViewComposable(
                     }
                 }
 
-                // 5. Differential User Self Chevron, Target Bearing Guide Vector, & Pins Layer
+                // 5a. Differential Static Pins Layer (Dropped, Park/Camp, Saved Places, Search Pin)
+                val staticPinsSig = StaticPinsLayerSig(
+                    droppedInspectPin = droppedInspectPin,
+                    parkedSpot = parkedSpot,
+                    savedPlaces = savedPlaces,
+                    selectedSearchPin = selectedSearchPin,
+                    coordinateFormat = settings.coordinateFormat
+                )
+                if (lastStaticPinsSigHolder[0] != staticPinsSig) {
+                    lastStaticPinsSigHolder[0] = staticPinsSig
+                    anyLayerChanged = true
+                    staticPinsLayer.items.clear()
+
+                    droppedInspectPin?.let { pinPt ->
+                        staticPinsLayer.add(Marker(map).apply {
+                            position = pinPt
+                            title = "Dropped Pin"
+                            infoWindow = null
+                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                            icon = droppedPinDrawable
+                            setOnMarkerClickListener { _, _ -> true }
+                        })
+                    }
+
+                    parkedSpot?.let { spot ->
+                        if (isValidCoordinate(spot.latitude, spot.longitude)) {
+                            staticPinsLayer.add(Marker(map).apply {
+                                position = GeoPoint(spot.latitude, spot.longitude)
+                                title = spot.name
+                                val coordStr = com.geotrace.ui.screens.formatCoordinates(spot.latitude, spot.longitude, settings.coordinateFormat)
+                                snippet = coordStr
+                                infoWindow = null
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = parkedPinDrawable
+                                setOnMarkerClickListener { m, _ ->
+                                    val distTxt = currentLocationState?.let { cur ->
+                                        val d = GeoPoint(cur.latitude, cur.longitude).distanceToAsDouble(GeoPoint(spot.latitude, spot.longitude))
+                                        if (d < 1000.0) " • ${d.toInt()}m away" else String.format(Locale.US, " • %.2fkm away", d / 1000.0)
+                                    } ?: ""
+                                    selectedMarkerInfo = MarkerInspectData(
+                                        title = m.title ?: spot.name,
+                                        detail = "${coordStr}${distTxt}",
+                                        badge = "PARK / CAMP",
+                                        latitude = spot.latitude,
+                                        longitude = spot.longitude
+                                    )
+                                    true
+                                }
+                            })
+                        }
+                    }
+
+                    savedPlaces.forEach { place ->
+                        if (isValidCoordinate(place.latitude, place.longitude)) {
+                            staticPinsLayer.add(Marker(map).apply {
+                                position = GeoPoint(place.latitude, place.longitude)
+                                title = place.name
+                                val coordStr = com.geotrace.ui.screens.formatCoordinates(place.latitude, place.longitude, settings.coordinateFormat)
+                                val notePrefix = if (place.note.isNotBlank()) "${place.note} • " else ""
+                                snippet = "${place.category} • $notePrefix$coordStr"
+                                infoWindow = null
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = savedPlaceDrawableFor(place.category)
+                                setOnMarkerClickListener { m, _ ->
+                                    selectedMarkerInfo = MarkerInspectData(
+                                        title = m.title ?: place.name,
+                                        detail = m.snippet ?: "",
+                                        badge = "SAVED PLACE",
+                                        latitude = place.latitude,
+                                        longitude = place.longitude,
+                                        altitude = place.altitude,
+                                        photoUri = place.photoUri,
+                                        savedPlaceId = place.id
+                                    )
+                                    true
+                                }
+                            })
+                        }
+                    }
+
+                    selectedSearchPin?.let { place ->
+                        if (isValidCoordinate(place.latitude, place.longitude)) {
+                            staticPinsLayer.add(Marker(map).apply {
+                                position = GeoPoint(place.latitude, place.longitude)
+                                title = place.name
+                                infoWindow = null
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = searchPinDrawable
+                                setOnMarkerClickListener { _, _ ->
+                                    selectedMarkerInfo = null
+                                    droppedInspectPin = null
+                                    true
+                                }
+                            })
+                        }
+                    }
+                }
+
+                // 5b. Differential User Self Chevron & Target Bearing Guide Vector Layer
                 val userTargetSig = UserTargetLayerSig(
                     currentLocation = currentLocation,
                     resolvedBearing = resolvedUserBearing,
@@ -1551,8 +1684,6 @@ fun MapViewComposable(
                     focusedTarget = focusedTarget,
                     selectedSearchPin = selectedSearchPin,
                     droppedInspectPin = droppedInspectPin,
-                    parkedSpot = parkedSpot,
-                    savedPlaces = savedPlaces,
                     activeGuideTarget = activeGuideTarget,
                     userPinColorArgb = userPinColor.toArgb()
                 )
@@ -1564,6 +1695,13 @@ fun MapViewComposable(
                     // Target bearing guide ray (self -> active guide target / focused target / search result / dropped pin)
                     if (currentLocation != null && !isMapPickMode) {
                         val selfGeo = GeoPoint(currentLocation.latitude, currentLocation.longitude)
+                        val validFocus = focusedTarget?.takeIf {
+                            isValidCoordinate(it.latitude, it.longitude) && (it.latitude != 0.0 || it.longitude != 0.0)
+                        }
+                        val validSearch = selectedSearchPin?.takeIf {
+                            isValidCoordinate(it.latitude, it.longitude)
+                        }
+                        val preferSearchRay = validSearch != null && (validFocus == null || validSearch.requestedAtMs >= validFocus.requestedAtMs)
                         val guideTargetGeo: GeoPoint?
                         val guideRayColor: Int
                         when {
@@ -1572,16 +1710,13 @@ fun MapViewComposable(
                                 guideTargetGeo = GeoPoint(activeGuideTarget.latitude, activeGuideTarget.longitude)
                                 guideRayColor = android.graphics.Color.argb(230, 217, 119, 6)
                             }
-                            focusedTarget != null &&
-                                isValidCoordinate(focusedTarget.latitude, focusedTarget.longitude) &&
-                                (focusedTarget.latitude != 0.0 || focusedTarget.longitude != 0.0) -> {
-                                guideTargetGeo = GeoPoint(focusedTarget.latitude, focusedTarget.longitude)
-                                guideRayColor = userPinColor.copy(alpha = 0.85f).toArgb()
-                            }
-                            selectedSearchPin != null &&
-                                isValidCoordinate(selectedSearchPin.latitude, selectedSearchPin.longitude) -> {
-                                guideTargetGeo = GeoPoint(selectedSearchPin.latitude, selectedSearchPin.longitude)
+                            preferSearchRay && validSearch != null -> {
+                                guideTargetGeo = GeoPoint(validSearch.latitude, validSearch.longitude)
                                 guideRayColor = android.graphics.Color.argb(215, 15, 118, 110)
+                            }
+                            validFocus != null -> {
+                                guideTargetGeo = GeoPoint(validFocus.latitude, validFocus.longitude)
+                                guideRayColor = userPinColor.copy(alpha = 0.85f).toArgb()
                             }
                             droppedInspectPin != null -> {
                                 guideTargetGeo = droppedInspectPin
@@ -1638,94 +1773,12 @@ fun MapViewComposable(
                                     detail = m.snippet ?: "",
                                     badge = if (isCellularFix) "CELL" else "GNSS",
                                     latitude = currentLocation.latitude,
-                                    longitude = currentLocation.longitude
+                                    longitude = currentLocation.longitude,
+                                    altitude = currentLocation.altitude
                                 )
                                 true
                             }
                         })
-                    }
-
-                    droppedInspectPin?.let { pinPt ->
-                        userTargetLayer.add(Marker(map).apply {
-                            position = pinPt
-                            title = "Dropped Pin"
-                            infoWindow = null
-                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                            icon = droppedPinDrawable
-                            setOnMarkerClickListener { _, _ -> true }
-                        })
-                    }
-
-                    parkedSpot?.let { spot ->
-                        if (isValidCoordinate(spot.latitude, spot.longitude)) {
-                            userTargetLayer.add(Marker(map).apply {
-                                position = GeoPoint(spot.latitude, spot.longitude)
-                                title = spot.name
-                                val coordStr = com.geotrace.ui.screens.formatCoordinates(spot.latitude, spot.longitude, settings.coordinateFormat)
-                                val distTxt = currentLocation?.let { cur ->
-                                    val d = GeoPoint(cur.latitude, cur.longitude).distanceToAsDouble(GeoPoint(spot.latitude, spot.longitude))
-                                    if (d < 1000.0) " • ${d.toInt()}m away" else String.format(Locale.US, " • %.2fkm away", d / 1000.0)
-                                } ?: ""
-                                snippet = "${coordStr}${distTxt}"
-                                infoWindow = null
-                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                                icon = parkedPinDrawable
-                                setOnMarkerClickListener { m, _ ->
-                                    selectedMarkerInfo = MarkerInspectData(
-                                        title = m.title ?: spot.name,
-                                        detail = m.snippet ?: "",
-                                        badge = "PARK / CAMP",
-                                        latitude = spot.latitude,
-                                        longitude = spot.longitude
-                                    )
-                                    true
-                                }
-                            })
-                        }
-                    }
-
-                    savedPlaces.forEach { place ->
-                        if (isValidCoordinate(place.latitude, place.longitude)) {
-                            userTargetLayer.add(Marker(map).apply {
-                                position = GeoPoint(place.latitude, place.longitude)
-                                title = place.name
-                                val coordStr = com.geotrace.ui.screens.formatCoordinates(place.latitude, place.longitude, settings.coordinateFormat)
-                                val notePrefix = if (place.note.isNotBlank()) "${place.note} • " else ""
-                                snippet = "${place.category} • $notePrefix$coordStr"
-                                infoWindow = null
-                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                                icon = savedPlaceDrawableFor(place.category)
-                                setOnMarkerClickListener { m, _ ->
-                                    selectedMarkerInfo = MarkerInspectData(
-                                        title = m.title ?: place.name,
-                                        detail = m.snippet ?: "",
-                                        badge = "SAVED PLACE",
-                                        latitude = place.latitude,
-                                        longitude = place.longitude,
-                                        photoUri = place.photoUri,
-                                        savedPlaceId = place.id
-                                    )
-                                    true
-                                }
-                            })
-                        }
-                    }
-
-                    selectedSearchPin?.let { place ->
-                        if (isValidCoordinate(place.latitude, place.longitude)) {
-                            userTargetLayer.add(Marker(map).apply {
-                                position = GeoPoint(place.latitude, place.longitude)
-                                title = place.name
-                                infoWindow = null
-                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                                icon = searchPinDrawable
-                                setOnMarkerClickListener { _, _ ->
-                                    selectedMarkerInfo = null
-                                    droppedInspectPin = null
-                                    true
-                                }
-                            })
-                        }
                     }
                 }
 
@@ -1739,8 +1792,11 @@ fun MapViewComposable(
         )
 
         // Unified Bottom-Start Marker Inspect / Search Pin / Inspected Trail / Target Focus Card (single contextual card, zero overlap)
-        val activeFocus = if (!isMapPickMode && selectedMarkerInfo == null) focusedTarget else null
-        val activeSearch = if (!isMapPickMode && selectedMarkerInfo == null && activeFocus == null) selectedSearchPin else null
+        val rawFocus = if (!isMapPickMode && selectedMarkerInfo == null) focusedTarget else null
+        val rawSearch = if (!isMapPickMode && selectedMarkerInfo == null) selectedSearchPin else null
+        val preferSearchOverFocus = rawSearch != null && (rawFocus == null || rawSearch.requestedAtMs >= rawFocus.requestedAtMs)
+        val activeSearch = if (preferSearchOverFocus) rawSearch else null
+        val activeFocus = if (!preferSearchOverFocus) rawFocus else null
         val matchedSavedPlace = remember(activeSearch, savedPlaces) {
             val s = activeSearch ?: return@remember null
             if (!s.id.startsWith("saved_")) return@remember null
@@ -1773,6 +1829,10 @@ fun MapViewComposable(
 
         val inspectLat = selectedMarkerInfo?.latitude ?: activeFocus?.latitude ?: activeSearch?.latitude
         val inspectLon = selectedMarkerInfo?.longitude ?: activeFocus?.longitude ?: activeSearch?.longitude
+        val inspectAlt = selectedMarkerInfo?.altitude
+            ?: matchedSavedPlace?.altitude
+            ?: matchedSearchWaypoint?.altitude
+            ?: 0.0
         val hasInspectCoords = inspectLat != null && inspectLon != null && (inspectLat != 0.0 || inspectLon != 0.0)
 
         if (inspectCardTitle != null && inspectCardBadge != null) {
@@ -1806,7 +1866,8 @@ fun MapViewComposable(
                             ),
                         verticalAlignment = Alignment.Top
                     ) {
-                        val inspectPhotoUri = selectedMarkerInfo?.photoUri
+                        val inspectPhotoUri = selectedMarkerInfo?.photoUri?.takeIf { it.isNotBlank() }
+                            ?: activeSearch?.photoUri?.takeIf { it.isNotBlank() }
                             ?: matchedSavedPlace?.photoUri?.takeIf { it.isNotBlank() }
                             ?: matchedSearchWaypoint?.photoUri?.takeIf { it.isNotBlank() }
                         if (!inspectPhotoUri.isNullOrBlank()) {
@@ -2140,7 +2201,7 @@ fun MapViewComposable(
                                             .clip(CircleShape)
                                             .clickable {
                                                 val defaultLabel = if (inspectCardTitle == "Dropped Pin") "" else inspectCardTitle
-                                                onOpenSavePlaceDialog(defaultLabel, targetLat, targetLon)
+                                                onOpenSavePlaceDialog(defaultLabel, targetLat, targetLon, inspectAlt)
                                             }
                                             .testTag("inspect_save_place_btn")
                                     ) {

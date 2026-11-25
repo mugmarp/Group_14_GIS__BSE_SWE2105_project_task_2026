@@ -108,6 +108,7 @@ import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import com.geotrace.data.export.ExportFormat
 import com.geotrace.data.export.TrackExporter
+import com.geotrace.data.export.TrackImporter
 import com.geotrace.model.CoordinateFormat
 import com.geotrace.model.SavedPlace
 import com.geotrace.model.SearchPlaceResult
@@ -191,6 +192,7 @@ fun HistoryScreen(
     var showSavedPlacesDialog by rememberSaveable { mutableStateOf(false) }
     var savedPlacesTripFilterId by rememberSaveable { mutableStateOf<String?>(null) }
     var placeToAssignTrip by remember { mutableStateOf<SavedPlace?>(null) }
+    var placeToEdit by remember { mutableStateOf<SavedPlace?>(null) }
 
     LaunchedEffect(trips) {
         if (selectedTripFilterId != null && selectedTripFilterId != "__UNASSIGNED__" && trips.none { it.id == selectedTripFilterId }) {
@@ -284,8 +286,8 @@ fun HistoryScreen(
                                 if (idx >= 0) fileName = c.getString(idx) ?: fileName
                             }
                         }
-                        val text = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use {
-                            it.readText()
+                        val text = context.contentResolver.openInputStream(uri)?.use {
+                            TrackImporter.readBoundedUtf8(it)
                         } ?: ""
                         fileName to text
                     }
@@ -1398,7 +1400,8 @@ fun HistoryScreen(
                         subtitle = subtitle,
                         latitude = place.latitude,
                         longitude = place.longitude,
-                        source = SearchResultSource.SAVED_PLACE
+                        source = SearchResultSource.SAVED_PLACE,
+                        photoUri = place.photoUri
                     ),
                     saveRecent = false
                 )
@@ -1406,6 +1409,7 @@ fun HistoryScreen(
                 onNavigateBack?.invoke()
             },
             onAssignTrip = { place -> placeToAssignTrip = place },
+            onEditPlace = { place -> placeToEdit = place },
             onOpenPhoto = { path -> expandedPhotoPath = path },
             onDeletePlace = { place ->
                 viewModel.deleteSavedPlace(place.id)
@@ -1491,6 +1495,146 @@ fun HistoryScreen(
                     modifier = Modifier.heightIn(min = 48.dp)
                 ) {
                     Text("Close", fontSize = 12.sp)
+                }
+            },
+            shape = RoundedCornerShape(28.dp),
+            containerColor = colorScheme.surface
+        )
+    }
+
+    // Edit Saved Place Dialog
+    if (placeToEdit != null) {
+        val targetPlace = placeToEdit!!
+        val categories = remember { listOf("Spot", "Lodge", "Camp", "Trailhead", "Viewpoint", "Water", "Medical") }
+        var editName by remember(targetPlace.id) { mutableStateOf(targetPlace.name) }
+        var editCategory by remember(targetPlace.id) { mutableStateOf(targetPlace.category.ifBlank { "Spot" }) }
+        var editNote by remember(targetPlace.id) { mutableStateOf(targetPlace.note) }
+        var editTripId by remember(targetPlace.id) { mutableStateOf(targetPlace.tripId) }
+
+        AlertDialog(
+            onDismissRequest = { placeToEdit = null },
+            title = {
+                Text("Edit Saved Place", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .testTag("edit_saved_place_dialog"),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = editName,
+                        onValueChange = { editName = it },
+                        label = { Text("Place Name", fontSize = 12.sp) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Words,
+                            imeAction = ImeAction.Next
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("edit_place_name_input")
+                    )
+                    Text(
+                        text = "Category",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        for (cat in categories) {
+                            FilterChip(
+                                selected = editCategory.equals(cat, ignoreCase = true),
+                                onClick = { editCategory = cat },
+                                label = { Text(cat, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) },
+                                shape = CircleShape,
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = editNote,
+                        onValueChange = { editNote = it },
+                        label = { Text("Field Note (Optional)", fontSize = 12.sp) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.Done
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("edit_place_note_input")
+                    )
+                    if (trips.isNotEmpty()) {
+                        Text(
+                            text = "Trip",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            FilterChip(
+                                selected = editTripId == null,
+                                onClick = { editTripId = null },
+                                label = { Text("Standalone", fontSize = 11.sp) },
+                                shape = CircleShape,
+                                modifier = Modifier.heightIn(min = 48.dp)
+                            )
+                            for (trip in trips) {
+                                FilterChip(
+                                    selected = editTripId == trip.id,
+                                    onClick = { editTripId = trip.id },
+                                    label = { Text(trip.name, fontSize = 11.sp, maxLines = 1) },
+                                    shape = CircleShape,
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.updateSavedPlace(
+                            id = targetPlace.id,
+                            name = editName,
+                            category = editCategory,
+                            note = editNote,
+                            tripId = editTripId
+                        )
+                        Toast.makeText(context, "Updated saved place", Toast.LENGTH_SHORT).show()
+                        placeToEdit = null
+                    },
+                    shape = CircleShape,
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("confirm_edit_saved_place_btn")
+                ) {
+                    Text("Save", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { placeToEdit = null },
+                    shape = CircleShape,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                ) {
+                    Text("Cancel", fontSize = 12.sp)
                 }
             },
             shape = RoundedCornerShape(28.dp),
@@ -2215,73 +2359,148 @@ private fun TrailElevationDialog(
                             MetricItem("MAX ALT", "${summary.maxAltitudeMeters.toInt()} m", colorScheme.primary)
                         }
 
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = customColors.surfaceContainerLow,
-                            border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(150.dp)
-                        ) {
-                            val lineColor = colorScheme.primary
-                            val fillTop = colorScheme.primary.copy(alpha = 0.28f)
-                            val fillBottom = colorScheme.primary.copy(alpha = 0.02f)
-                            val gridColor = colorScheme.outlineVariant.copy(alpha = 0.45f)
+                        val samples = summary.profileSamples
+                        val minAlt = summary.minAltitudeMeters
+                        val maxAlt = summary.maxAltitudeMeters
+                        val rawSpan = maxAlt - minAlt
+                        val altRange = rawSpan.coerceAtLeast(10.0)
+                        val baselineAlt = if (rawSpan < 10.0) {
+                            ((minAlt + maxAlt) * 0.5) - (altRange * 0.5)
+                        } else {
+                            minAlt
+                        }
+                        val topAlt = baselineAlt + altRange
+                        val midAlt = baselineAlt + (altRange * 0.5)
+                        val maxDist = samples.last().distanceMeters.coerceAtLeast(1.0)
+                        fun formatChartDist(meters: Double): String = if (meters >= 1000.0) {
+                            String.format(Locale.US, "%.1fkm", meters / 1000.0)
+                        } else {
+                            "${meters.toInt()}m"
+                        }
 
-                            Canvas(
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Surface(
+                                shape = RoundedCornerShape(16.dp),
+                                color = customColors.surfaceContainerLow,
+                                border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.6f)),
                                 modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = 10.dp, vertical = 12.dp)
+                                    .fillMaxWidth()
+                                    .height(156.dp)
                             ) {
-                                val samples = summary.profileSamples
-                                val minAlt = summary.minAltitudeMeters
-                                val maxAlt = summary.maxAltitudeMeters
-                                val altRange = (maxAlt - minAlt).coerceAtLeast(10.0)
-                                val maxDist = samples.last().distanceMeters.coerceAtLeast(1.0)
+                                val lineColor = colorScheme.primary
+                                val fillTop = colorScheme.primary.copy(alpha = 0.28f)
+                                val fillBottom = colorScheme.primary.copy(alpha = 0.02f)
+                                val gridColor = colorScheme.outlineVariant.copy(alpha = 0.45f)
 
-                                // Horizontal reference lines
-                                for (step in 1..3) {
-                                    val y = size.height * (step / 4f)
-                                    drawLine(
-                                        color = gridColor,
-                                        start = Offset(0f, y),
-                                        end = Offset(size.width, y),
-                                        strokeWidth = 1f
-                                    )
-                                }
-
-                                val linePath = Path()
-                                val fillPath = Path()
-                                samples.forEachIndexed { idx, s ->
-                                    val x = ((s.distanceMeters / maxDist).toFloat().coerceIn(0f, 1f)) * size.width
-                                    val normY = ((s.altitudeMeters - minAlt) / altRange).toFloat().coerceIn(0f, 1f)
-                                    val y = size.height - normY * size.height
-                                    if (idx == 0) {
-                                        linePath.moveTo(x, y)
-                                        fillPath.moveTo(x, size.height)
-                                        fillPath.lineTo(x, y)
-                                    } else {
-                                        linePath.lineTo(x, y)
-                                        fillPath.lineTo(x, y)
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .height(136.dp)
+                                            .padding(end = 6.dp),
+                                        verticalArrangement = Arrangement.SpaceBetween,
+                                        horizontalAlignment = Alignment.End
+                                    ) {
+                                        Text(
+                                            text = "${topAlt.toInt()}m",
+                                            fontSize = 9.sp,
+                                            fontFamily = JetBrainsMonoFontFamily,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = "${midAlt.toInt()}m",
+                                            fontSize = 9.sp,
+                                            fontFamily = JetBrainsMonoFontFamily,
+                                            color = colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                                        )
+                                        Text(
+                                            text = "${baselineAlt.toInt()}m",
+                                            fontSize = 9.sp,
+                                            fontFamily = JetBrainsMonoFontFamily,
+                                            color = colorScheme.onSurfaceVariant
+                                        )
                                     }
-                                    if (idx == samples.lastIndex) {
-                                        fillPath.lineTo(x, size.height)
-                                        fillPath.close()
+
+                                    Canvas(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .height(136.dp)
+                                            .padding(vertical = 4.dp)
+                                    ) {
+                                        // Horizontal reference lines
+                                        for (step in 1..3) {
+                                            val y = size.height * (step / 4f)
+                                            drawLine(
+                                                color = gridColor,
+                                                start = Offset(0f, y),
+                                                end = Offset(size.width, y),
+                                                strokeWidth = 1f
+                                            )
+                                        }
+
+                                        val linePath = Path()
+                                        val fillPath = Path()
+                                        samples.forEachIndexed { idx, s ->
+                                            val x = ((s.distanceMeters / maxDist).toFloat().coerceIn(0f, 1f)) * size.width
+                                            val normY = ((s.altitudeMeters - baselineAlt) / altRange).toFloat().coerceIn(0f, 1f)
+                                            val y = size.height - normY * size.height
+                                            if (idx == 0) {
+                                                linePath.moveTo(x, y)
+                                                fillPath.moveTo(x, size.height)
+                                                fillPath.lineTo(x, y)
+                                            } else {
+                                                linePath.lineTo(x, y)
+                                                fillPath.lineTo(x, y)
+                                            }
+                                            if (idx == samples.lastIndex) {
+                                                fillPath.lineTo(x, size.height)
+                                                fillPath.close()
+                                            }
+                                        }
+
+                                        drawPath(
+                                            path = fillPath,
+                                            brush = Brush.verticalGradient(listOf(fillTop, fillBottom))
+                                        )
+                                        drawPath(
+                                            path = linePath,
+                                            color = lineColor,
+                                            style = Stroke(
+                                                width = 4f,
+                                                cap = StrokeCap.Round,
+                                                join = StrokeJoin.Round
+                                            )
+                                        )
                                     }
                                 }
-
-                                drawPath(
-                                    path = fillPath,
-                                    brush = Brush.verticalGradient(listOf(fillTop, fillBottom))
+                            }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "0m",
+                                    fontSize = 9.5.sp,
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    color = colorScheme.onSurfaceVariant
                                 )
-                                drawPath(
-                                    path = linePath,
-                                    color = lineColor,
-                                    style = Stroke(
-                                        width = 4f,
-                                        cap = StrokeCap.Round,
-                                        join = StrokeJoin.Round
-                                    )
+                                Text(
+                                    text = formatChartDist(maxDist * 0.5),
+                                    fontSize = 9.5.sp,
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    color = colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = formatChartDist(maxDist),
+                                    fontSize = 9.5.sp,
+                                    fontFamily = JetBrainsMonoFontFamily,
+                                    color = colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -2318,6 +2537,7 @@ private fun SavedPlacesManagerDialog(
     onTripFilterSelected: (String?) -> Unit,
     onShowOnMap: (SavedPlace) -> Unit,
     onAssignTrip: (SavedPlace) -> Unit,
+    onEditPlace: (SavedPlace) -> Unit,
     onOpenPhoto: (String) -> Unit,
     onDeletePlace: (SavedPlace) -> Unit,
     onDismiss: () -> Unit
@@ -2619,6 +2839,19 @@ private fun SavedPlacesManagerDialog(
                                                 fontSize = 11.sp,
                                                 fontWeight = FontWeight.SemiBold,
                                                 maxLines = 1
+                                            )
+                                        }
+                                        IconButton(
+                                            onClick = { onEditPlace(place) },
+                                            modifier = Modifier
+                                                .size(48.dp)
+                                                .testTag("saved_place_edit_btn_${place.id}")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Edit,
+                                                contentDescription = "Edit ${place.name}",
+                                                tint = colorScheme.primary,
+                                                modifier = Modifier.size(18.dp)
                                             )
                                         }
                                         IconButton(

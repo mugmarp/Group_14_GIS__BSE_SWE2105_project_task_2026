@@ -77,6 +77,16 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private val _activeGuideTarget = MutableStateFlow<ActiveGuideTarget?>(null)
     val activeGuideTarget: StateFlow<ActiveGuideTarget?> = _activeGuideTarget.asStateFlow()
 
+    private val _routeProgress = MutableStateFlow<com.geotrace.service.RouteProgressMatch?>(null)
+    val routeProgress: StateFlow<com.geotrace.service.RouteProgressMatch?> = _routeProgress.asStateFlow()
+
+    @Volatile
+    private var lastRouteNavKey: String? = null
+    @Volatile
+    private var lastRouteMatchedIdx: Int? = null
+    @Volatile
+    private var lastBacktrackPointCount: Int = 0
+
     data class InspectedTrail(
         val session: TrackingSession,
         val points: List<LocationPoint>,
@@ -229,7 +239,96 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         startStandbyCellPolling()
         observeCellTowerLocation()
         observeGeofencingSync()
+        observeRouteNavigation()
     }
+
+    private fun observeRouteNavigation() {
+        viewModelScope.launch {
+            combine(
+                currentLocation,
+                importedRoute,
+                isBacktrackingActiveTrail,
+                activeTrailPoints
+            ) { loc, route, backtracking, trailPts ->
+                Tuple4Nav(loc, route, backtracking, trailPts)
+            }.collect { (loc, route, backtracking, trailPts) ->
+                val navPoints = when {
+                    route != null -> route.points
+                    backtracking && trailPts.size >= 2 -> trailPts.reversed()
+                    else -> emptyList()
+                }
+                if (navPoints.isEmpty()) {
+                    lastRouteNavKey = null
+                    lastRouteMatchedIdx = null
+                    lastBacktrackPointCount = 0
+                    _routeProgress.value = null
+                    return@collect
+                }
+
+                val navKey = if (route != null) {
+                    "route_${route.id}"
+                } else {
+                    "backtrack_${activeSession.value?.id ?: "live"}"
+                }
+                if (navKey != lastRouteNavKey) {
+                    lastRouteNavKey = navKey
+                    lastRouteMatchedIdx = null
+                    lastBacktrackPointCount = navPoints.size
+                } else if (route == null && navPoints.size != lastBacktrackPointCount) {
+                    // activeTrailPoints appends at end, so reversed() prepends new points at index 0
+                    val delta = navPoints.size - lastBacktrackPointCount
+                    if (delta > 0 && lastRouteMatchedIdx != null) {
+                        lastRouteMatchedIdx = (lastRouteMatchedIdx!! + delta)
+                            .coerceIn(0, (navPoints.lastIndex - 1).coerceAtLeast(0))
+                    }
+                    lastBacktrackPointCount = navPoints.size
+                }
+
+                if (loc == null) {
+                    _routeProgress.value = null
+                    return@collect
+                }
+
+                val match = ElevationAnalyzer.evaluateRouteProgress(
+                    currentLat = loc.latitude,
+                    currentLon = loc.longitude,
+                    routePoints = navPoints,
+                    previousPointIndex = lastRouteMatchedIdx
+                )
+                if (match != null) {
+                    lastRouteMatchedIdx = match.nearestPointIndex
+                }
+                _routeProgress.value = match
+
+                val currentGuide = _activeGuideTarget.value
+                if (match != null && currentGuide != null &&
+                    (currentGuide.badge == "ROUTE" || currentGuide.badge == "BACKTRACK")
+                ) {
+                    val isNearEnd = match.distanceToEndMeters <= 50.0 ||
+                        match.nearestPointIndex >= (navPoints.size - 2).coerceAtLeast(0)
+                    val updatedLabel = if (currentGuide.badge == "BACKTRACK") {
+                        val base = activeSession.value?.name ?: "Return"
+                        if (isNearEnd) "Trail Start ($base)" else "Backtrack Leg ($base)"
+                    } else {
+                        val base = route?.name ?: "Route"
+                        if (isNearEnd) "$base Finish" else "Next Turn ($base)"
+                    }
+                    _activeGuideTarget.value = currentGuide.copy(
+                        label = updatedLabel,
+                        latitude = match.targetLatitude,
+                        longitude = match.targetLongitude
+                    )
+                }
+            }
+        }
+    }
+
+    private data class Tuple4Nav(
+        val loc: LocationPoint?,
+        val route: ImportedRoute?,
+        val backtracking: Boolean,
+        val trailPts: List<LocationPoint>
+    )
 
     fun setUiForeground(foreground: Boolean) {
         if (isUiForeground == foreground) return
@@ -884,17 +983,36 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 repository.copyPhotoToAppStorage(it)
             }
             val photoFailed = hadPhoto && savedPath == null
-            val place = repository.savePlace(
-                name = name,
-                category = category,
-                note = note,
-                latitude = latitude,
-                longitude = longitude,
-                altitude = altitude,
-                photoUri = savedPath ?: "",
-                tripId = tripId
-            )
+            val place = try {
+                repository.savePlace(
+                    name = name,
+                    category = category,
+                    note = note,
+                    latitude = latitude,
+                    longitude = longitude,
+                    altitude = altitude,
+                    photoUri = savedPath ?: "",
+                    tripId = tripId
+                )
+            } catch (e: Exception) {
+                if (!savedPath.isNullOrBlank()) {
+                    repository.deleteAppPhotoFileIfUnused(savedPath)
+                }
+                throw e
+            }
             onSaved?.invoke(place, photoFailed)
+        }
+    }
+
+    fun updateSavedPlace(
+        id: String,
+        name: String,
+        category: String,
+        note: String,
+        tripId: String?
+    ) {
+        viewModelScope.launch {
+            repository.updateSavedPlace(id, name, category, note, tripId)
         }
     }
 
@@ -947,13 +1065,41 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     fun buildCurrentSosMessage(batteryPercent: Int? = null): String {
         val point = currentLocation.value
+            ?: lastGaspBeacon.value?.let { beacon ->
+                LocationPoint(
+                    latitude = beacon.latitude,
+                    longitude = beacon.longitude,
+                    accuracy = beacon.accuracy,
+                    speed = 0f,
+                    altitude = beacon.altitude,
+                    bearing = 0f,
+                    provider = "last_gasp",
+                    timestamp = beacon.timestamp,
+                    sessionId = activeSession.value?.id ?: "last_gasp"
+                )
+            }
+            ?: _cellTowerLocation.value?.let { tower ->
+                LocationPoint(
+                    latitude = tower.latitude,
+                    longitude = tower.longitude,
+                    accuracy = tower.rangeMeters.toFloat(),
+                    speed = 0f,
+                    altitude = 0.0,
+                    bearing = 0f,
+                    provider = "cellular",
+                    timestamp = System.currentTimeMillis(),
+                    sessionId = activeSession.value?.id ?: "cellular_fallback"
+                )
+            }
         val servingCell = cellTowers.value.firstOrNull { it.isRegistered } ?: cellTowers.value.firstOrNull()
-        val resolvedBattery = batteryPercent ?: try {
-            val bm = getApplication<Application>().getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
-            bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 0..100 }
-        } catch (_: Exception) {
-            null
-        }
+        val resolvedBattery = batteryPercent
+            ?: lastGaspBeacon.value?.takeIf { currentLocation.value == null }?.batteryPercent
+            ?: try {
+                val bm = getApplication<Application>().getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
+                bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 0..100 }
+            } catch (_: Exception) {
+                null
+            }
         return TrackExporter.buildEmergencyShareMessage(
             point = point,
             cellTower = servingCell,
@@ -1266,19 +1412,64 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         val pts = activeTrailPoints.value
         if (pts.size < 2) return false
         _importedRoute.value = null
+        lastRouteNavKey = null
+        lastRouteMatchedIdx = null
         _isBacktrackingActiveTrail.value = true
-        val startPt = pts.first()
+        val reversed = pts.reversed()
+        lastBacktrackPointCount = reversed.size
+        val loc = currentLocation.value
+        val match = loc?.let {
+            ElevationAnalyzer.evaluateRouteProgress(it.latitude, it.longitude, reversed, null)
+        }
+        if (match != null) {
+            lastRouteMatchedIdx = match.nearestPointIndex
+            _routeProgress.value = match
+        }
+        val targetPt = if (match != null) {
+            match.targetLatitude to match.targetLongitude
+        } else {
+            val nextBack = reversed.getOrElse(1) { reversed.first() }
+            nextBack.latitude to nextBack.longitude
+        }
+        val baseName = activeSession.value?.name ?: "Return"
         _activeGuideTarget.value = ActiveGuideTarget(
-            label = "Trail Start (${activeSession.value?.name ?: "Return"})",
+            label = "Backtrack Leg ($baseName)",
             badge = "BACKTRACK",
-            latitude = startPt.latitude,
-            longitude = startPt.longitude
+            latitude = targetPt.first,
+            longitude = targetPt.second
+        )
+        return true
+    }
+
+    fun startRouteGuidance(): Boolean {
+        val route = _importedRoute.value ?: return false
+        val pts = route.points
+        if (pts.isEmpty()) return false
+        val loc = currentLocation.value
+        val match = loc?.let {
+            ElevationAnalyzer.evaluateRouteProgress(it.latitude, it.longitude, pts, lastRouteMatchedIdx)
+        }
+        if (match != null) {
+            lastRouteMatchedIdx = match.nearestPointIndex
+            _routeProgress.value = match
+        }
+        val targetLat = match?.targetLatitude ?: pts.first().latitude
+        val targetLon = match?.targetLongitude ?: pts.first().longitude
+        val isNearEnd = match != null && (match.distanceToEndMeters <= 50.0 || match.nearestPointIndex >= (pts.size - 2).coerceAtLeast(0))
+        _activeGuideTarget.value = ActiveGuideTarget(
+            label = if (isNearEnd) "${route.name} Finish" else "Next Turn (${route.name})",
+            badge = "ROUTE",
+            latitude = targetLat,
+            longitude = targetLon
         )
         return true
     }
 
     fun stopBacktrackActiveTrail() {
         _isBacktrackingActiveTrail.value = false
+        lastRouteNavKey = null
+        lastRouteMatchedIdx = null
+        lastBacktrackPointCount = 0
         if (_activeGuideTarget.value?.badge == "BACKTRACK") {
             _activeGuideTarget.value = null
         }
@@ -1695,7 +1886,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                             subtitle = wp.note.ifBlank { "Manual Trail Waypoint" },
                             latitude = wp.latitude,
                             longitude = wp.longitude,
-                            source = SearchResultSource.WAYPOINT
+                            source = SearchResultSource.WAYPOINT,
+                            photoUri = wp.photoUri
                         )
                     )
                 }
@@ -1764,7 +1956,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                             ).joinToString(" • "),
                             latitude = sp.latitude,
                             longitude = sp.longitude,
-                            source = SearchResultSource.SAVED_PLACE
+                            source = SearchResultSource.SAVED_PLACE,
+                            photoUri = sp.photoUri
                         )
                     )
                 }

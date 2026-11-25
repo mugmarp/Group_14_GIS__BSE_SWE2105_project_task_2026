@@ -179,13 +179,17 @@ object SolarCalculator {
         }
         val hHours = hDeg / 15.0
 
-        val localMeanTime = hHours + rightAscension - 0.06571 * approxTime - 6.622
-        val utcHours = ((localMeanTime - lngHour) % 24.0 + 24.0) % 24.0
+        val rawLocalMeanTime = hHours + rightAscension - 0.06571 * approxTime - 6.622
+        val localMeanTime = ((rawLocalMeanTime % 24.0) + 24.0) % 24.0
+        val rawUtcHours = localMeanTime - lngHour
+        val utcDayOffset = floor(rawUtcHours / 24.0).toInt()
+        val utcHours = rawUtcHours - (utcDayOffset * 24.0)
 
         val midnightUtc = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
             clear()
             set(year, month - 1, day, 0, 0, 0)
             set(Calendar.MILLISECOND, 0)
+            add(Calendar.DAY_OF_MONTH, utcDayOffset)
         }.timeInMillis
 
         return midnightUtc + (utcHours * 3_600_000.0).toLong()

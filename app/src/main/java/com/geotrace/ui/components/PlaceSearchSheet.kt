@@ -236,7 +236,7 @@ fun PlaceSearchDialog(
                             TextButton(
                                 onClick = onClearRecents,
                                 contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
-                                modifier = Modifier.heightIn(min = 36.dp)
+                                modifier = Modifier.heightIn(min = 48.dp)
                             ) {
                                 Text("Clear Recents", fontSize = 10.sp)
                             }

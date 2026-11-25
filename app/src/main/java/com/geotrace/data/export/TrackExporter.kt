@@ -460,7 +460,17 @@ object TrackExporter {
         batteryPercent: Int? = null,
         altitudeMeters: Double? = null
     ): String {
-        if (point == null) return "Emergency Alert: Location tracking active, awaiting GPS lock."
+        val batteryLine = batteryPercent?.let {
+            "\n🔋 Battery: $it%"
+        } ?: ""
+        val cellDetails = if (cellTower != null) {
+            val sigLabel = cellTower.signalDbm?.let { "$it dBm" } ?: "N/A"
+            "\n📡 Cell Tower: ${cellTower.operatorDisplayName} | CID: ${cellTower.cid ?: "N/A"}, LAC/TAC: ${cellTower.lac ?: "N/A"}, Signal: $sigLabel"
+        } else ""
+
+        if (point == null) {
+            return "🚨 *GIS TRACKER EMERGENCY ALERT*\n📍 Position: Location unavailable (awaiting GPS lock)$batteryLine$cellDetails"
+        }
 
         val latStr = String.format(Locale.US, "%.5f", point.latitude)
         val lonStr = String.format(Locale.US, "%.5f", point.longitude)
@@ -472,18 +482,15 @@ object TrackExporter {
         val altLine = resolvedAltitude?.let {
             "\n⛰️ Altitude: ${it.toInt()} m"
         } ?: ""
-        val batteryLine = batteryPercent?.let {
-            "\n🔋 Battery: $it%"
-        } ?: ""
-
-        val cellDetails = if (cellTower != null) {
-            val sigLabel = cellTower.signalDbm?.let { "$it dBm" } ?: "N/A"
-            "\n📡 Cell Tower: ${cellTower.operatorDisplayName} | CID: ${cellTower.cid ?: "N/A"}, LAC/TAC: ${cellTower.lac ?: "N/A"}, Signal: $sigLabel"
-        } else ""
+        val fixSourceTag = when (point.provider) {
+            "last_gasp" -> " (Last-Gasp Beacon)"
+            "cellular" -> " (Approx. Cell Mast)"
+            else -> ""
+        }
 
         return """
 🚨 *GIS TRACKER EMERGENCY ALERT*
-📍 Position: $latStr, $lonStr
+📍 Position: $latStr, $lonStr$fixSourceTag
 🎯 Accuracy: ±${String.format(Locale.US, "%.1f", point.accuracy)} meters
 ⚡ Speed: ${String.format(Locale.US, "%.1f", point.speedKmh)} km/h$altLine$batteryLine
 ⏰ Time: $timeStr$cellDetails

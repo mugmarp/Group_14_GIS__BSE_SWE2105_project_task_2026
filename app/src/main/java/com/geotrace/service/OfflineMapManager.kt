@@ -281,13 +281,21 @@ class OfflineMapManager(private val context: Context) {
     fun computeBoundingBoxAround(lat: Double, lng: Double, radiusKm: Double): BoundingBox {
         val latDelta = radiusKm / 111.32
         val cosLat = cos(Math.toRadians(lat)).coerceAtLeast(0.15)
-        val lngDelta = radiusKm / (111.32 * cosLat)
+        val lngDelta = (radiusKm / (111.32 * cosLat)).coerceAtMost(179.0)
         return BoundingBox(
             (lat + latDelta).coerceAtMost(85.0),
-            (lng + lngDelta).coerceAtMost(180.0),
+            normalizeLongitude(lng + lngDelta),
             (lat - latDelta).coerceAtLeast(-85.0),
-            (lng - lngDelta).coerceAtLeast(-180.0)
+            normalizeLongitude(lng - lngDelta)
         )
+    }
+
+    private fun cacheCapErrorMessage(estMb: Float): String? {
+        val usedMb = computeCacheSizeMb()
+        if (usedMb + estMb > MAX_CACHE_BYTES_MB.toFloat()) {
+            return "Cache limit (${MAX_CACHE_BYTES_MB} MB) reached: ${usedMb.toInt()} MB used + ~${estMb.toInt()} MB needed. Clear cache or lower zoom."
+        }
+        return null
     }
 
     /**
@@ -382,6 +390,14 @@ class OfflineMapManager(private val context: Context) {
             return
         }
 
+        cacheCapErrorMessage(estMb)?.let { capErr ->
+            _downloadProgress.value = OfflineDownloadProgress(
+                isDownloading = false,
+                errorMessage = capErr
+            )
+            return
+        }
+
         isCancelled = false
         completionDispatched.set(false)
         lastNotificationTimeMs = 0L
@@ -392,6 +408,44 @@ class OfflineMapManager(private val context: Context) {
         val tileWriter = SqlTileWriter()
         activeTileWriter = tileWriter
         val baseSource = MapTileSources.baseTileSourceFor(effectiveType)
+        val overlaySource = MapTileSources.overlayTileSourceFor(effectiveType)
+
+        data class RegionPassJob(
+            val source: org.osmdroid.tileprovider.tilesource.ITileSource,
+            val subBox: BoundingBox,
+            val weightTiles: Int,
+            val estSubTiles: Int,
+            val isOverlay: Boolean
+        )
+
+        val splitSubBoxes = splitBoxAtAntimeridian(
+            CorridorTileBox(
+                north = box.latNorth.coerceIn(-85.0511, 85.0511),
+                south = box.latSouth.coerceIn(-85.0511, 85.0511),
+                east = box.lonEast.coerceIn(-180.0, 180.0),
+                west = box.lonWest.coerceIn(-180.0, 180.0)
+            )
+        ).map { BoundingBox(it.north, it.east, it.south, it.west) }
+
+        val perSubTiles = splitSubBoxes.map { sb ->
+            estimateRegionTilesAndMb(sb, MapTileType.HUMANITARIAN, safeMin, safeMax).first.coerceAtLeast(1)
+        }
+        val baseTarget = if (overlaySource != null) estTiles / 2 else estTiles
+        val rawSum = perSubTiles.sum().coerceAtLeast(1)
+        val jobs = mutableListOf<RegionPassJob>()
+        splitSubBoxes.forEachIndexed { idx, sb ->
+            val subEst = perSubTiles[idx]
+            val weight = ((subEst.toDouble() / rawSum) * baseTarget).toInt().coerceAtLeast(1)
+            jobs.add(RegionPassJob(baseSource, sb, weight, subEst, isOverlay = false))
+        }
+        if (overlaySource != null) {
+            val overlayTarget = (estTiles - baseTarget).coerceAtLeast(1)
+            splitSubBoxes.forEachIndexed { idx, sb ->
+                val subEst = perSubTiles[idx]
+                val weight = ((subEst.toDouble() / rawSum) * overlayTarget).toInt().coerceAtLeast(1)
+                jobs.add(RegionPassJob(overlaySource, sb, weight, subEst, isOverlay = true))
+            }
+        }
 
         _downloadProgress.value = OfflineDownloadProgress(
             isDownloading = true,
@@ -403,73 +457,83 @@ class OfflineMapManager(private val context: Context) {
         )
         postProgressNotification(cleanName, 0, estTiles, force = true)
 
-        try {
-            val baseCount = if (effectiveType == MapTileType.HYBRID) estTiles / 2 else estTiles
-            val manager = CacheManager(baseSource, tileWriter, safeMin, safeMax)
-            activeCacheManager = manager
-
-            manager.downloadAreaAsyncNoUI(
-                context,
-                box,
-                safeMin,
-                safeMax,
-                object : CacheManager.CacheManagerCallback {
-                    override fun onTaskComplete() {
-                        if (isCancelled) {
-                            finishWithError("Download cancelled.")
-                            return
+        fun runRegionJob(jobIndex: Int, accumulatedProgress: Int, cumulativeErrors: Int) {
+            if (isCancelled) {
+                finishWithError("Download cancelled.")
+                return
+            }
+            if (jobIndex >= jobs.size) {
+                completeSuccess(cleanName, box, effectiveType, safeMin, safeMax, estTiles, estMb, onCompleted)
+                return
+            }
+            val job = jobs[jobIndex]
+            var activeSubTotal = job.estSubTiles.coerceAtLeast(1)
+            try {
+                val manager = CacheManager(job.source, tileWriter, safeMin, safeMax)
+                activeCacheManager = manager
+                manager.downloadAreaAsyncNoUI(
+                    context,
+                    job.subBox,
+                    safeMin,
+                    safeMax,
+                    object : CacheManager.CacheManagerCallback {
+                        override fun onTaskComplete() {
+                            if (isCancelled) {
+                                finishWithError("Download cancelled.")
+                                return
+                            }
+                            val nextAccum = (accumulatedProgress + job.weightTiles).coerceIn(0, estTiles)
+                            _downloadProgress.value = _downloadProgress.value.copy(completedTiles = nextAccum)
+                            postProgressNotification(cleanName, nextAccum, estTiles)
+                            runRegionJob(jobIndex + 1, nextAccum, cumulativeErrors)
                         }
-                        val overlaySource = MapTileSources.overlayTileSourceFor(effectiveType)
-                        if (overlaySource != null) {
-                            startOverlayPass(
-                                overlaySource = overlaySource,
-                                tileWriter = tileWriter,
-                                box = box,
-                                minZoom = safeMin,
-                                maxZoom = safeMax,
-                                baseCount = baseCount,
-                                totalTiles = estTiles,
-                                cleanName = cleanName,
-                                effectiveType = effectiveType,
-                                estMb = estMb,
-                                onCompleted = onCompleted
+
+                        override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {
+                            val scaled = ((progress.toDouble() / activeSubTotal.toDouble()) * job.weightTiles)
+                                .toInt()
+                                .coerceIn(0, job.weightTiles)
+                            val clamped = (accumulatedProgress + scaled).coerceIn(0, estTiles)
+                            _downloadProgress.value = _downloadProgress.value.copy(
+                                completedTiles = clamped,
+                                currentZoom = currentZoomLevel
                             )
-                        } else {
-                            completeSuccess(cleanName, box, effectiveType, safeMin, safeMax, estTiles, estMb, onCompleted)
+                            postProgressNotification(cleanName, clamped, estTiles)
                         }
-                    }
 
-                    override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {
-                        val clamped = progress.coerceIn(0, estTiles)
-                        _downloadProgress.value = _downloadProgress.value.copy(
-                            completedTiles = clamped,
-                            currentZoom = currentZoomLevel
-                        )
-                        postProgressNotification(cleanName, clamped, estTiles)
-                    }
+                        override fun downloadStarted() {}
 
-                    override fun downloadStarted() {}
+                        override fun setPossibleTilesInArea(total: Int) {
+                            if (total > 0) activeSubTotal = total
+                        }
 
-                    override fun setPossibleTilesInArea(total: Int) {}
-
-                    override fun onTaskFailed(errors: Int) {
-                        if (isCancelled) {
-                            finishWithError("Download cancelled.")
-                        } else {
-                            // Fail when more than ~12.5% of base tiles fail to download
-                            if (errors <= max(2, baseCount / 8)) {
-                                completeSuccess(cleanName, box, effectiveType, safeMin, safeMax, estTiles, estMb, onCompleted)
+                        override fun onTaskFailed(errors: Int) {
+                            if (isCancelled) {
+                                finishWithError("Download cancelled.")
+                                return
+                            }
+                            val nextErrors = cumulativeErrors + errors
+                            val maxAllowedErrors = if (job.isOverlay) max(2, estTiles / 5) else max(2, baseTarget / 8)
+                            if (nextErrors <= maxAllowedErrors) {
+                                val nextAccum = (accumulatedProgress + job.weightTiles).coerceIn(0, estTiles)
+                                runRegionJob(jobIndex + 1, nextAccum, nextErrors)
                             } else {
-                                finishWithError("Download failed ($errors tiles could not be fetched). Check network connection.")
+                                val errMsg = if (job.isOverlay) {
+                                    "Reference labels failed ($nextErrors tiles). Imagery cached; check network to retry."
+                                } else {
+                                    "Download failed ($nextErrors tiles could not be fetched). Check network connection."
+                                }
+                                finishWithError(errMsg)
                             }
                         }
                     }
-                }
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize CacheManager: ${e.message}", e)
-            finishWithError(e.localizedMessage ?: "Offline map download failed.")
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to initialize CacheManager: ${e.message}", e)
+                finishWithError(e.localizedMessage ?: "Offline map download failed.")
+            }
         }
+
+        runRegionJob(0, 0, 0)
     }
 
     /**
@@ -510,6 +574,14 @@ class OfflineMapManager(private val context: Context) {
             _downloadProgress.value = OfflineDownloadProgress(
                 isDownloading = false,
                 errorMessage = "Corridor too detailed ($estTiles tiles). Lower max zoom (max $MAX_TILES_PER_DOWNLOAD tiles)."
+            )
+            return
+        }
+
+        cacheCapErrorMessage(estMb)?.let { capErr ->
+            _downloadProgress.value = OfflineDownloadProgress(
+                isDownloading = false,
+                errorMessage = capErr
             )
             return
         }
@@ -638,66 +710,6 @@ class OfflineMapManager(private val context: Context) {
         runJob(0, 0, 0)
     }
 
-    private fun startOverlayPass(
-        overlaySource: org.osmdroid.tileprovider.tilesource.ITileSource,
-        tileWriter: SqlTileWriter,
-        box: BoundingBox,
-        minZoom: Int,
-        maxZoom: Int,
-        baseCount: Int,
-        totalTiles: Int,
-        cleanName: String,
-        effectiveType: MapTileType,
-        estMb: Float,
-        onCompleted: (OfflineMapRegion) -> Unit
-    ) {
-        try {
-            val overlayMgr = CacheManager(overlaySource, tileWriter, minZoom, maxZoom)
-            activeCacheManager = overlayMgr
-            overlayMgr.downloadAreaAsyncNoUI(
-                context,
-                box,
-                minZoom,
-                maxZoom,
-                object : CacheManager.CacheManagerCallback {
-                    override fun onTaskComplete() {
-                        if (isCancelled) {
-                            finishWithError("Download cancelled.")
-                            return
-                        }
-                        completeSuccess(cleanName, box, effectiveType, minZoom, maxZoom, totalTiles, estMb, onCompleted)
-                    }
-
-                    override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {
-                        val clamped = (baseCount + progress).coerceIn(0, totalTiles)
-                        _downloadProgress.value = _downloadProgress.value.copy(
-                            completedTiles = clamped,
-                            currentZoom = currentZoomLevel
-                        )
-                        postProgressNotification(cleanName, clamped, totalTiles)
-                    }
-
-                    override fun downloadStarted() {}
-                    override fun setPossibleTilesInArea(total: Int) {}
-                    override fun onTaskFailed(errors: Int) {
-                        if (isCancelled) {
-                            finishWithError("Download cancelled.")
-                        } else {
-                            val overlayCount = max(1, totalTiles - baseCount)
-                            if (errors <= max(2, overlayCount / 5)) {
-                                completeSuccess(cleanName, box, effectiveType, minZoom, maxZoom, totalTiles, estMb, onCompleted)
-                            } else {
-                                finishWithError("Reference labels failed ($errors tiles). Satellite imagery cached; check network to retry.")
-                            }
-                        }
-                    }
-                }
-            )
-        } catch (e: Exception) {
-            finishWithError(e.localizedMessage ?: "Overlay pass failed.")
-        }
-    }
-
     private fun completeSuccess(
         cleanName: String,
         box: BoundingBox,
@@ -773,6 +785,9 @@ class OfflineMapManager(private val context: Context) {
     }
 
     fun clearAllTileCache(): Boolean {
+        if (_downloadProgress.value.isDownloading) {
+            cancelActiveDownload()
+        }
         val writer = SqlTileWriter()
         return try {
             val purged = writer.purgeCache()

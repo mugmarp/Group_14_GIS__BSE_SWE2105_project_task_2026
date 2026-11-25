@@ -84,4 +84,52 @@ class ElevationAnalyzerTest {
         // Bearing toward segment target (0.010, 32.0) from (0.005, 32.001) should be slightly west of north (~348 deg)
         assertTrue("Expected NNW bearing, got ${match.bearingToTargetDegrees}", match.bearingToTargetDegrees in 340f..359f)
     }
+
+    @Test
+    fun `analyze discards cold start index zero spike and preserves real climb`() {
+        val points = listOf(
+            pt(0.0010, 32.0000, 3500.0, 1_000L), // cold-start outlier >90m off agreeing next fixes
+            pt(0.0011, 32.0000, 1200.0, 3_000L),
+            pt(0.0012, 32.0000, 1202.0, 5_000L),
+            pt(0.0018, 32.0000, 1230.0, 25_000L)
+        )
+        val summary = ElevationAnalyzer.analyze(points, verticalHysteresisMeters = 4.0)
+        assertTrue(summary.hasValidElevation)
+        assertEquals(1200.0, summary.minAltitudeMeters, 0.01)
+        assertEquals(1230.0, summary.maxAltitudeMeters, 0.01)
+        assertEquals(30.0, summary.totalAscentMeters, 0.01)
+    }
+
+    @Test
+    fun `analyze counts climb on untimed imported routes with zero timestamps`() {
+        val untimed = listOf(
+            pt(0.000, 32.0, 1000.0, 0L),
+            pt(0.001, 32.0, 1035.0, 0L),
+            pt(0.002, 32.0, 1060.0, 0L)
+        )
+        val summary = ElevationAnalyzer.analyze(untimed, verticalHysteresisMeters = 4.0)
+        assertTrue(summary.hasValidElevation)
+        assertEquals(60.0, summary.totalAscentMeters, 0.01)
+    }
+
+    @Test
+    fun `evaluateRouteProgress stays on return leg of out-and-back loop with previousPointIndex`() {
+        val outAndBack = listOf(
+            pt(0.0000, 32.0, 1000.0, 1_000L), // 0: start/end
+            pt(0.0010, 32.0, 1010.0, 2_000L), // 1
+            pt(0.0020, 32.0, 1020.0, 3_000L), // 2: turnaround
+            pt(0.0010, 32.0, 1010.0, 4_000L), // 3: return leg
+            pt(0.0000, 32.0, 1000.0, 5_000L)  // 4: finish
+        )
+
+        val match = ElevationAnalyzer.evaluateRouteProgress(
+            currentLat = 0.0008,
+            currentLon = 32.0,
+            routePoints = outAndBack,
+            previousPointIndex = 3
+        )
+        assertNotNull(match)
+        assertEquals(3, match!!.nearestPointIndex)
+        assertTrue("Target should look ahead toward finish (lat < 0.0008), got ${match.targetLatitude}", match.targetLatitude < 0.0008)
+    }
 }

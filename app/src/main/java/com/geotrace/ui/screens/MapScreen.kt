@@ -135,6 +135,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.geotrace.data.export.TrackImporter
 import com.geotrace.model.CoordinateFormat
 import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MapTileType
@@ -208,6 +209,7 @@ fun MapScreen(
     val trips by viewModel.trips.collectAsState()
     val lastGaspBeacon by viewModel.lastGaspBeacon.collectAsState()
     val importedRoute by viewModel.importedRoute.collectAsState()
+    val routeProgress by viewModel.routeProgress.collectAsState()
     val isBacktrackingActiveTrail by viewModel.isBacktrackingActiveTrail.collectAsState()
     val activeGuideTarget by viewModel.activeGuideTarget.collectAsState()
 
@@ -343,8 +345,8 @@ fun MapScreen(
                                 if (idx >= 0) fileName = c.getString(idx) ?: fileName
                             }
                         }
-                        val text = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use {
-                            it.readText()
+                        val text = context.contentResolver.openInputStream(uri)?.use {
+                            TrackImporter.readBoundedUtf8(it)
                         } ?: ""
                         fileName to text
                     }
@@ -576,13 +578,13 @@ fun MapScreen(
                 viewModel.saveParkedSpot(lat, lon, label)
             },
             onClearParkedSpot = { viewModel.clearParkedSpot() },
-            onOpenSavePlaceDialog = { suggestedName, lat, lon ->
+            onOpenSavePlaceDialog = { suggestedName, lat, lon, alt ->
                 savePlaceNameInput = suggestedName
                 savePlaceCategory = "Spot"
                 savePlaceNoteInput = ""
                 savePlaceLat = lat
                 savePlaceLon = lon
-                savePlaceAlt = 0.0
+                savePlaceAlt = alt
                 savePlaceTripId = null
                 savePlacePhotoUriInput = null
                 showSavePlaceDialog = true
@@ -1609,7 +1611,15 @@ fun MapScreen(
                             if (context !is Activity) {
                                 chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
-                            context.startActivity(chooser)
+                            try {
+                                context.startActivity(chooser)
+                            } catch (_: Exception) {
+                                Toast.makeText(
+                                    context,
+                                    "No compatible messaging or share app installed.",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
                         }
                         .testTag("sos_quick_chip")
                 ) {
@@ -1784,11 +1794,7 @@ fun MapScreen(
             }
             if (!isPickingGeofenceCenter && activeNavPoints.isNotEmpty()) {
                 val routeTitle = activeNavRoute?.name ?: "Backtrack: ${activeSession?.name ?: "Active Trail"}"
-                val progressMatch = remember(curLocForGuide?.latitude, curLocForGuide?.longitude, activeNavPoints) {
-                    curLocForGuide?.let {
-                        ElevationAnalyzer.evaluateRouteProgress(it.latitude, it.longitude, activeNavPoints)
-                    }
-                }
+                val progressMatch = routeProgress
                 val offTrailMeters = progressMatch?.crossTrackDistanceMeters ?: 0.0
                 val isOffTrail = progressMatch != null && offTrailMeters > 45.0
                 val remDistMeters = progressMatch?.remainingDistanceMeters ?: (activeNavRoute?.totalDistanceMeters ?: 0.0)
@@ -1848,21 +1854,27 @@ fun MapScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
-                        if (activeNavRoute != null && activeNavPoints.isNotEmpty() && activeGuideTarget == null) {
-                            val endPt = activeNavPoints.last()
+                        if (activeNavRoute != null && activeNavPoints.isNotEmpty()) {
+                            val isGuidingRoute = activeGuideTarget?.badge == "ROUTE"
                             TextButton(
                                 onClick = {
-                                    viewModel.setTargetFinder(
-                                        label = "${activeNavRoute.name} Finish",
-                                        latitude = endPt.latitude,
-                                        longitude = endPt.longitude,
-                                        badge = "ROUTE"
-                                    )
+                                    if (isGuidingRoute) {
+                                        viewModel.clearTargetFinder()
+                                    } else {
+                                        viewModel.startRouteGuidance()
+                                    }
                                 },
                                 shape = CircleShape,
-                                modifier = Modifier.heightIn(min = 48.dp)
+                                modifier = Modifier
+                                    .heightIn(min = 48.dp)
+                                    .testTag("route_guidance_toggle_btn")
                             ) {
-                                Text("Point", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = if (isGuidingRoute) "Guiding" else "Point",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isGuidingRoute) customColors.warning else colorScheme.primary
+                                )
                             }
                         }
                         IconButton(

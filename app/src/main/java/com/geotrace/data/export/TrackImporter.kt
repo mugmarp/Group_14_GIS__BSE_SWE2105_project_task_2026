@@ -43,11 +43,32 @@ data class ImportedRoute(
 
 object TrackImporter {
 
+    const val MAX_IMPORT_BYTES = 12 * 1024 * 1024
+
+    fun readBoundedUtf8(inputStream: java.io.InputStream, maxBytes: Int = MAX_IMPORT_BYTES): String {
+        val buffer = ByteArray(16 * 1024)
+        val out = java.io.ByteArrayOutputStream()
+        var total = 0
+        while (true) {
+            val read = inputStream.read(buffer)
+            if (read <= 0) break
+            total += read
+            if (total > maxBytes) {
+                throw IllegalArgumentException("Route file exceeds ${maxBytes / (1024 * 1024)} MB size limit.")
+            }
+            out.write(buffer, 0, read)
+        }
+        return out.toString(Charsets.UTF_8.name())
+    }
+
     fun parse(
         rawContent: String,
         fallbackName: String = "Imported Route",
         hintExtension: String? = null
     ): Result<ImportedRoute> {
+        if (rawContent.length > MAX_IMPORT_BYTES) {
+            return Result.failure(IllegalArgumentException("Route file exceeds ${MAX_IMPORT_BYTES / (1024 * 1024)} MB size limit."))
+        }
         val trimmed = rawContent.trim()
         if (trimmed.isEmpty()) {
             return Result.failure(IllegalArgumentException("The selected file is empty."))
@@ -190,7 +211,7 @@ object TrackImporter {
             val lon = el.getAttribute("lon").toDoubleOrNull() ?: Double.NaN
             if (!isValidCoordinate(lat, lon)) return null
             val ele = firstDirectChildText(el, "ele").toDoubleOrNull()?.takeIf { it.isFinite() } ?: 0.0
-            val timeMs = parseIsoTimestampMs(firstDirectChildText(el, "time")) ?: System.currentTimeMillis()
+            val timeMs = parseIsoTimestampMs(firstDirectChildText(el, "time")) ?: 0L
             return LocationPoint(
                 latitude = lat,
                 longitude = lon,
@@ -250,7 +271,6 @@ object TrackImporter {
             .firstNotNullOfOrNull { firstDirectChildText(it, "name").takeIf { n -> n.isNotBlank() } }
 
         val trackPoints = mutableListOf<LocationPoint>()
-        val gxCoords = mutableListOf<LocationPoint>()
         val waypoints = mutableListOf<TrailWaypoint>()
 
         for (placemark in findElementsByTagLowercase(root, "placemark")) {
@@ -258,8 +278,8 @@ object TrackImporter {
             val placemarkDesc = firstDirectChildText(placemark, "description")
 
             val pointEls = findElementsByTagLowercase(placemark, "point")
-            if (pointEls.isNotEmpty()) {
-                val coordsText = findElementsByTagLowercase(pointEls.first(), "coordinates")
+            for (pointEl in pointEls) {
+                val coordsText = findElementsByTagLowercase(pointEl, "coordinates")
                     .firstOrNull()?.textContent?.trim().orEmpty()
                 val pt = parseKmlCoordinateTuples(coordsText, routeId).firstOrNull()
                 if (pt != null) {
@@ -278,19 +298,18 @@ object TrackImporter {
                 }
             }
 
+            val placemarkLinePoints = mutableListOf<LocationPoint>()
             val lineStrings = findElementsByTagLowercase(placemark, "linestring")
             for (ls in lineStrings) {
                 for (coordEl in findElementsByTagLowercase(ls, "coordinates")) {
                     val parsed = parseKmlCoordinateTuples(coordEl.textContent?.trim().orEmpty(), routeId)
                     if (parsed.isNotEmpty()) {
-                        trackPoints.addAll(parsed)
-                        if (docName.isNullOrBlank() && placemarkName.isNotBlank()) {
-                            docName = placemarkName
-                        }
+                        placemarkLinePoints.addAll(parsed)
                     }
                 }
             }
 
+            val placemarkGxPoints = mutableListOf<LocationPoint>()
             val gxCoordEls = findElementsByTagLowercase(placemark, "gx:coord")
             for (gxEl in gxCoordEls) {
                 val parts = gxEl.textContent?.trim().orEmpty().split(Regex("\\s+"))
@@ -299,30 +318,39 @@ object TrackImporter {
                     val lat = parts[1].toDoubleOrNull() ?: Double.NaN
                     val alt = parts.getOrNull(2)?.toDoubleOrNull()?.takeIf { it.isFinite() } ?: 0.0
                     if (isValidCoordinate(lat, lon)) {
-                        gxCoords.add(
+                        placemarkGxPoints.add(
                             LocationPoint(
                                 latitude = lat,
                                 longitude = lon,
                                 accuracy = 5f,
                                 altitude = alt,
                                 provider = "kml",
+                                timestamp = 0L,
                                 sessionId = routeId
                             )
                         )
                     }
                 }
             }
-            if (gxCoordEls.isNotEmpty() && docName.isNullOrBlank() && placemarkName.isNotBlank()) {
+
+            if (placemarkLinePoints.isNotEmpty()) {
+                trackPoints.addAll(placemarkLinePoints)
+            } else if (placemarkGxPoints.isNotEmpty()) {
+                trackPoints.addAll(placemarkGxPoints)
+            }
+
+            if ((placemarkLinePoints.isNotEmpty() || placemarkGxPoints.isNotEmpty()) &&
+                docName.isNullOrBlank() && placemarkName.isNotBlank()
+            ) {
                 docName = placemarkName
             }
         }
 
-        val resolvedPoints = if (trackPoints.isNotEmpty()) trackPoints else gxCoords
         return buildRoute(
             id = routeId,
             name = docName?.takeIf { it.isNotBlank() } ?: fallbackName,
             sourceFormat = "KML",
-            points = resolvedPoints,
+            points = trackPoints,
             waypoints = waypoints
         )
     }
@@ -345,6 +373,7 @@ object TrackImporter {
                             accuracy = 5f,
                             altitude = alt,
                             provider = "kml",
+                            timestamp = 0L,
                             sessionId = routeId
                         )
                     )
@@ -395,6 +424,7 @@ object TrackImporter {
                                     accuracy = 5f,
                                     altitude = alt,
                                     provider = "geojson",
+                                    timestamp = 0L,
                                     sessionId = routeId
                                 )
                             )
@@ -456,6 +486,7 @@ object TrackImporter {
                         accuracy = 5f,
                         altitude = alt,
                         provider = "geojson",
+                        timestamp = 0L,
                         sessionId = routeId
                     )
                 )

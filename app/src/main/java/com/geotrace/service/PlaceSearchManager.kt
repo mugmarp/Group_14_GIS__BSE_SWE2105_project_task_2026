@@ -11,6 +11,7 @@ import com.geotrace.model.SearchPlaceResult
 import com.geotrace.model.SearchResultSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -487,6 +488,10 @@ class PlaceSearchManager(private val context: Context) {
         return results
     }
 
+    private fun lonSpanDegrees(west: Double, east: Double): Double {
+        return if (west <= east) east - west else (180.0 - west) + (east + 180.0)
+    }
+
     suspend fun fetchRegionPoisForOfflineCache(region: OfflineMapRegion): List<OfflinePlacePoi> =
         fetchRegionPoisForOfflineCacheWithStatus(region).pois
 
@@ -496,32 +501,40 @@ class PlaceSearchManager(private val context: Context) {
      */
     suspend fun fetchRegionPoisForOfflineCacheWithStatus(region: OfflineMapRegion): OverpassFetchOutcome = withContext(Dispatchers.IO) {
         val s = region.southLat.coerceIn(-85.0, 85.0)
-        val w = region.westLng.coerceIn(-180.0, 180.0)
+        val w = OfflineMapManager.normalizeLongitude(region.westLng)
         val n = region.northLat.coerceIn(-85.0, 85.0)
-        val e = region.eastLng.coerceIn(-180.0, 180.0)
+        val e = OfflineMapManager.normalizeLongitude(region.eastLng)
         if (n <= s || e == w) return@withContext OverpassFetchOutcome(emptyList(), succeeded = false)
 
-        // Handle antimeridian split if east < west
-        val baseRects: List<DoubleArray> = if (w < e) {
-            listOf(doubleArrayOf(s, w, n, e))
+        // Cap spans > 1.8 deg around region center while preserving antimeridian wrap
+        val totalLatSpan = (n - s).coerceAtLeast(0.01)
+        val totalLonSpan = lonSpanDegrees(w, e).coerceAtLeast(0.01)
+        val boundedBox = if (totalLatSpan > 1.8 || totalLonSpan > 1.8) {
+            val cLat = ((n + s) / 2.0).coerceIn(-84.5, 84.5)
+            val cLon = if (w <= e) (w + e) / 2.0 else OfflineMapManager.normalizeLongitude(w + totalLonSpan / 2.0)
+            val halfLat = minOf(0.85, totalLatSpan / 2.0)
+            val halfLon = minOf(0.85, totalLonSpan / 2.0)
+            OfflineMapManager.CorridorTileBox(
+                north = (cLat + halfLat).coerceAtMost(85.0),
+                south = (cLat - halfLat).coerceAtLeast(-85.0),
+                east = OfflineMapManager.normalizeLongitude(cLon + halfLon),
+                west = OfflineMapManager.normalizeLongitude(cLon - halfLon)
+            )
         } else {
-            listOf(doubleArrayOf(s, w, n, 180.0), doubleArrayOf(s, -180.0, n, e))
+            OfflineMapManager.CorridorTileBox(north = n, south = s, east = e, west = w)
         }
 
-        // Subdivide large boxes (>0.6 deg span) into up to 2x2 tiles instead of silently dropping outer areas
+        // Split antimeridian first, then subdivide large boxes (>0.6 deg span) into up to 2x2 tiles
+        val baseRects = OfflineMapManager.splitBoxAtAntimeridian(boundedBox)
         val queryBoxes = mutableListOf<DoubleArray>()
         for (rect in baseRects) {
-            val rS = rect[0]
-            val rW = rect[1]
-            val rN = rect[2]
-            val rE = rect[3]
+            val rS = rect.south
+            val rW = rect.west
+            val rN = rect.north
+            val rE = rect.east
             val latSpan = (rN - rS).coerceAtLeast(0.01)
             val lonSpan = (rE - rW).coerceAtLeast(0.01)
-            if (latSpan > 1.8 || lonSpan > 1.8) {
-                val cLat = (rN + rS) / 2.0
-                val cLon = (rE + rW) / 2.0
-                queryBoxes.add(doubleArrayOf(cLat - 0.5, cLon - 0.5, cLat + 0.5, cLon + 0.5))
-            } else if (latSpan > 0.6 || lonSpan > 0.6) {
+            if (latSpan > 0.6 || lonSpan > 0.6) {
                 val midLat = (rN + rS) / 2.0
                 val midLon = (rE + rW) / 2.0
                 val latSlices = if (latSpan > 0.6) listOf(rS to midLat, midLat to rN) else listOf(rS to rN)
@@ -532,11 +545,12 @@ class PlaceSearchManager(private val context: Context) {
                     }
                 }
             } else {
-                queryBoxes.add(rect)
+                queryBoxes.add(doubleArrayOf(rS, rW, rN, rE))
             }
         }
 
-        val combined = mutableListOf<OfflinePlacePoi>()
+        val allPriority = mutableListOf<OfflinePlacePoi>()
+        val allLandmarks = mutableListOf<OfflinePlacePoi>()
         val seenDedup = HashSet<String>()
         var anySucceeded = false
         for (box in queryBoxes.take(4)) {
@@ -548,12 +562,16 @@ class PlaceSearchManager(private val context: Context) {
                 regionId = region.id,
                 regionName = region.name,
                 seenDedup = seenDedup,
-                maxResults = if (queryBoxes.size > 1) 120 else 250
+                maxPriorityResults = 160,
+                maxLandmarkResults = 80
             )
             if (outcome.succeeded) anySucceeded = true
-            combined.addAll(outcome.pois)
+            allPriority.addAll(outcome.priorityPois)
+            allLandmarks.addAll(outcome.landmarkPois)
         }
-        OverpassFetchOutcome(combined.take(250), succeeded = anySucceeded)
+        // Always retain priority survival/tourism POIs from all tiles before filling remaining slots with landmarks
+        val combined = (allPriority.take(250) + allLandmarks).take(250)
+        OverpassFetchOutcome(combined, succeeded = anySucceeded)
     }
 
     suspend fun fetchCorridorPoisForOfflineCache(
@@ -570,7 +588,7 @@ class PlaceSearchManager(private val context: Context) {
 
     /**
      * Fetches tourism and survival POIs along an expedition/trail corridor strip (e.g. ±1.5 km buffer),
-     * chunked across sampled corridor segments and filtered strictly by distance from the polyline.
+     * balanced across corridor windows and filtered strictly by point-to-segment distance to the polyline.
      */
     suspend fun fetchCorridorPoisForOfflineCacheWithStatus(
         points: List<LocationPoint>,
@@ -586,19 +604,17 @@ class PlaceSearchManager(private val context: Context) {
         )
         if (rawBoxes.isEmpty()) return@withContext OverpassFetchOutcome(emptyList(), succeeded = false)
 
-        // Group into at most 4 sequential non-antimeridian windows so Overpass stays responsive
+        // Group into up to 4 sequential windows preserving antimeridian bounds
         val stride = ((rawBoxes.size + 3) / 4).coerceAtLeast(1)
         val mergedWindows = rawBoxes.chunked(stride).mapNotNull { chunk ->
-            // Skip merging boxes across the antimeridian by keeping non-crossing sub-batches
-            val normal = chunk.filter { it.west <= it.east }
-            if (normal.isNotEmpty()) OfflineMapManager.unionBoundingBox(normal) else chunk.firstOrNull()
+            OfflineMapManager.unionBoundingBox(chunk)
         }
 
-        // Sample route points every ~500m for fast corridor proximity filtering
+        // Sample route points every ~150m for accurate segment-distance corridor filtering
         val sampledRoute = mutableListOf<LocationPoint>()
         var lastRef: LocationPoint? = null
         for (p in points) {
-            if (lastRef == null || haversineMetersStatic(lastRef.latitude, lastRef.longitude, p.latitude, p.longitude) >= 500.0) {
+            if (lastRef == null || haversineMetersStatic(lastRef.latitude, lastRef.longitude, p.latitude, p.longitude) >= 150.0) {
                 sampledRoute.add(p)
                 lastRef = p
             }
@@ -606,43 +622,76 @@ class PlaceSearchManager(private val context: Context) {
         if (sampledRoute.lastOrNull() !== points.last()) sampledRoute.add(points.last())
         val maxAllowedMeters = (halfWidthKm * 1000.0 * 1.4).coerceAtLeast(1500.0)
 
-        val combined = mutableListOf<OfflinePlacePoi>()
+        fun isWithinCorridor(poi: OfflinePlacePoi): Boolean {
+            if (sampledRoute.size == 1) {
+                val pt = sampledRoute.first()
+                return haversineMetersStatic(pt.latitude, pt.longitude, poi.latitude, poi.longitude) <= maxAllowedMeters
+            }
+            for (i in 0 until sampledRoute.lastIndex) {
+                val a = sampledRoute[i]
+                val b = sampledRoute[i + 1]
+                // Quick reject segments separated by huge offline gaps
+                if (haversineMetersStatic(a.latitude, a.longitude, b.latitude, b.longitude) > 50_000.0) continue
+                val d = pointToSegmentMetersStatic(poi.latitude, poi.longitude, a.latitude, a.longitude, b.latitude, b.longitude)
+                if (d <= maxAllowedMeters) return true
+            }
+            return false
+        }
+
+        val allPriority = mutableListOf<OfflinePlacePoi>()
+        val allLandmarks = mutableListOf<OfflinePlacePoi>()
         val seenDedup = HashSet<String>()
         var anySucceeded = false
         for (window in mergedWindows) {
-            if (combined.size >= 300) break
-            val wBoxes = if (window.west <= window.east) {
-                listOf(doubleArrayOf(window.south, window.west, window.north, window.east))
-            } else {
-                listOf(
-                    doubleArrayOf(window.south, window.west, window.north, 180.0),
-                    doubleArrayOf(window.south, -180.0, window.north, window.east)
-                )
-            }
+            val wBoxes = OfflineMapManager.splitBoxAtAntimeridian(window)
             for (wb in wBoxes) {
                 val outcome = executeOverpassQueryForBox(
-                    south = wb[0],
-                    west = wb[1],
-                    north = wb[2],
-                    east = wb[3],
+                    south = wb.south,
+                    west = wb.west,
+                    north = wb.north,
+                    east = wb.east,
                     regionId = regionId,
                     regionName = regionName,
                     seenDedup = seenDedup,
-                    maxResults = 150
+                    maxPriorityResults = 110,
+                    maxLandmarkResults = 50
                 )
                 if (outcome.succeeded) anySucceeded = true
-                val filtered = outcome.pois.filter { poi ->
-                    sampledRoute.any { pt ->
-                        haversineMetersStatic(pt.latitude, pt.longitude, poi.latitude, poi.longitude) <= maxAllowedMeters
-                    }
-                }
-                combined.addAll(filtered)
+                allPriority.addAll(outcome.priorityPois.filter(::isWithinCorridor))
+                allLandmarks.addAll(outcome.landmarkPois.filter(::isWithinCorridor))
             }
         }
-        OverpassFetchOutcome(combined.take(300), succeeded = anySucceeded)
+        val combined = (allPriority.take(300) + allLandmarks).take(300)
+        OverpassFetchOutcome(combined, succeeded = anySucceeded)
     }
 
-    private fun executeOverpassQueryForBox(
+    private fun pointToSegmentMetersStatic(
+        pLat: Double, pLon: Double,
+        aLat: Double, aLon: Double,
+        bLat: Double, bLon: Double
+    ): Double {
+        val refLatRad = Math.toRadians((aLat + bLat) * 0.5)
+        val metersPerDegLat = 111132.92
+        val metersPerDegLon = (111412.84 * kotlin.math.cos(refLatRad)).coerceAtLeast(1.0)
+        val px = (pLon - aLon) * metersPerDegLon
+        val py = (pLat - aLat) * metersPerDegLat
+        val bx = (bLon - aLon) * metersPerDegLon
+        val by = (bLat - aLat) * metersPerDegLat
+        val segLenSq = bx * bx + by * by
+        if (segLenSq < 1e-6) return kotlin.math.sqrt(px * px + py * py)
+        val t = ((px * bx + py * by) / segLenSq).coerceIn(0.0, 1.0)
+        val dx = px - t * bx
+        val dy = py - t * by
+        return kotlin.math.sqrt(dx * dx + dy * dy)
+    }
+
+    private data class SplitOverpassBoxOutcome(
+        val priorityPois: List<OfflinePlacePoi>,
+        val landmarkPois: List<OfflinePlacePoi>,
+        val succeeded: Boolean
+    )
+
+    private suspend fun executeOverpassQueryForBox(
         south: Double,
         west: Double,
         north: Double,
@@ -650,8 +699,9 @@ class PlaceSearchManager(private val context: Context) {
         regionId: String,
         regionName: String,
         seenDedup: MutableSet<String>,
-        maxResults: Int
-    ): OverpassFetchOutcome {
+        maxPriorityResults: Int,
+        maxLandmarkResults: Int
+    ): SplitOverpassBoxOutcome {
         val bboxStr = String.format(Locale.US, "%.5f,%.5f,%.5f,%.5f", south, west, north, east)
         // Primary query focuses strictly on high-priority survival, medical, water, lodging, tourism & transit POIs
         val priorityQuery = """
@@ -667,30 +717,31 @@ class PlaceSearchManager(private val context: Context) {
         """.trimIndent()
 
         val primaryRaw = postOverpassWithMirrorFallback(priorityQuery)
-            ?: return OverpassFetchOutcome(emptyList(), succeeded = false)
+            ?: return SplitOverpassBoxOutcome(emptyList(), emptyList(), succeeded = false)
 
         val prioritized = parseOverpassElementsJson(
             responseText = primaryRaw,
             regionId = regionId,
             regionName = regionName,
             seenDedup = seenDedup,
-            maxResults = maxResults
+            maxResults = maxPriorityResults
         )
 
-        val remainingSlots = maxResults - prioritized.size
-        if (remainingSlots <= 20) {
-            return OverpassFetchOutcome(prioritized, succeeded = true)
+        if (maxLandmarkResults <= 0) {
+            return SplitOverpassBoxOutcome(prioritized, emptyList(), succeeded = true)
         }
 
-        // Secondary light query only fills remaining slots with named places, shops, and landmarks
+        // Secondary light query only fills remaining slots with settlements, supply shops & named natural/historic landmarks
         val landmarksQuery = """
             [out:json][timeout:10];
             (
               nwr["place"~"city|town|village|hamlet|suburb"]($bboxStr);
-              node["shop"]["name"]($bboxStr);
-              node["name"]($bboxStr);
+              nwr["shop"]["name"]($bboxStr);
+              node["historic"]["name"]($bboxStr);
+              node["natural"~"saddle|cave_entrance|rock|glacier"]["name"]($bboxStr);
+              node["highway"~"bus_stop|trailhead|pass"]["name"]($bboxStr);
             );
-            out center $remainingSlots;
+            out center $maxLandmarkResults;
         """.trimIndent()
 
         val secondaryRaw = postOverpassWithMirrorFallback(landmarksQuery)
@@ -700,19 +751,24 @@ class PlaceSearchManager(private val context: Context) {
                 regionId = regionId,
                 regionName = regionName,
                 seenDedup = seenDedup,
-                maxResults = remainingSlots
+                maxResults = maxLandmarkResults
             )
         } else emptyList()
 
-        return OverpassFetchOutcome(prioritized + landmarks, succeeded = true)
+        return SplitOverpassBoxOutcome(prioritized, landmarks, succeeded = true)
     }
 
-    private fun postOverpassWithMirrorFallback(overpassQuery: String): String? {
+    private suspend fun postOverpassWithMirrorFallback(overpassQuery: String): String? {
         val endpoints = listOf(
             "https://overpass-api.de/api/interpreter",
             "https://overpass.kumi.systems/api/interpreter"
         )
+        var shouldBackoff = false
         for (endpoint in endpoints) {
+            if (shouldBackoff) {
+                delay(900L)
+                shouldBackoff = false
+            }
             var conn: HttpURLConnection? = null
             try {
                 val url = URL(endpoint)
@@ -733,8 +789,12 @@ class PlaceSearchManager(private val context: Context) {
                     return BufferedReader(InputStreamReader(conn.inputStream, Charsets.UTF_8)).use { it.readText() }
                 } else {
                     Log.w(TAG, "Overpass mirror $endpoint returned HTTP $code")
+                    if (code == 429 || code == 503 || code == 504) {
+                        shouldBackoff = true
+                    }
                 }
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 Log.w(TAG, "Overpass mirror $endpoint failed: ${e.message}")
             } finally {
                 conn?.disconnect()
@@ -764,7 +824,8 @@ class PlaceSearchManager(private val context: Context) {
                         bboxNorth = obj.optDouble("n").takeIf { it.isFinite() },
                         bboxSouth = obj.optDouble("s").takeIf { it.isFinite() },
                         bboxEast = obj.optDouble("e").takeIf { it.isFinite() },
-                        bboxWest = obj.optDouble("w").takeIf { it.isFinite() }
+                        bboxWest = obj.optDouble("w").takeIf { it.isFinite() },
+                        photoUri = obj.optString("photoUri", "")
                     )
                 )
             }
@@ -795,6 +856,7 @@ class PlaceSearchManager(private val context: Context) {
                         item.bboxSouth?.let { put("s", it) }
                         item.bboxEast?.let { put("e", it) }
                         item.bboxWest?.let { put("w", it) }
+                        if (item.photoUri.isNotBlank()) put("photoUri", item.photoUri)
                     }
                 )
             }

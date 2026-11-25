@@ -148,4 +148,44 @@ class TrackImporterTest {
         assertTrue(TrackImporter.parse("not a route file", hintExtension = "txt").isFailure)
         assertTrue(TrackImporter.parse("<gpx version=\"1.1\"></gpx>").isFailure)
     }
+
+    @Test
+    fun `parse reads mixed KML LineString gx Track and multiple Point elements with zero timestamp when omitted`() {
+        val kml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <kml xmlns="http://www.opengis.net/kml/2.2" xmlns:gx="http://www.google.com/kml/ext/2.2">
+              <Document>
+                <Placemark>
+                  <name>Dual Markers</name>
+                  <MultiGeometry>
+                    <Point><coordinates>30.000,0.000,1100.0</coordinates></Point>
+                    <Point><coordinates>30.002,0.001,1115.0</coordinates></Point>
+                  </MultiGeometry>
+                </Placemark>
+                <Placemark>
+                  <LineString>
+                    <coordinates>30.000,0.000,1100.0 30.001,0.001,1110.0</coordinates>
+                  </LineString>
+                </Placemark>
+                <Placemark>
+                  <gx:Track>
+                    <gx:coord>30.001 0.001 1110.0</gx:coord>
+                    <gx:coord>30.002 0.002 1125.0</gx:coord>
+                  </gx:Track>
+                </Placemark>
+              </Document>
+            </kml>
+        """.trimIndent()
+
+        val route = TrackImporter.parse(kml, hintExtension = "kml").getOrThrow()
+        assertEquals(2, route.waypoints.size)
+        assertEquals(4, route.points.size)
+        assertTrue(route.points.all { it.timestamp == 0L })
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `readBoundedUtf8 rejects streams larger than maxBytes`() {
+        val stream = "abcdef".byteInputStream(Charsets.UTF_8)
+        TrackImporter.readBoundedUtf8(stream, maxBytes = 4)
+    }
 }

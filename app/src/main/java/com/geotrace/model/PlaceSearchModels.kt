@@ -24,7 +24,8 @@ data class SearchPlaceResult(
     val bboxEast: Double? = null,
     val bboxWest: Double? = null,
     val distanceMeters: Double? = null,
-    val requestedAtMs: Long = 0L
+    val requestedAtMs: Long = 0L,
+    val photoUri: String = ""
 )
 
 data class OfflinePlacePoi(

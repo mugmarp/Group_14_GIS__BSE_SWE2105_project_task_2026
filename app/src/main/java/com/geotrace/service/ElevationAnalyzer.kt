@@ -30,7 +30,9 @@ data class RouteProgressMatch(
     val crossTrackDistanceMeters: Double,
     val remainingDistanceMeters: Double,
     val bearingToTargetDegrees: Float,
-    val distanceToEndMeters: Double
+    val distanceToEndMeters: Double,
+    val targetLatitude: Double = 0.0,
+    val targetLongitude: Double = 0.0
 )
 
 object ElevationAnalyzer {
@@ -63,30 +65,51 @@ object ElevationAnalyzer {
             )
         }
 
+        // Guard against a cold-start GPS altitude spike on the very first point
+        var workingPoints = elevPoints
+        if (workingPoints.size >= 3) {
+            val p0 = workingPoints[0]
+            val p1 = workingPoints[1]
+            val p2 = workingPoints[2]
+            val dt01Ms = p1.timestamp - p0.timestamp
+            val dt12Ms = p2.timestamp - p1.timestamp
+            val pairAgree = abs(p2.altitude - p1.altitude) <= 45.0
+            val p0Spike = abs(p0.altitude - p1.altitude) > 90.0 && abs(p0.altitude - p2.altitude) > 90.0
+            if (p0.timestamp > 0L && p1.timestamp > 0L && dt01Ms in 400L..6000L && dt12Ms >= 0L && pairAgree && p0Spike) {
+                workingPoints = workingPoints.drop(1)
+            }
+        }
+
         var minAlt = Double.POSITIVE_INFINITY
         var maxAlt = Double.NEGATIVE_INFINITY
         var ascent = 0.0
         var descent = 0.0
 
-        var anchorAlt = elevPoints.first().altitude
-        var lastValidAlt = anchorAlt
-        var lastValidTimeMs = elevPoints.first().timestamp
+        var lastAcceptedPt = workingPoints.first()
+        var anchorAlt = lastAcceptedPt.altitude
         var cumulativeDist = 0.0
         val rawSamples = mutableListOf<ElevationSample>()
 
-        elevPoints.forEachIndexed { idx, pt ->
+        workingPoints.forEachIndexed { idx, pt ->
             val alt = pt.altitude
             if (idx > 0) {
-                val prev = elevPoints[idx - 1]
-                val stepDist = haversineMeters(prev.latitude, prev.longitude, pt.latitude, pt.longitude)
+                val stepDist = haversineMeters(
+                    lastAcceptedPt.latitude,
+                    lastAcceptedPt.longitude,
+                    pt.latitude,
+                    pt.longitude
+                )
+                // Only apply time-based vertical spike rejection when real advancing timestamps exist
+                val rawDtMs = pt.timestamp - lastAcceptedPt.timestamp
+                if (lastAcceptedPt.timestamp > 0L && pt.timestamp > 0L && rawDtMs in 400L..4000L) {
+                    val dtSec = rawDtMs / 1000.0
+                    val vertSpeed = abs(alt - lastAcceptedPt.altitude) / dtSec
+                    if (abs(alt - lastAcceptedPt.altitude) > 90.0 && vertSpeed > 25.0 && stepDist <= 300.0) {
+                        return@forEachIndexed
+                    }
+                }
                 if (stepDist <= 5000.0) {
                     cumulativeDist += stepDist
-                }
-                // Reject extreme unphysical vertical GPS spikes (>90m in <= 3 seconds)
-                val dtSec = ((pt.timestamp - lastValidTimeMs) / 1000.0).coerceAtLeast(1.0)
-                val vertSpeed = abs(alt - lastValidAlt) / dtSec
-                if (dtSec <= 4.0 && abs(alt - lastValidAlt) > 90.0 && vertSpeed > 25.0) {
-                    return@forEachIndexed
                 }
             }
 
@@ -102,8 +125,7 @@ object ElevationAnalyzer {
                 anchorAlt = alt
             }
 
-            lastValidAlt = alt
-            lastValidTimeMs = pt.timestamp
+            lastAcceptedPt = pt
             rawSamples.add(ElevationSample(distanceMeters = cumulativeDist, altitudeMeters = alt))
         }
 
@@ -121,13 +143,15 @@ object ElevationAnalyzer {
     }
 
     /**
-     * Evaluates nearest point along a route polyline (or reversed trail), cross-track deviation,
-     * remaining distance along the polyline, and direct bearing to the route destination.
+     * Evaluates nearest segment along a route polyline (or reversed trail), cross-track deviation,
+     * remaining distance along the polyline, and direct bearing to the next look-ahead route vertex.
+     * Pass [previousPointIndex] to keep progress monotonic on out-and-back and figure-8 loops.
      */
     fun evaluateRouteProgress(
         currentLat: Double,
         currentLon: Double,
-        routePoints: List<LocationPoint>
+        routePoints: List<LocationPoint>,
+        previousPointIndex: Int? = null
     ): RouteProgressMatch? {
         if (routePoints.isEmpty()) return null
         if (routePoints.size == 1) {
@@ -139,23 +163,69 @@ object ElevationAnalyzer {
                 crossTrackDistanceMeters = d,
                 remainingDistanceMeters = d,
                 bearingToTargetDegrees = b,
-                distanceToEndMeters = d
+                distanceToEndMeters = d,
+                targetLatitude = pt.latitude,
+                targetLongitude = pt.longitude
             )
         }
 
+        val lastSegIdx = routePoints.lastIndex - 1
         var bestSegIdx = 0
         var bestDistMeters = Double.POSITIVE_INFINITY
-        for (i in 0 until routePoints.size - 1) {
-            val a = routePoints[i]
-            val b = routePoints[i + 1]
-            val segDist = pointToSegmentDistanceMeters(
-                currentLat, currentLon,
-                a.latitude, a.longitude,
-                b.latitude, b.longitude
-            )
-            if (segDist < bestDistMeters) {
-                bestDistMeters = segDist
-                bestSegIdx = i
+
+        if (previousPointIndex != null && previousPointIndex in 0..lastSegIdx) {
+            val winStart = (previousPointIndex - 2).coerceAtLeast(0)
+            val winEnd = (previousPointIndex + 25).coerceAtMost(lastSegIdx)
+            var localBestIdx: Int = previousPointIndex
+            var localBestDist = Double.POSITIVE_INFINITY
+            for (i in winStart..winEnd) {
+                val a = routePoints[i]
+                val b = routePoints[i + 1]
+                val segDist = pointToSegmentDistanceMeters(
+                    currentLat, currentLon,
+                    a.latitude, a.longitude,
+                    b.latitude, b.longitude
+                )
+                if (segDist < localBestDist) {
+                    localBestDist = segDist
+                    localBestIdx = i
+                }
+            }
+            if (localBestDist <= 75.0) {
+                bestSegIdx = localBestIdx
+                bestDistMeters = localBestDist
+            } else {
+                for (i in 0..lastSegIdx) {
+                    val a = routePoints[i]
+                    val b = routePoints[i + 1]
+                    val segDist = pointToSegmentDistanceMeters(
+                        currentLat, currentLon,
+                        a.latitude, a.longitude,
+                        b.latitude, b.longitude
+                    )
+                    if (segDist < bestDistMeters) {
+                        bestDistMeters = segDist
+                        bestSegIdx = i
+                    }
+                }
+                if (localBestDist - bestDistMeters < 15.0) {
+                    bestSegIdx = localBestIdx
+                    bestDistMeters = localBestDist
+                }
+            }
+        } else {
+            for (i in 0..lastSegIdx) {
+                val a = routePoints[i]
+                val b = routePoints[i + 1]
+                val segDist = pointToSegmentDistanceMeters(
+                    currentLat, currentLon,
+                    a.latitude, a.longitude,
+                    b.latitude, b.longitude
+                )
+                if (segDist < bestDistMeters) {
+                    bestDistMeters = segDist
+                    bestSegIdx = i
+                }
             }
         }
 
@@ -171,7 +241,24 @@ object ElevationAnalyzer {
             }
         }
 
-        val targetGuideIdx = (bestSegIdx + 1).coerceAtMost(routePoints.lastIndex)
+        // Pick a look-ahead guide vertex at least 25m ahead so dense trails yield stable turn bearings
+        var targetGuideIdx = (bestSegIdx + 1).coerceAtMost(routePoints.lastIndex)
+        var lookAheadDist = haversineMeters(
+            currentLat,
+            currentLon,
+            routePoints[targetGuideIdx].latitude,
+            routePoints[targetGuideIdx].longitude
+        )
+        while (targetGuideIdx < routePoints.lastIndex && lookAheadDist < 25.0) {
+            val prevPt = routePoints[targetGuideIdx]
+            targetGuideIdx++
+            val curPt = routePoints[targetGuideIdx]
+            val seg = haversineMeters(prevPt.latitude, prevPt.longitude, curPt.latitude, curPt.longitude)
+            if (seg <= 5000.0) {
+                lookAheadDist += seg
+            }
+        }
+
         val guideTarget = routePoints[targetGuideIdx]
         val endPt = routePoints.last()
         return RouteProgressMatch(
@@ -179,7 +266,9 @@ object ElevationAnalyzer {
             crossTrackDistanceMeters = bestDistMeters,
             remainingDistanceMeters = remaining,
             bearingToTargetDegrees = initialBearingDegrees(currentLat, currentLon, guideTarget.latitude, guideTarget.longitude),
-            distanceToEndMeters = haversineMeters(currentLat, currentLon, endPt.latitude, endPt.longitude)
+            distanceToEndMeters = haversineMeters(currentLat, currentLon, endPt.latitude, endPt.longitude),
+            targetLatitude = guideTarget.latitude,
+            targetLongitude = guideTarget.longitude
         )
     }
 

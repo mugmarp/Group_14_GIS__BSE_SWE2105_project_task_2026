@@ -237,7 +237,12 @@ fun rememberCompassReading(
             } else if (accelSensor != null && magSensor != null) {
                 val okA = sensorManager.registerListener(listener, accelSensor, sensorDelay)
                 val okM = sensorManager.registerListener(listener, magSensor, sensorDelay)
-                isRegistered = okA && okM
+                if (okA && okM) {
+                    isRegistered = true
+                } else {
+                    sensorManager.unregisterListener(listener)
+                    isRegistered = false
+                }
             }
         }
 

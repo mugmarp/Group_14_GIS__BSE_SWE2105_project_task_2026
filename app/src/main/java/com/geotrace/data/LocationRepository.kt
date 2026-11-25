@@ -751,6 +751,9 @@ class LocationRepository(private val context: Context) {
                     }
                     smoothedSpeedMps = candidateSpeed
                 } else {
+                    if (safePoint.timestamp < prevPoint.timestamp) {
+                        return@withLock null
+                    }
                     val anchor = stationaryAnchorPoint ?: prevPoint
                     val distFromPrev = calculateDistanceMeters(prevPoint.latitude, prevPoint.longitude, safePoint.latitude, safePoint.longitude)
                     val distFromAnchor = calculateDistanceMeters(anchor.latitude, anchor.longitude, safePoint.latitude, safePoint.longitude)
@@ -836,15 +839,18 @@ class LocationRepository(private val context: Context) {
             if (isActivelyRecording && session != null) {
                 val lastSaved = _activeTrailPoints.value.lastOrNull()
                 val isFirstPoint = lastSaved == null
+                val isTimestampOrdered = lastSaved == null || point.timestamp >= lastSaved.timestamp
                 val elapsedSinceLastSavedMs = if (lastSaved != null) (point.timestamp - lastSaved.timestamp) else Long.MAX_VALUE
                 val accuracyImproved = lastSaved != null && (lastSaved.accuracy - point.accuracy >= 10f)
                 // Deduplicate stationary 1s bloat: persist immediately on movement/switch/first-fix/resume/accuracy jump, else 15s stationary heartbeat
-                val shouldPersistTrackpoint = isFirstPoint ||
-                    forcePostResumePersist ||
-                    additionalDistance > 0.0 ||
-                    isProviderSwitch ||
-                    accuracyImproved ||
-                    elapsedSinceLastSavedMs >= 15_000L
+                val shouldPersistTrackpoint = isTimestampOrdered && (
+                    isFirstPoint ||
+                        forcePostResumePersist ||
+                        additionalDistance > 0.0 ||
+                        isProviderSwitch ||
+                        accuracyImproved ||
+                        elapsedSinceLastSavedMs >= 15_000L
+                    )
 
                 if (shouldPersistTrackpoint) {
                     val db = dbHelper.writableDatabase
@@ -1876,6 +1882,13 @@ class LocationRepository(private val context: Context) {
         refreshOfflinePlacesCountInternal()
     }
 
+    private fun escapeSqlLike(input: String): String {
+        return input
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+    }
+
     suspend fun searchOfflinePlaces(query: String, limit: Int = 25): List<OfflinePlacePoi> = withContext(Dispatchers.IO) {
         val list = mutableListOf<OfflinePlacePoi>()
         val seenKeys = HashSet<String>()
@@ -1894,11 +1907,11 @@ class LocationRepository(private val context: Context) {
                 fetchCap.toString()
             )
         } else {
-            val likeArg = "%$trimmed%"
+            val likeArg = "%${escapeSqlLike(trimmed)}%"
             db.query(
                 LocationDbHelper.TABLE_OFFLINE_PLACES,
                 null,
-                "name LIKE ? COLLATE NOCASE OR category LIKE ? COLLATE NOCASE OR subtitle LIKE ? COLLATE NOCASE",
+                "name LIKE ? ESCAPE '\\' COLLATE NOCASE OR category LIKE ? ESCAPE '\\' COLLATE NOCASE OR subtitle LIKE ? ESCAPE '\\' COLLATE NOCASE",
                 arrayOf(likeArg, likeArg, likeArg),
                 null,
                 null,
@@ -1933,11 +1946,11 @@ class LocationRepository(private val context: Context) {
         if (trimmed.isBlank()) return@withContext emptyList()
         val list = mutableListOf<TrailWaypoint>()
         val db = dbHelper.readableDatabase
-        val likeArg = "%$trimmed%"
+        val likeArg = "%${escapeSqlLike(trimmed)}%"
         val cursor = db.query(
             LocationDbHelper.TABLE_WAYPOINTS,
             null,
-            "name LIKE ? COLLATE NOCASE OR note LIKE ? COLLATE NOCASE",
+            "name LIKE ? ESCAPE '\\' COLLATE NOCASE OR note LIKE ? ESCAPE '\\' COLLATE NOCASE",
             arrayOf(likeArg, likeArg),
             null,
             null,
@@ -2009,81 +2022,112 @@ class LocationRepository(private val context: Context) {
         photoUri: String = "",
         tripId: String? = null
     ): SavedPlace = withContext(Dispatchers.IO) {
-        val db = dbHelper.writableDatabase
-        val validTripId = resolveExistingTripId(db, tripId)
-        val place = SavedPlace(
-            id = UUID.randomUUID().toString(),
-            name = name.trim().ifBlank { "Saved Spot" },
-            category = category.trim().ifBlank { "Spot" },
-            note = note.trim(),
-            latitude = latitude,
-            longitude = longitude,
-            altitude = altitude,
-            photoUri = photoUri.trim(),
-            tripId = validTripId,
-            createdAt = System.currentTimeMillis()
-        )
-        val cv = ContentValues().apply {
-            put("id", place.id)
-            put("name", place.name)
-            put("category", place.category)
-            put("note", place.note)
-            put("latitude", place.latitude)
-            put("longitude", place.longitude)
-            put("altitude", place.altitude)
-            put("photo_uri", place.photoUri)
-            if (place.tripId != null) put("trip_id", place.tripId) else putNull("trip_id")
-            put("created_at", place.createdAt)
-        }
-        var savedPlace = place
-        val rowId = db.insertWithOnConflict(
-            LocationDbHelper.TABLE_SAVED_PLACES,
-            null,
-            cv,
-            android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
-        )
-        if (rowId == -1L && validTripId != null) {
-            cv.putNull("trip_id")
-            db.insertWithOnConflict(
+        recordingMutex.withLock {
+            val db = dbHelper.writableDatabase
+            val validTripId = resolveExistingTripId(db, tripId)
+            val place = SavedPlace(
+                id = UUID.randomUUID().toString(),
+                name = name.trim().ifBlank { "Saved Spot" },
+                category = category.trim().ifBlank { "Spot" },
+                note = note.trim(),
+                latitude = latitude,
+                longitude = longitude,
+                altitude = altitude,
+                photoUri = photoUri.trim(),
+                tripId = validTripId,
+                createdAt = System.currentTimeMillis()
+            )
+            val cv = ContentValues().apply {
+                put("id", place.id)
+                put("name", place.name)
+                put("category", place.category)
+                put("note", place.note)
+                put("latitude", place.latitude)
+                put("longitude", place.longitude)
+                put("altitude", place.altitude)
+                put("photo_uri", place.photoUri)
+                if (place.tripId != null) put("trip_id", place.tripId) else putNull("trip_id")
+                put("created_at", place.createdAt)
+            }
+            var savedPlace = place
+            var rowId = db.insertWithOnConflict(
                 LocationDbHelper.TABLE_SAVED_PLACES,
                 null,
                 cv,
                 android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
             )
-            savedPlace = place.copy(tripId = null)
+            if (rowId == -1L && validTripId != null) {
+                cv.putNull("trip_id")
+                rowId = db.insertWithOnConflict(
+                    LocationDbHelper.TABLE_SAVED_PLACES,
+                    null,
+                    cv,
+                    android.database.sqlite.SQLiteDatabase.CONFLICT_REPLACE
+                )
+                savedPlace = place.copy(tripId = null)
+            }
+            if (rowId == -1L && savedPlace.photoUri.isNotBlank()) {
+                deleteUnusedWaypointPhotos(db, listOf(savedPlace.photoUri))
+                savedPlace = savedPlace.copy(photoUri = "")
+            }
+            loadSavedPlacesInternal()
+            savedPlace
         }
-        loadSavedPlacesInternal()
-        savedPlace
+    }
+
+    suspend fun updateSavedPlace(
+        id: String,
+        name: String,
+        category: String,
+        note: String,
+        tripId: String?
+    ) = withContext(Dispatchers.IO) {
+        recordingMutex.withLock {
+            val db = dbHelper.writableDatabase
+            val validTripId = resolveExistingTripId(db, tripId)
+            val cv = ContentValues().apply {
+                put("name", name.trim().ifBlank { "Saved Spot" })
+                put("category", category.trim().ifBlank { "Spot" })
+                put("note", note.trim())
+                if (validTripId != null) put("trip_id", validTripId) else putNull("trip_id")
+            }
+            db.update(LocationDbHelper.TABLE_SAVED_PLACES, cv, "id = ?", arrayOf(id))
+            loadSavedPlacesInternal()
+        }
     }
 
     suspend fun deleteSavedPlace(id: String) = withContext(Dispatchers.IO) {
-        val db = dbHelper.writableDatabase
-        val photosToCleanup = mutableListOf<String>()
-        db.query(
-            LocationDbHelper.TABLE_SAVED_PLACES,
-            arrayOf("photo_uri"),
-            "id = ?",
-            arrayOf(id),
-            null, null, null
-        ).use { c ->
-            while (c.moveToNext()) {
-                val p = c.getString(0) ?: ""
-                if (p.isNotBlank()) photosToCleanup.add(p)
+        recordingMutex.withLock {
+            val db = dbHelper.writableDatabase
+            val photosToCleanup = mutableListOf<String>()
+            db.query(
+                LocationDbHelper.TABLE_SAVED_PLACES,
+                arrayOf("photo_uri"),
+                "id = ?",
+                arrayOf(id),
+                null, null, null
+            ).use { c ->
+                while (c.moveToNext()) {
+                    val p = c.getString(0) ?: ""
+                    if (p.isNotBlank()) photosToCleanup.add(p)
+                }
             }
+            db.delete(LocationDbHelper.TABLE_SAVED_PLACES, "id = ?", arrayOf(id))
+            deleteUnusedWaypointPhotos(db, photosToCleanup)
+            loadSavedPlacesInternal()
         }
-        db.delete(LocationDbHelper.TABLE_SAVED_PLACES, "id = ?", arrayOf(id))
-        deleteUnusedWaypointPhotos(db, photosToCleanup)
-        loadSavedPlacesInternal()
     }
 
     suspend fun assignPlaceToTrip(placeId: String, tripId: String?) = withContext(Dispatchers.IO) {
-        val db = dbHelper.writableDatabase
-        val validTripId = resolveExistingTripId(db, tripId)
-        val cv = ContentValues().apply {
-            if (validTripId != null) put("trip_id", validTripId) else putNull("trip_id")
+        recordingMutex.withLock {
+            val db = dbHelper.writableDatabase
+            val validTripId = resolveExistingTripId(db, tripId)
+            val cv = ContentValues().apply {
+                if (validTripId != null) put("trip_id", validTripId) else putNull("trip_id")
+            }
+            db.update(LocationDbHelper.TABLE_SAVED_PLACES, cv, "id = ?", arrayOf(placeId))
+            loadSavedPlacesInternal()
         }
-        db.update(LocationDbHelper.TABLE_SAVED_PLACES, cv, "id = ?", arrayOf(placeId))
-        loadSavedPlacesInternal()
     }
 
     suspend fun searchSavedPlaces(query: String, limit: Int = 20): List<SavedPlace> = withContext(Dispatchers.IO) {
@@ -2098,11 +2142,11 @@ class LocationRepository(private val context: Context) {
                 limit.toString()
             )
         } else {
-            val likeArg = "%$trimmed%"
+            val likeArg = "%${escapeSqlLike(trimmed)}%"
             db.query(
                 LocationDbHelper.TABLE_SAVED_PLACES,
                 null,
-                "name LIKE ? COLLATE NOCASE OR category LIKE ? COLLATE NOCASE OR note LIKE ? COLLATE NOCASE",
+                "name LIKE ? ESCAPE '\\' COLLATE NOCASE OR category LIKE ? ESCAPE '\\' COLLATE NOCASE OR note LIKE ? ESCAPE '\\' COLLATE NOCASE",
                 arrayOf(likeArg, likeArg, likeArg),
                 null, null,
                 "created_at DESC",

@@ -105,4 +105,42 @@ class SolarCalculatorTest {
         assertEquals("Polar Night", polarNight.polarCondition)
         assertFalse(polarNight.isDaylight)
     }
+
+    @Test
+    fun `sydney sunrise crosses UTC day boundary minus one cleanly`() {
+        val sydneyTz = TimeZone.getTimeZone("Australia/Sydney") // UTC+11 in March
+        // 05:30 AEDT on March 20, 2026 = 18:30 UTC on March 19
+        val preDawnUtcMs = utcTimeMs(2026, 3, 19, 18, 30)
+        val preDawnInfo = SolarCalculator.calculateDaylight(
+            latitude = -33.8688,
+            longitude = 151.2093,
+            nowMs = preDawnUtcMs,
+            timeZone = sydneyTz
+        )
+        assertFalse(preDawnInfo.isDaylight)
+        assertNotNull(preDawnInfo.sunriseTimeMs)
+        val sunriseLocal = Calendar.getInstance(sydneyTz).apply { timeInMillis = preDawnInfo.sunriseTimeMs!! }
+        val sunriseMins = sunriseLocal.get(Calendar.HOUR_OF_DAY) * 60 + sunriseLocal.get(Calendar.MINUTE)
+        assertTrue("Sydney sunrise expected ~06:40..07:15 AEDT, got $sunriseMins", sunriseMins in 400..435)
+        assertTrue("Sunrise should be 60..120m away from 05:30 AEDT", preDawnInfo.minutesUntilTransition!! in 60L..120L)
+    }
+
+    @Test
+    fun `san francisco sunset crosses UTC day boundary plus one cleanly`() {
+        val laTz = TimeZone.getTimeZone("America/Los_Angeles") // UTC-7 in June (PDT)
+        // 12:00 PDT on June 20, 2026 = 19:00 UTC on June 20
+        val middayUtcMs = utcTimeMs(2026, 6, 20, 19, 0)
+        val info = SolarCalculator.calculateDaylight(
+            latitude = 37.7749,
+            longitude = -122.4194,
+            nowMs = middayUtcMs,
+            timeZone = laTz
+        )
+        assertTrue(info.isDaylight)
+        assertNotNull(info.sunsetTimeMs)
+        val sunsetLocal = Calendar.getInstance(laTz).apply { timeInMillis = info.sunsetTimeMs!! }
+        val sunsetMins = sunsetLocal.get(Calendar.HOUR_OF_DAY) * 60 + sunsetLocal.get(Calendar.MINUTE)
+        assertTrue("SF solstice sunset expected ~20:20..20:50 PDT, got $sunsetMins", sunsetMins in 1220..1250)
+        assertTrue("Sunset should be ~490..540m from noon", info.minutesUntilTransition!! in 490L..540L)
+    }
 }
