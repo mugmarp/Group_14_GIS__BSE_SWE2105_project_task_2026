@@ -132,6 +132,13 @@ class LocationRepository(
     private val _lastGaspBeacon = MutableStateFlow(loadLastGaspBeacon())
     val lastGaspBeacon: StateFlow<LastGaspBeacon?> = _lastGaspBeacon.asStateFlow()
 
+    private val _activeNavNotificationText = MutableStateFlow<String?>(null)
+    val activeNavNotificationText: StateFlow<String?> = _activeNavNotificationText.asStateFlow()
+
+    fun updateActiveNavNotificationText(text: String?) {
+        _activeNavNotificationText.value = text
+    }
+
     private fun loadLastGaspBeacon(): LastGaspBeacon? {
         val raw = prefs.getString("last_gasp_beacon_json", null) ?: return null
         return try {
@@ -2499,6 +2506,26 @@ class LocationRepository(
         db.delete(LocationDbHelper.TABLE_OFFLINE_PLACES, null, null)
         db.delete(LocationDbHelper.TABLE_OFFLINE_MAPS, null, null)
         loadOfflineMapRegions()
+    }
+
+    suspend fun saveCachedNavRoute(route: com.geotrace.navigation.NavRoute, isActive: Boolean) = withContext(Dispatchers.IO) {
+        offlineCacheRepository.saveNavRoute(route, isActive)
+    }
+
+    suspend fun getActiveNavRoute(): com.geotrace.navigation.NavRoute? = withContext(Dispatchers.IO) {
+        offlineCacheRepository.getActiveNavRoute()
+    }
+
+    suspend fun clearActiveNavRouteFlag() = withContext(Dispatchers.IO) {
+        offlineCacheRepository.clearActiveNavRouteFlag()
+    }
+
+    suspend fun findCachedNavRouteNear(
+        destinationLat: Double,
+        destinationLon: Double,
+        profile: com.geotrace.navigation.NavProfile
+    ): com.geotrace.navigation.NavRoute? = withContext(Dispatchers.IO) {
+        offlineCacheRepository.findCachedNavRouteNear(destinationLat, destinationLon, profile)
     }
 
     fun calculateDistanceMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {

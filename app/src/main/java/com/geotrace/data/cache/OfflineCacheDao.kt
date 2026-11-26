@@ -103,3 +103,32 @@ interface LocationFixCacheDao {
     @Query("DELETE FROM cached_location_fixes")
     suspend fun clearAll()
 }
+
+@Dao
+interface NavRouteCacheDao {
+    @Query("SELECT * FROM cached_nav_routes WHERE is_active = 1 ORDER BY updated_at_ms DESC LIMIT 1")
+    suspend fun getActiveRoute(): CachedNavRouteEntity?
+
+    @Query("SELECT * FROM cached_nav_routes ORDER BY updated_at_ms DESC LIMIT :limit")
+    fun observeRecentRoutes(limit: Int): Flow<List<CachedNavRouteEntity>>
+
+    @Query("SELECT * FROM cached_nav_routes ORDER BY updated_at_ms DESC LIMIT :limit")
+    suspend fun getRecentRoutes(limit: Int): List<CachedNavRouteEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertRoute(entity: CachedNavRouteEntity)
+
+    @Query("UPDATE cached_nav_routes SET is_active = 0 WHERE is_active = 1")
+    suspend fun clearActiveFlags()
+
+    @Query(
+        "DELETE FROM cached_nav_routes WHERE id NOT IN (" +
+            "SELECT id FROM cached_nav_routes ORDER BY updated_at_ms DESC LIMIT :maxKeep" +
+            ")"
+    )
+    suspend fun pruneOldestRoutes(maxKeep: Int)
+
+    @Query("DELETE FROM cached_nav_routes")
+    suspend fun clearAll()
+}
+

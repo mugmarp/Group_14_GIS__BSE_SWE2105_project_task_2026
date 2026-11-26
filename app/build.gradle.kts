@@ -34,12 +34,27 @@ android {
             ?.trim()
             ?.removeSurrounding("\"")
             ?.removeSurrounding("'")
-        val openCellIdKey = (rawEnvFileKey?.takeIf { it.isNotBlank() }
-            ?: rawSysEnvKey?.takeIf { it.isNotBlank() }
+        val openCellIdKey = (rawEnvFileKey?.takeIf { it.isNotBlank() && it != "OPENCELLID_API_KEY_DEFAULT_VALUE" }
+            ?: rawSysEnvKey?.takeIf { it.isNotBlank() && it != "OPENCELLID_API_KEY_DEFAULT_VALUE" }
             ?: "")
             .replace("\\", "\\\\")
             .replace("\"", "\\\"")
         buildConfigField("String", "OPENCELLID_API_KEY", "\"$openCellIdKey\"")
+
+        val rawOrsFileKey = envProps.getProperty("ORS_API_KEY")
+            ?.trim()
+            ?.removeSurrounding("\"")
+            ?.removeSurrounding("'")
+        val rawOrsSysKey = System.getenv("ORS_API_KEY")
+            ?.trim()
+            ?.removeSurrounding("\"")
+            ?.removeSurrounding("'")
+        val orsApiKey = (rawOrsFileKey?.takeIf { it.isNotBlank() && it != "ORS_API_KEY_DEFAULT_VALUE" }
+            ?: rawOrsSysKey?.takeIf { it.isNotBlank() && it != "ORS_API_KEY_DEFAULT_VALUE" }
+            ?: "")
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "ORS_API_KEY", "\"$orsApiKey\"")
     }
 
     signingConfigs {

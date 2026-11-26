@@ -39,6 +39,12 @@ class LocationTrackerApp : Application() {
     lateinit var placeSearchManager: PlaceSearchManager
         private set
 
+    lateinit var routingProvider: com.geotrace.navigation.RoutingProvider
+        private set
+
+    lateinit var voiceGuidanceManager: com.geotrace.navigation.VoiceGuidanceManager
+        private set
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _offlinePoiStatus = MutableStateFlow<String?>(null)
@@ -75,6 +81,8 @@ class LocationTrackerApp : Application() {
         groupRepository = com.geotrace.data.GroupRepository(this)
         offlineMapManager = OfflineMapManager(this)
         placeSearchManager = PlaceSearchManager(this)
+        routingProvider = com.geotrace.navigation.HybridPhase1RoutingProvider(this)
+        voiceGuidanceManager = com.geotrace.navigation.VoiceGuidanceManager(this)
 
         // Read real hardware cell towers if present
         val initialTowers = cellManager.readCurrentCellTowers()

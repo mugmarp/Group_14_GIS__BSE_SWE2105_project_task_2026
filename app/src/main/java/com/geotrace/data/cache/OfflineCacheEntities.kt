@@ -62,3 +62,22 @@ data class CachedLocationFixEntity(
     val timestamp: Long,
     @ColumnInfo(name = "session_id") val sessionId: String
 )
+
+@Entity(
+    tableName = "cached_nav_routes",
+    indices = [Index(value = ["updated_at_ms"])]
+)
+data class CachedNavRouteEntity(
+    @PrimaryKey val id: String,
+    @ColumnInfo(name = "destination_name") val destinationName: String,
+    @ColumnInfo(name = "destination_lat") val destinationLat: Double,
+    @ColumnInfo(name = "destination_lon") val destinationLon: Double,
+    val profile: String,
+    val source: String,
+    @ColumnInfo(name = "total_distance_meters") val totalDistanceMeters: Double,
+    @ColumnInfo(name = "total_duration_seconds") val totalDurationSeconds: Double,
+    @ColumnInfo(name = "is_active") val isActive: Boolean,
+    @ColumnInfo(name = "route_json") val routeJson: String,
+    @ColumnInfo(name = "updated_at_ms") val updatedAtMs: Long
+)
+

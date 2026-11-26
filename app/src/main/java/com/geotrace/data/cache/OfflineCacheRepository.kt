@@ -2,11 +2,19 @@ package com.geotrace.data.cache
 
 import com.geotrace.model.CellTowerInfo
 import com.geotrace.model.LocationPoint
+import com.geotrace.navigation.NavManeuverType
+import com.geotrace.navigation.NavProfile
+import com.geotrace.navigation.NavRoute
+import com.geotrace.navigation.NavRouteSource
+import com.geotrace.navigation.NavStep
 import com.geotrace.service.OpenCellIdClient
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -15,18 +23,21 @@ import kotlin.math.sqrt
 class OfflineCacheRepository(
     private val cellDao: CellTowerCacheDao,
     private val observedCellDao: ObservedCellDao,
-    private val locationFixDao: LocationFixCacheDao
+    private val locationFixDao: LocationFixCacheDao,
+    private val navRouteDao: NavRouteCacheDao? = null
 ) : OpenCellIdClient.CellTowerCacheStore {
 
     constructor(database: OfflineCacheDatabase) : this(
         database.cellTowerCacheDao(),
         database.observedCellDao(),
-        database.locationFixCacheDao()
+        database.locationFixCacheDao(),
+        database.navRouteCacheDao()
     )
 
     companion object {
         const val MAX_CACHED_CELL_TOWERS = 2000
         const val MAX_CACHED_LOCATION_FIXES = 100
+        const val MAX_CACHED_NAV_ROUTES = 15
         private const val LOCATION_PERSIST_MIN_INTERVAL_MS = 15_000L
         private const val LOCATION_PERSIST_MIN_DISTANCE_METERS = 25.0
         private const val OBSERVED_CELLS_MIN_INTERVAL_MS = 20_000L
@@ -251,6 +262,59 @@ class OfflineCacheRepository(
         locationFixDao.clearAll()
     }
 
+    suspend fun saveNavRoute(route: NavRoute, isActive: Boolean) = cacheMutex.withLock {
+        val dao = navRouteDao ?: return@withLock
+        if (isActive) {
+            dao.clearActiveFlags()
+        }
+        dao.upsertRoute(
+            CachedNavRouteEntity(
+                id = route.id,
+                destinationName = route.destinationName,
+                destinationLat = route.destinationLat,
+                destinationLon = route.destinationLon,
+                profile = route.profile.name,
+                source = route.source.name,
+                totalDistanceMeters = route.totalDistanceMeters,
+                totalDurationSeconds = route.totalDurationSeconds,
+                isActive = isActive,
+                routeJson = serializeNavRoute(route),
+                updatedAtMs = System.currentTimeMillis()
+            )
+        )
+        dao.pruneOldestRoutes(MAX_CACHED_NAV_ROUTES)
+    }
+
+    suspend fun getActiveNavRoute(): NavRoute? = cacheMutex.withLock {
+        val dao = navRouteDao ?: return@withLock null
+        dao.getActiveRoute()?.let { deserializeNavRoute(it.routeJson) }
+    }
+
+    suspend fun clearActiveNavRouteFlag() = cacheMutex.withLock {
+        navRouteDao?.clearActiveFlags()
+    }
+
+    suspend fun findCachedNavRouteNear(
+        destinationLat: Double,
+        destinationLon: Double,
+        profile: NavProfile
+    ): NavRoute? = cacheMutex.withLock {
+        val dao = navRouteDao ?: return@withLock null
+        val rows = dao.getRecentRoutes(MAX_CACHED_NAV_ROUTES)
+        val matched = rows.firstOrNull { row ->
+            row.profile == profile.name &&
+                haversineMeters(row.destinationLat, row.destinationLon, destinationLat, destinationLon) <= 150.0
+        } ?: return@withLock null
+        deserializeNavRoute(matched.routeJson)?.copy(source = NavRouteSource.CACHED_OFFLINE)
+    }
+
+    fun observeRecentCachedNavRoutes(): Flow<List<NavRoute>> {
+        val dao = navRouteDao ?: return flowOf(emptyList())
+        return dao.observeRecentRoutes(MAX_CACHED_NAV_ROUTES).map { rows ->
+            rows.mapNotNull { deserializeNavRoute(it.routeJson) }
+        }
+    }
+
     suspend fun clearAllOfflineCaches() = cacheMutex.withLock {
         lastPersistedFix = null
         lastObservedSnapshotSignature = null
@@ -260,6 +324,7 @@ class OfflineCacheRepository(
         cellDao.clearAll()
         observedCellDao.clearAll()
         locationFixDao.clearAll()
+        navRouteDao?.clearAll()
     }
 
     private fun CachedLocationFixEntity.toDomain(): LocationPoint = LocationPoint(
@@ -300,5 +365,121 @@ class OfflineCacheRepository(
             sin(dLon / 2) * sin(dLon / 2)
         val c = 2 * atan2(sqrt(a), sqrt(1 - a))
         return r * c
+    }
+
+    private fun serializeNavRoute(route: NavRoute): String {
+        val ptsArr = JSONArray()
+        for (p in route.points) {
+            ptsArr.put(
+                JSONObject().apply {
+                    put("lat", p.latitude)
+                    put("lon", p.longitude)
+                    put("alt", p.altitude)
+                }
+            )
+        }
+        val stepsArr = JSONArray()
+        for (s in route.steps) {
+            stepsArr.put(
+                JSONObject().apply {
+                    put("index", s.index)
+                    put("type", s.maneuverType.name)
+                    put("instruction", s.instruction)
+                    put("verbal", s.verbalPrompt)
+                    put("street", s.streetName)
+                    put("dist", s.distanceMeters)
+                    put("dur", s.durationSeconds)
+                    put("bIdx", s.beginPointIndex)
+                    put("eIdx", s.endPointIndex)
+                    s.roundaboutExit?.let { put("exit", it) }
+                }
+            )
+        }
+        return JSONObject().apply {
+            put("id", route.id)
+            put("profile", route.profile.name)
+            put("oLat", route.originLat)
+            put("oLon", route.originLon)
+            put("dName", route.destinationName)
+            put("dLat", route.destinationLat)
+            put("dLon", route.destinationLon)
+            put("dist", route.totalDistanceMeters)
+            put("dur", route.totalDurationSeconds)
+            put("source", route.source.name)
+            put("createdAt", route.createdAtMs)
+            put("points", ptsArr)
+            put("steps", stepsArr)
+        }.toString()
+    }
+
+    private fun deserializeNavRoute(raw: String): NavRoute? {
+        return try {
+            val obj = JSONObject(raw)
+            val id = obj.optString("id", "")
+            if (id.isBlank()) return null
+            val profile = NavProfile.entries.firstOrNull { it.name == obj.optString("profile") } ?: NavProfile.DRIVING
+            val source = NavRouteSource.entries.firstOrNull { it.name == obj.optString("source") } ?: NavRouteSource.CACHED_OFFLINE
+            val ptsArr = obj.optJSONArray("points") ?: return null
+            val points = ArrayList<LocationPoint>(ptsArr.length())
+            for (i in 0 until ptsArr.length()) {
+                val pt = ptsArr.optJSONObject(i) ?: continue
+                val lat = pt.optDouble("lat", Double.NaN)
+                val lon = pt.optDouble("lon", Double.NaN)
+                if (lat.isFinite() && lon.isFinite()) {
+                    points.add(
+                        LocationPoint(
+                            latitude = lat,
+                            longitude = lon,
+                            accuracy = 5f,
+                            altitude = pt.optDouble("alt", 0.0),
+                            provider = "route",
+                            timestamp = obj.optLong("createdAt", System.currentTimeMillis()),
+                            sessionId = id
+                        )
+                    )
+                }
+            }
+            if (points.size < 2) return null
+
+            val stepsArr = obj.optJSONArray("steps") ?: JSONArray()
+            val steps = ArrayList<NavStep>(stepsArr.length())
+            for (i in 0 until stepsArr.length()) {
+                val st = stepsArr.optJSONObject(i) ?: continue
+                val mType = NavManeuverType.entries.firstOrNull { it.name == st.optString("type") }
+                    ?: NavManeuverType.STRAIGHT
+                steps.add(
+                    NavStep(
+                        index = st.optInt("index", i),
+                        maneuverType = mType,
+                        instruction = st.optString("instruction", ""),
+                        verbalPrompt = st.optString("verbal", ""),
+                        streetName = st.optString("street", ""),
+                        distanceMeters = st.optDouble("dist", 0.0),
+                        durationSeconds = st.optDouble("dur", 0.0),
+                        beginPointIndex = st.optInt("bIdx", 0).coerceIn(0, points.lastIndex),
+                        endPointIndex = st.optInt("eIdx", 0).coerceIn(0, points.lastIndex),
+                        roundaboutExit = if (st.has("exit")) st.optInt("exit") else null
+                    )
+                )
+            }
+
+            NavRoute(
+                id = id,
+                profile = profile,
+                originLat = obj.optDouble("oLat", points.first().latitude),
+                originLon = obj.optDouble("oLon", points.first().longitude),
+                destinationName = obj.optString("dName", "Destination"),
+                destinationLat = obj.optDouble("dLat", points.last().latitude),
+                destinationLon = obj.optDouble("dLon", points.last().longitude),
+                points = points,
+                steps = steps,
+                totalDistanceMeters = obj.optDouble("dist", 0.0),
+                totalDurationSeconds = obj.optDouble("dur", 0.0),
+                source = source,
+                createdAtMs = obj.optLong("createdAt", System.currentTimeMillis())
+            )
+        } catch (_: Exception) {
+            null
+        }
     }
 }
