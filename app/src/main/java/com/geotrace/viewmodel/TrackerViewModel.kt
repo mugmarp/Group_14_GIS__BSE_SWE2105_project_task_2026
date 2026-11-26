@@ -16,6 +16,7 @@ import com.geotrace.model.GeofenceCategory
 import com.geotrace.model.GeofenceZone
 import com.geotrace.model.LastGaspBeacon
 import com.geotrace.model.LocationPoint
+import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineDownloadProgress
 import com.geotrace.model.OfflineMapRegion
@@ -185,6 +186,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val offlineCacheSizeMb: StateFlow<Float> = offlineMapManager.cacheSizeMb
     val offlinePlacesCount: StateFlow<Int> = repository.offlinePlacesCount
     val offlinePoiStatus: StateFlow<String?> = app.offlinePoiStatus
+    val poiIndexingRegionIds: StateFlow<Set<String>> = app.poiIndexingRegionIds
+
+    private val _localMapFocusTarget = MutableStateFlow<MapFocusTarget?>(null)
+    val localMapFocusTarget: StateFlow<MapFocusTarget?> = _localMapFocusTarget.asStateFlow()
 
     val placeSearchManager = app.placeSearchManager
     private val _searchQuery = MutableStateFlow("")
@@ -200,6 +205,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private val _selectedSearchPin = MutableStateFlow<SearchPlaceResult?>(null)
     val selectedSearchPin: StateFlow<SearchPlaceResult?> = _selectedSearchPin.asStateFlow()
     private var searchJob: Job? = null
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
+    private val forceNextCellRefresh = java.util.concurrent.atomic.AtomicBoolean(false)
 
     @Volatile
     var lastHandledFocusRequestMs: Long = 0L
@@ -242,11 +249,44 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private var isUiForeground: Boolean = true
 
     init {
-        startStandbyLocationUpdates()
+        viewModelScope.launch {
+            repository.awaitInitialRestore()
+            if (activeSession.value == null && isUiForeground) {
+                startStandbyLocationUpdates()
+            }
+        }
+        viewModelScope.launch {
+            activeSession.collect { session ->
+                if (session != null) {
+                    stopStandbyLocationUpdates()
+                }
+            }
+        }
         startStandbyCellPolling()
         observeCellTowerLocation()
+        observeNetworkConnectivity()
         observeGeofencingSync()
         observeRouteNavigation()
+    }
+
+    private fun observeNetworkConnectivity() {
+        try {
+            val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return
+            val callback = object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    _isNetworkOnline.value = placeSearchManager.isNetworkConnected()
+                }
+                override fun onCapabilitiesChanged(network: android.net.Network, networkCapabilities: android.net.NetworkCapabilities) {
+                    _isNetworkOnline.value = placeSearchManager.isNetworkConnected()
+                }
+                override fun onLost(network: android.net.Network) {
+                    _isNetworkOnline.value = placeSearchManager.isNetworkConnected()
+                }
+            }
+            cm.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        } catch (_: Exception) {
+        }
     }
 
     private fun observeRouteNavigation() {
@@ -411,6 +451,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             ) { liveTowers, cachedTowers, mode, apiKey, _ ->
                 CellLookupInputs(liveTowers, cachedTowers, mode, apiKey)
             }.collect { (liveTowers, cachedTowers, mode, apiKey) ->
+                val forceRefresh = forceNextCellRefresh.getAndSet(false)
                 val loc = currentLocation.value ?: lastKnownCachedLocation.value
                 val hasLiveRadioScan = liveTowers.isNotEmpty()
                 val effectiveTowers = if (hasLiveRadioScan) liveTowers else cachedTowers
@@ -421,7 +462,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                         cellInfo = servingCell,
                         apiKey = apiKey,
                         userLatitude = loc?.latitude,
-                        userLongitude = loc?.longitude
+                        userLongitude = loc?.longitude,
+                        forceRefresh = forceRefresh
                     )
                     _cellTowerLocation.value = location
                 } else {
@@ -433,9 +475,13 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     towers = effectiveTowers,
                     apiKey = apiKey,
                     userLatitude = loc?.latitude,
-                    userLongitude = loc?.longitude
+                    userLongitude = loc?.longitude,
+                    forceRefresh = forceRefresh
                 )
                 _allCellTowerLocations.value = allResolved
+                if (forceRefresh) {
+                    _isRefreshingCells.value = false
+                }
 
                 // In Cell-Only mode with a live modem scan: fall back to OpenCellID-resolved serving tower
                 if (hasLiveRadioScan && mode == TrackingMode.POWER_SAVER) {
@@ -1137,6 +1183,13 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         super.onCleared()
         stopStandbyLocationUpdates()
         standbyCellJob?.cancel()
+        networkCallback?.let { cb ->
+            try {
+                val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                cm?.unregisterNetworkCallback(cb)
+            } catch (_: Exception) {}
+        }
+        networkCallback = null
     }
 
     fun setTrackingMode(mode: TrackingMode) {
@@ -1568,29 +1621,17 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun refreshServingMastOnline() {
-        viewModelScope.launch {
-            _isRefreshingCells.value = true
-            try {
-                val effectiveTowers = if (cellTowers.value.isNotEmpty()) cellTowers.value else cachedObservedCells.value
-                val servingCell = effectiveTowers.firstOrNull { it.isRegistered } ?: effectiveTowers.firstOrNull()
-                    ?: return@launch
-                val loc = currentLocation.value ?: lastKnownCachedLocation.value
-                val resolved = com.geotrace.service.OpenCellIdClient.resolveCellLocation(
-                    cellInfo = servingCell,
-                    apiKey = _settings.value.openCellIdApiKey,
-                    userLatitude = loc?.latitude,
-                    userLongitude = loc?.longitude,
-                    updateStatus = true,
-                    forceRefresh = true
-                )
-                if (resolved != null) {
-                    _cellTowerLocation.value = resolved
-                    _allCellTowerLocations.value = _allCellTowerLocations.value.filterNot { it.cellId == resolved.cellId } + resolved
-                }
-            } finally {
-                _isRefreshingCells.value = false
-            }
-        }
+        _isRefreshingCells.value = true
+        forceNextCellRefresh.set(true)
+        cellLookupRefreshTrigger.value += 1
+    }
+
+    fun focusLocalMapTarget(target: MapFocusTarget) {
+        _localMapFocusTarget.value = target
+    }
+
+    fun clearLocalMapFocusTarget() {
+        _localMapFocusTarget.value = null
     }
 
     fun updateSpeedUnit(unit: com.geotrace.model.SpeedUnit) {
@@ -1764,8 +1805,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     fun clearOfflineTelemetryCache() {
         viewModelScope.launch {
+            cellRefreshJob?.cancel()
             repository.clearOfflineGpsAndCellCache()
-            refreshCellTowers()
+            _cellTowerLocation.value = null
+            _allCellTowerLocations.value = emptyList()
         }
     }
 
@@ -1919,7 +1962,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     )
             }.take(6).map { withDist(it) }
 
-            // 7. Cached Offline POIs from downloaded regions (SQLite LIKE query)
+            // 7. Cached Offline POIs from downloaded regions (SQLite LIKE query or nearest-first blank suggestions)
             val offlinePoiMatches = if (trimmed.isNotBlank()) {
                 repository.searchOfflinePlaces(trimmed, limit = 15).map { poi ->
                     withDist(
@@ -1934,7 +1977,12 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
             } else if (offlinePlacesCount.value > 0) {
-                repository.searchOfflinePlaces("", limit = 16).map { poi ->
+                repository.searchOfflinePlaces(
+                    query = "",
+                    limit = 12,
+                    nearLat = curLoc?.latitude,
+                    nearLon = curLoc?.longitude
+                ).map { poi ->
                     withDist(
                         SearchPlaceResult(
                             id = "poi_${poi.id}",
@@ -1945,7 +1993,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                             source = SearchResultSource.OFFLINE_POI
                         )
                     )
-                }.sortedBy { it.distanceMeters ?: Double.MAX_VALUE }.take(8)
+                }.sortedBy { it.distanceMeters ?: Double.MAX_VALUE }.take(10)
             } else {
                 emptyList()
             }

@@ -482,9 +482,11 @@ object TrackExporter {
         val altLine = resolvedAltitude?.let {
             "\n⛰️ Altitude: ${it.toInt()} m"
         } ?: ""
-        val fixSourceTag = when (point.provider) {
-            "last_gasp" -> " (Last-Gasp Beacon)"
-            "cellular" -> " (Approx. Cell Mast)"
+        val fixSourceTag = when {
+            point.provider == "last_gasp" -> " (Last-Gasp Beacon)"
+            point.provider == "cellular" -> " (Approx. Cell Mast)"
+            point.provider == "cached_cellular" -> " (Cached Cell Mast)"
+            point.provider.startsWith("cached_") -> " (Cached Offline Fix)"
             else -> ""
         }
 

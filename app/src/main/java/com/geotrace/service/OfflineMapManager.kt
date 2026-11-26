@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.MapTileType
+import com.geotrace.model.OfflineCorridorBox
 import com.geotrace.model.OfflineDownloadProgress
 import com.geotrace.model.OfflineMapRegion
 import com.geotrace.ui.components.MapTileSources
@@ -70,7 +71,8 @@ class OfflineMapManager(private val context: Context) {
     companion object {
         private const val TAG = "OfflineMapManager"
         const val MAX_TILES_PER_DOWNLOAD = 2500
-        const val MAX_CACHE_BYTES_MB = 512
+        const val MAX_CACHE_BYTES_MB = 768
+        const val TRIM_CACHE_BYTES_MB = 640
         private const val NOTIFICATION_CHANNEL_ID = "offline_maps_channel"
         private const val PROGRESS_NOTIFICATION_ID = OfflineDownloadService.FOREGROUND_NOTIFICATION_ID
         private const val RESULT_NOTIFICATION_ID = 4103
@@ -168,13 +170,26 @@ class OfflineMapManager(private val context: Context) {
             if (viewBox.north <= viewBox.south) return emptySet()
             val covered = HashSet<MapTileType>()
             for (region in regions) {
-                val rBox = CorridorTileBox(
-                    north = region.northLat.coerceIn(-85.0511, 85.0511),
-                    south = region.southLat.coerceIn(-85.0511, 85.0511),
-                    east = normalizeLongitude(region.eastLng),
-                    west = normalizeLongitude(region.westLng)
-                )
-                if (boxesIntersect(viewBox, rBox)) {
+                val intersects = if (region.isCorridor && region.corridorBoxes.isNotEmpty()) {
+                    region.corridorBoxes.any { cb ->
+                        val cBox = CorridorTileBox(
+                            north = cb.north.coerceIn(-85.0511, 85.0511),
+                            south = cb.south.coerceIn(-85.0511, 85.0511),
+                            east = normalizeLongitude(cb.east),
+                            west = normalizeLongitude(cb.west)
+                        )
+                        boxesIntersect(viewBox, cBox)
+                    }
+                } else {
+                    val rBox = CorridorTileBox(
+                        north = region.northLat.coerceIn(-85.0511, 85.0511),
+                        south = region.southLat.coerceIn(-85.0511, 85.0511),
+                        east = normalizeLongitude(region.eastLng),
+                        west = normalizeLongitude(region.westLng)
+                    )
+                    boxesIntersect(viewBox, rBox)
+                }
+                if (intersects) {
                     covered.add(region.tileType)
                     if (region.tileType == MapTileType.HYBRID) {
                         covered.add(MapTileType.SATELLITE)
@@ -187,7 +202,7 @@ class OfflineMapManager(private val context: Context) {
         /**
          * Computes packed osmdroid [MapTileIndex] keys owned exclusively by [target] so deleting
          * a downloaded region removes orphaned tiles without deleting tiles shared with overlapping
-         * [remainingRegions] that use the same tile provider.
+         * [remainingRegions] that use the same tile provider. Preserves corridor strip geometry when present.
          */
         fun collectExclusiveTileIndicesForRegion(
             target: OfflineMapRegion,
@@ -208,21 +223,31 @@ class OfflineMapManager(private val context: Context) {
                 emptyList()
             }
 
-            fun buildWindow(reg: OfflineMapRegion): TileWindow? {
+            fun buildWindows(reg: OfflineMapRegion): List<TileWindow> {
+                val maxZ = maxZoomFor(reg.tileType).coerceAtMost(18)
+                val minZ = reg.minZoom.coerceIn(0, maxZ)
+                val hiZ = reg.maxZoom.coerceIn(minZ, maxZ)
+                if (reg.isCorridor && reg.corridorBoxes.isNotEmpty()) {
+                    return reg.corridorBoxes.mapNotNull { cb ->
+                        val n = cb.north.coerceIn(-85.0511, 85.0511)
+                        val s = cb.south.coerceIn(-85.0511, 85.0511)
+                        val w = normalizeLongitude(cb.west)
+                        val e = normalizeLongitude(cb.east)
+                        if (n <= s || w == e) null else TileWindow(minZ, hiZ, n, s, w, e)
+                    }
+                }
                 val n = reg.northLat.coerceIn(-85.0511, 85.0511)
                 val s = reg.southLat.coerceIn(-85.0511, 85.0511)
                 val w = normalizeLongitude(reg.westLng)
                 val e = normalizeLongitude(reg.eastLng)
-                if (n <= s || w == e) return null
-                val maxZ = maxZoomFor(reg.tileType).coerceAtMost(18)
-                val minZ = reg.minZoom.coerceIn(0, maxZ)
-                val hiZ = reg.maxZoom.coerceIn(minZ, maxZ)
-                return TileWindow(minZ, hiZ, n, s, w, e)
+                if (n <= s || w == e) return emptyList()
+                return listOf(TileWindow(minZ, hiZ, n, s, w, e))
             }
 
-            val tWin = buildWindow(target) ?: return ExclusiveTileRemovalPlan(emptyList(), emptyList())
-            val baseOverlapWins = baseOverlapRegions.mapNotNull(::buildWindow)
-            val overlayOverlapWins = overlayOverlapRegions.mapNotNull(::buildWindow)
+            val targetWins = buildWindows(target)
+            if (targetWins.isEmpty()) return ExclusiveTileRemovalPlan(emptyList(), emptyList())
+            val baseOverlapWins = baseOverlapRegions.flatMap(::buildWindows)
+            val overlayOverlapWins = overlayOverlapRegions.flatMap(::buildWindows)
 
             fun tileInWindow(z: Int, x: Long, y: Long, win: TileWindow): Boolean {
                 if (z !in win.minZoom..win.maxZoom) return false
@@ -239,41 +264,45 @@ class OfflineMapManager(private val context: Context) {
                 }
             }
 
+            val seenBase = HashSet<Long>()
+            val seenOverlay = HashSet<Long>()
             val baseOut = ArrayList<Long>()
             val overlayOut = ArrayList<Long>()
 
-            val nLatYMin = mutableMapOf<Int, Pair<Long, Long>>()
-            val xRanges = mutableMapOf<Int, List<LongRange>>()
-            for (z in tWin.minZoom..tWin.maxZoom) {
-                val n = 1L shl z
-                val yA = latToTileYStatic(tWin.north, n)
-                val yB = latToTileYStatic(tWin.south, n)
-                nLatYMin[z] = minOf(yA, yB) to maxOf(yA, yB)
-                val xMin = lonToTileXStatic(tWin.west, n)
-                val xMax = lonToTileXStatic(tWin.east, n)
-                xRanges[z] = if (tWin.west <= tWin.east) {
-                    listOf(xMin..xMax)
-                } else {
-                    listOf(xMin until n, 0L..xMax)
-                }
-            }
-
-            outer@ for (z in tWin.minZoom..tWin.maxZoom) {
-                val (yLow, yHigh) = nLatYMin[z] ?: continue
-                val ranges = xRanges[z] ?: continue
-                for (xr in ranges) {
-                    for (x in xr) {
-                        for (y in yLow..yHigh) {
-                            if (baseOut.size + overlayOut.size >= maxTiles) break@outer
-                            val tileIdx = MapTileIndex.getTileIndex(z, x.toInt(), y.toInt())
-                            if (baseOverlapWins.none { tileInWindow(z, x, y, it) }) {
-                                baseOut.add(tileIdx)
-                            }
-                            if (targetOverlayKey != null &&
-                                baseOut.size + overlayOut.size < maxTiles &&
-                                overlayOverlapWins.none { tileInWindow(z, x, y, it) }
-                            ) {
-                                overlayOut.add(tileIdx)
+            outer@ for (tWin in targetWins) {
+                for (z in tWin.minZoom..tWin.maxZoom) {
+                    val n = 1L shl z
+                    val yA = latToTileYStatic(tWin.north, n)
+                    val yB = latToTileYStatic(tWin.south, n)
+                    val yLow = minOf(yA, yB)
+                    val yHigh = maxOf(yA, yB)
+                    val xMin = lonToTileXStatic(tWin.west, n)
+                    val xMax = lonToTileXStatic(tWin.east, n)
+                    val ranges = if (tWin.west <= tWin.east) {
+                        listOf(xMin..xMax)
+                    } else {
+                        listOf(xMin until n, 0L..xMax)
+                    }
+                    for (xr in ranges) {
+                        for (x in xr) {
+                            for (y in yLow..yHigh) {
+                                if (baseOut.size >= maxTiles && (targetOverlayKey == null || overlayOut.size >= maxTiles)) {
+                                    break@outer
+                                }
+                                val tileIdx = MapTileIndex.getTileIndex(z, x.toInt(), y.toInt())
+                                if (baseOut.size < maxTiles &&
+                                    seenBase.add(tileIdx) &&
+                                    baseOverlapWins.none { tileInWindow(z, x, y, it) }
+                                ) {
+                                    baseOut.add(tileIdx)
+                                }
+                                if (targetOverlayKey != null &&
+                                    overlayOut.size < maxTiles &&
+                                    seenOverlay.add(tileIdx) &&
+                                    overlayOverlapWins.none { tileInWindow(z, x, y, it) }
+                                ) {
+                                    overlayOut.add(tileIdx)
+                                }
                             }
                         }
                     }
@@ -463,8 +492,12 @@ class OfflineMapManager(private val context: Context) {
     private var isCancelled = false
 
     private val completionDispatched = AtomicBoolean(false)
+    private val isStartingDownload = AtomicBoolean(false)
     private val downloadGeneration = AtomicLong(0L)
     private val notificationLock = Any()
+
+    @Volatile
+    private var foregroundServiceActive = false
 
     @Volatile
     private var downloadWakeLock: PowerManager.WakeLock? = null
@@ -559,7 +592,7 @@ class OfflineMapManager(private val context: Context) {
         maxZoom: Int,
         onCompleted: (OfflineMapRegion) -> Unit
     ) {
-        if (_downloadProgress.value.isDownloading) return
+        if (_downloadProgress.value.isDownloading || !isStartingDownload.compareAndSet(false, true)) return
 
         val effectiveType = if (tileType.supportsOfflineBulkDownload) tileType else MapTileType.HUMANITARIAN
         val sourceMax = maxZoomFor(effectiveType).coerceAtMost(18)
@@ -568,6 +601,7 @@ class OfflineMapManager(private val context: Context) {
         val (estTiles, estMb) = estimateRegionTilesAndMb(box, effectiveType, safeMin, safeMax)
 
         if (estTiles <= 0) {
+            isStartingDownload.set(false)
             _downloadProgress.value = OfflineDownloadProgress(
                 isDownloading = false,
                 errorMessage = "Selected area contains no valid tiles."
@@ -576,6 +610,7 @@ class OfflineMapManager(private val context: Context) {
         }
 
         if (estTiles > MAX_TILES_PER_DOWNLOAD) {
+            isStartingDownload.set(false)
             _downloadProgress.value = OfflineDownloadProgress(
                 isDownloading = false,
                 errorMessage = "Region too large ($estTiles tiles). Zoom in closer or reduce detail (max $MAX_TILES_PER_DOWNLOAD tiles)."
@@ -583,14 +618,43 @@ class OfflineMapManager(private val context: Context) {
             return
         }
 
-        cacheCapErrorMessage(estMb)?.let { capErr ->
-            _downloadProgress.value = OfflineDownloadProgress(
-                isDownloading = false,
-                errorMessage = capErr
-            )
-            return
+        ioScope.launch {
+            val capErr = cacheCapErrorMessage(estMb)
+            if (capErr != null) {
+                isStartingDownload.set(false)
+                _downloadProgress.value = OfflineDownloadProgress(
+                    isDownloading = false,
+                    errorMessage = capErr
+                )
+                return@launch
+            }
+            withContext(Dispatchers.Main) {
+                try {
+                    launchRegionDownloadInternal(
+                        name = name,
+                        box = box,
+                        effectiveType = effectiveType,
+                        safeMin = safeMin,
+                        safeMax = safeMax,
+                        estTiles = estTiles,
+                        onCompleted = onCompleted
+                    )
+                } finally {
+                    isStartingDownload.set(false)
+                }
+            }
         }
+    }
 
+    private fun launchRegionDownloadInternal(
+        name: String,
+        box: BoundingBox,
+        effectiveType: MapTileType,
+        safeMin: Int,
+        safeMax: Int,
+        estTiles: Int,
+        onCompleted: (OfflineMapRegion) -> Unit
+    ) {
         val activeGen = downloadGeneration.incrementAndGet()
         isCancelled = false
         completionDispatched.set(false)
@@ -649,8 +713,10 @@ class OfflineMapManager(private val context: Context) {
             currentZoom = safeMin,
             errorMessage = null
         )
-        postProgressNotification(cleanName, 0, estTiles, force = true)
-        OfflineDownloadService.start(context)
+        foregroundServiceActive = OfflineDownloadService.start(context)
+        if (!foregroundServiceActive) {
+            postProgressNotification(cleanName, 0, estTiles, force = true)
+        }
 
         fun runRegionJob(jobIndex: Int, accumulatedProgress: Int, cumulativeErrors: Int) {
             if (isCancelled || downloadGeneration.get() != activeGen) {
@@ -660,7 +726,16 @@ class OfflineMapManager(private val context: Context) {
             if (jobIndex >= jobs.size) {
                 val finalTiles = (estTiles - cumulativeErrors).coerceAtLeast(0)
                 val finalMb = (finalTiles * kbPerTileFor(effectiveType)) / 1024f
-                completeSuccess(cleanName, box, effectiveType, safeMin, safeMax, finalTiles, finalMb, onCompleted)
+                completeSuccess(
+                    cleanName = cleanName,
+                    box = box,
+                    tileType = effectiveType,
+                    minZoom = safeMin,
+                    maxZoom = safeMax,
+                    tileCount = finalTiles,
+                    estMb = finalMb,
+                    onCompleted = onCompleted
+                )
                 return
             }
             val job = jobs[jobIndex]
@@ -680,9 +755,10 @@ class OfflineMapManager(private val context: Context) {
                                 return
                             }
                             val nextAccum = (accumulatedProgress + job.weightTiles).coerceIn(0, estTiles)
-                            _downloadProgress.value = _downloadProgress.value.copy(completedTiles = nextAccum)
-                            postProgressNotification(cleanName, nextAccum, estTiles)
-                            runRegionJob(jobIndex + 1, nextAccum, cumulativeErrors)
+                            val monotonicAccum = maxOf(_downloadProgress.value.completedTiles, nextAccum)
+                            _downloadProgress.value = _downloadProgress.value.copy(completedTiles = monotonicAccum)
+                            postProgressNotification(cleanName, monotonicAccum, estTiles)
+                            runRegionJob(jobIndex + 1, monotonicAccum, cumulativeErrors)
                         }
 
                         override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {
@@ -690,7 +766,7 @@ class OfflineMapManager(private val context: Context) {
                             val scaled = ((progress.toDouble() / activeSubTotal.toDouble()) * job.weightTiles)
                                 .toInt()
                                 .coerceIn(0, job.weightTiles)
-                            val clamped = (accumulatedProgress + scaled).coerceIn(0, estTiles)
+                            val clamped = maxOf(_downloadProgress.value.completedTiles, (accumulatedProgress + scaled).coerceIn(0, estTiles))
                             _downloadProgress.value = _downloadProgress.value.copy(
                                 completedTiles = clamped,
                                 currentZoom = currentZoomLevel
@@ -747,47 +823,86 @@ class OfflineMapManager(private val context: Context) {
         maxZoom: Int,
         onCompleted: (OfflineMapRegion) -> Unit
     ) {
-        if (_downloadProgress.value.isDownloading) return
+        if (_downloadProgress.value.isDownloading || !isStartingDownload.compareAndSet(false, true)) return
 
         val effectiveType = if (tileType.supportsOfflineBulkDownload) tileType else MapTileType.HUMANITARIAN
         val sourceMax = maxZoomFor(effectiveType).coerceAtMost(18)
         val safeMin = minZoom.coerceIn(4, sourceMax)
         val safeMax = maxZoom.coerceIn(safeMin, sourceMax)
-        val (estTiles, estMb, rawBoxes) = estimateCorridorTilesAndMb(
-            points = points,
-            halfWidthKm = halfWidthKm,
-            tileType = effectiveType,
-            minZoom = safeMin,
-            maxZoom = safeMax
-        )
 
-        if (estTiles <= 0 || rawBoxes.isEmpty()) {
-            _downloadProgress.value = OfflineDownloadProgress(
-                isDownloading = false,
-                errorMessage = "Route corridor contains no valid tiles."
+        ioScope.launch {
+            val (estTiles, estMb, rawBoxes) = estimateCorridorTilesAndMb(
+                points = points,
+                halfWidthKm = halfWidthKm,
+                tileType = effectiveType,
+                minZoom = safeMin,
+                maxZoom = safeMax
             )
-            return
+
+            if (estTiles <= 0 || rawBoxes.isEmpty()) {
+                isStartingDownload.set(false)
+                _downloadProgress.value = OfflineDownloadProgress(
+                    isDownloading = false,
+                    errorMessage = "Route corridor contains no valid tiles."
+                )
+                return@launch
+            }
+
+            if (estTiles > MAX_TILES_PER_DOWNLOAD) {
+                isStartingDownload.set(false)
+                _downloadProgress.value = OfflineDownloadProgress(
+                    isDownloading = false,
+                    errorMessage = "Corridor too detailed ($estTiles tiles). Lower max zoom (max $MAX_TILES_PER_DOWNLOAD tiles)."
+                )
+                return@launch
+            }
+
+            val capErr = cacheCapErrorMessage(estMb)
+            if (capErr != null) {
+                isStartingDownload.set(false)
+                _downloadProgress.value = OfflineDownloadProgress(
+                    isDownloading = false,
+                    errorMessage = capErr
+                )
+                return@launch
+            }
+
+            val overallUnion = unionBoundingBox(rawBoxes)
+            if (overallUnion == null) {
+                isStartingDownload.set(false)
+                return@launch
+            }
+            val overallBox = BoundingBox(overallUnion.north, overallUnion.east, overallUnion.south, overallUnion.west)
+
+            withContext(Dispatchers.Main) {
+                try {
+                    launchCorridorDownloadInternal(
+                        name = name,
+                        rawBoxes = rawBoxes,
+                        overallBox = overallBox,
+                        effectiveType = effectiveType,
+                        safeMin = safeMin,
+                        safeMax = safeMax,
+                        estTiles = estTiles,
+                        onCompleted = onCompleted
+                    )
+                } finally {
+                    isStartingDownload.set(false)
+                }
+            }
         }
+    }
 
-        if (estTiles > MAX_TILES_PER_DOWNLOAD) {
-            _downloadProgress.value = OfflineDownloadProgress(
-                isDownloading = false,
-                errorMessage = "Corridor too detailed ($estTiles tiles). Lower max zoom (max $MAX_TILES_PER_DOWNLOAD tiles)."
-            )
-            return
-        }
-
-        cacheCapErrorMessage(estMb)?.let { capErr ->
-            _downloadProgress.value = OfflineDownloadProgress(
-                isDownloading = false,
-                errorMessage = capErr
-            )
-            return
-        }
-
-        val overallUnion = unionBoundingBox(rawBoxes) ?: return
-        val overallBox = BoundingBox(overallUnion.north, overallUnion.east, overallUnion.south, overallUnion.west)
-
+    private fun launchCorridorDownloadInternal(
+        name: String,
+        rawBoxes: List<CorridorTileBox>,
+        overallBox: BoundingBox,
+        effectiveType: MapTileType,
+        safeMin: Int,
+        safeMax: Int,
+        estTiles: Int,
+        onCompleted: (OfflineMapRegion) -> Unit
+    ) {
         val activeGen = downloadGeneration.incrementAndGet()
         isCancelled = false
         completionDispatched.set(false)
@@ -800,6 +915,7 @@ class OfflineMapManager(private val context: Context) {
         activeTileWriter = tileWriter
         val baseSource = MapTileSources.baseTileSourceFor(effectiveType)
         val overlaySource = MapTileSources.overlayTileSourceFor(effectiveType)
+        val persistedCorridorBoxes = rawBoxes.map { OfflineCorridorBox(it.north, it.south, it.east, it.west) }
 
         data class DownloadPassJob(
             val source: org.osmdroid.tileprovider.tilesource.ITileSource,
@@ -840,8 +956,10 @@ class OfflineMapManager(private val context: Context) {
             currentZoom = safeMin,
             errorMessage = null
         )
-        postProgressNotification(cleanName, 0, estTiles, force = true)
-        OfflineDownloadService.start(context)
+        foregroundServiceActive = OfflineDownloadService.start(context)
+        if (!foregroundServiceActive) {
+            postProgressNotification(cleanName, 0, estTiles, force = true)
+        }
 
         fun runJob(jobIndex: Int, accumulatedProgress: Int, cumulativeErrors: Int) {
             if (isCancelled || downloadGeneration.get() != activeGen) {
@@ -851,7 +969,18 @@ class OfflineMapManager(private val context: Context) {
             if (jobIndex >= jobs.size) {
                 val finalTiles = (estTiles - cumulativeErrors).coerceAtLeast(0)
                 val finalMb = (finalTiles * kbPerTileFor(effectiveType)) / 1024f
-                completeSuccess(cleanName, overallBox, effectiveType, safeMin, safeMax, finalTiles, finalMb, onCompleted)
+                completeSuccess(
+                    cleanName = cleanName,
+                    box = overallBox,
+                    tileType = effectiveType,
+                    minZoom = safeMin,
+                    maxZoom = safeMax,
+                    tileCount = finalTiles,
+                    estMb = finalMb,
+                    isCorridor = true,
+                    corridorBoxes = persistedCorridorBoxes,
+                    onCompleted = onCompleted
+                )
                 return
             }
             val job = jobs[jobIndex]
@@ -870,7 +999,10 @@ class OfflineMapManager(private val context: Context) {
                                 finishWithError("Download cancelled.")
                                 return
                             }
-                            val nextAccum = (accumulatedProgress + job.boxWeightTiles).coerceIn(0, estTiles)
+                            val nextAccum = maxOf(
+                                _downloadProgress.value.completedTiles,
+                                (accumulatedProgress + job.boxWeightTiles).coerceIn(0, estTiles)
+                            )
                             _downloadProgress.value = _downloadProgress.value.copy(completedTiles = nextAccum)
                             postProgressNotification(cleanName, nextAccum, estTiles)
                             runJob(jobIndex + 1, nextAccum, cumulativeErrors)
@@ -881,7 +1013,10 @@ class OfflineMapManager(private val context: Context) {
                             val scaledBoxProgress = ((progress.toDouble() / activeBoxTotal.toDouble()) * job.boxWeightTiles)
                                 .toInt()
                                 .coerceIn(0, job.boxWeightTiles)
-                            val approx = (accumulatedProgress + scaledBoxProgress).coerceIn(0, estTiles)
+                            val approx = maxOf(
+                                _downloadProgress.value.completedTiles,
+                                (accumulatedProgress + scaledBoxProgress).coerceIn(0, estTiles)
+                            )
                             _downloadProgress.value = _downloadProgress.value.copy(
                                 completedTiles = approx,
                                 currentZoom = currentZoomLevel
@@ -901,7 +1036,10 @@ class OfflineMapManager(private val context: Context) {
                             }
                             val nextErr = cumulativeErrors + errors
                             if (nextErr <= max(4, estTiles / 8)) {
-                                val nextAccum = (accumulatedProgress + job.boxWeightTiles).coerceIn(0, estTiles)
+                                val nextAccum = maxOf(
+                                    _downloadProgress.value.completedTiles,
+                                    (accumulatedProgress + job.boxWeightTiles).coerceIn(0, estTiles)
+                                )
                                 runJob(jobIndex + 1, nextAccum, nextErr)
                             } else {
                                 finishWithError("Corridor download failed ($nextErr tiles could not be fetched). Check network.")
@@ -926,32 +1064,36 @@ class OfflineMapManager(private val context: Context) {
         maxZoom: Int,
         tileCount: Int,
         estMb: Float,
+        isCorridor: Boolean = false,
+        corridorBoxes: List<OfflineCorridorBox> = emptyList(),
         onCompleted: (OfflineMapRegion) -> Unit
     ) {
         if (!completionDispatched.compareAndSet(false, true)) return
         cleanupActiveHandles(detachWriter = true)
         ioScope.launch { refreshCacheSizeAsync() }
+        val builtRegion = OfflineMapRegion(
+            id = UUID.randomUUID().toString(),
+            name = cleanName,
+            northLat = box.latNorth,
+            southLat = box.latSouth,
+            eastLng = box.lonEast,
+            westLng = box.lonWest,
+            tileType = tileType,
+            minZoom = minZoom,
+            maxZoom = maxZoom,
+            tileCount = tileCount,
+            estimatedSizeMb = estMb,
+            downloadedAtMs = System.currentTimeMillis(),
+            isCorridor = isCorridor,
+            corridorBoxes = corridorBoxes
+        )
+        // Dispatch completion hook before flipping isDownloading=false so OfflineDownloadService stays alive through POI indexing
+        onCompleted(builtRegion)
+        foregroundServiceActive = false
         _downloadProgress.value = OfflineDownloadProgress(isDownloading = false)
-        OfflineDownloadService.stop(context)
         postResultNotification(
             title = "Offline map ready",
             message = "$cleanName ($tileCount tiles) cached for offline use"
-        )
-        onCompleted(
-            OfflineMapRegion(
-                id = UUID.randomUUID().toString(),
-                name = cleanName,
-                northLat = box.latNorth,
-                southLat = box.latSouth,
-                eastLng = box.lonEast,
-                westLng = box.lonWest,
-                tileType = tileType,
-                minZoom = minZoom,
-                maxZoom = maxZoom,
-                tileCount = tileCount,
-                estimatedSizeMb = estMb,
-                downloadedAtMs = System.currentTimeMillis()
-            )
         )
     }
 
@@ -959,11 +1101,11 @@ class OfflineMapManager(private val context: Context) {
         if (!completionDispatched.compareAndSet(false, true)) return
         cleanupActiveHandles(detachWriter = detachWriter)
         ioScope.launch { refreshCacheSizeAsync() }
+        foregroundServiceActive = false
         _downloadProgress.value = OfflineDownloadProgress(
             isDownloading = false,
             errorMessage = msg
         )
-        OfflineDownloadService.stop(context)
         if (isCancelled) {
             clearDownloadNotification()
         } else {
@@ -1163,6 +1305,7 @@ class OfflineMapManager(private val context: Context) {
     }
 
     private fun postProgressNotification(regionName: String, completed: Int, total: Int, force: Boolean = false) {
+        if (foregroundServiceActive) return
         synchronized(notificationLock) {
             if (!canPostNotifications()) return
             val pct = if (total > 0) ((completed * 100) / total).coerceIn(0, 100) else 0

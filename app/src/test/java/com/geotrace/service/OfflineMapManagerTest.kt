@@ -121,4 +121,54 @@ class OfflineMapManagerTest {
         assertTrue(xs.contains(0))
         assertFalse(xs.contains(2048))
     }
+
+    @Test
+    fun corridorRegion_usesStripBoxesForCoverageAndDeletion() {
+        val corridor = OfflineMapRegion(
+            id = "corr",
+            name = "Diagonal Trail",
+            northLat = 1.00,
+            southLat = 0.00,
+            eastLng = 31.00,
+            westLng = 30.00,
+            tileType = MapTileType.TOPO,
+            minZoom = 12,
+            maxZoom = 12,
+            tileCount = 4,
+            estimatedSizeMb = 0.2f,
+            isCorridor = true,
+            corridorBoxes = listOf(
+                com.geotrace.model.OfflineCorridorBox(north = 0.15, south = 0.00, east = 30.15, west = 30.00),
+                com.geotrace.model.OfflineCorridorBox(north = 1.00, south = 0.85, east = 31.00, west = 30.85)
+            )
+        )
+
+        // Top-left corner (0.95, 30.05) is inside outer bbox but outside strip sub-boxes -> NOT covered
+        val cornerCoverage = OfflineMapManager.coveredTileTypesForViewport(
+            regions = listOf(corridor),
+            viewNorth = 0.98,
+            viewSouth = 0.90,
+            viewEast = 30.10,
+            viewWest = 30.02
+        )
+        assertTrue(cornerCoverage.isEmpty())
+
+        // On-strip sub-box -> covered
+        val stripCoverage = OfflineMapManager.coveredTileTypesForViewport(
+            regions = listOf(corridor),
+            viewNorth = 0.12,
+            viewSouth = 0.05,
+            viewEast = 30.10,
+            viewWest = 30.02
+        )
+        assertEquals(setOf(MapTileType.TOPO), stripCoverage)
+
+        // Deletion plan must stay compact around the two strip boxes (far fewer tiles than whole 1x1 deg square)
+        val plan = OfflineMapManager.collectExclusiveTileIndicesForRegion(
+            target = corridor,
+            remainingRegions = emptyList()
+        )
+        assertTrue(plan.baseTileIndices.isNotEmpty())
+        assertTrue(plan.baseTileIndices.size < 30)
+    }
 }

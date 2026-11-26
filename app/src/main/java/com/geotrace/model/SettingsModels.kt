@@ -19,6 +19,13 @@ enum class MapTileType(val label: String, val description: String, val supportsO
     HUMANITARIAN("Humanitarian (HOT)", "High-contrast roads, buildings & campus paths", supportsOfflineBulkDownload = true)
 }
 
+data class OfflineCorridorBox(
+    val north: Double,
+    val south: Double,
+    val east: Double,
+    val west: Double
+)
+
 data class OfflineMapRegion(
     val id: String,
     val name: String,
@@ -31,7 +38,9 @@ data class OfflineMapRegion(
     val maxZoom: Int,
     val tileCount: Int,
     val estimatedSizeMb: Float,
-    val downloadedAtMs: Long = System.currentTimeMillis()
+    val downloadedAtMs: Long = System.currentTimeMillis(),
+    val isCorridor: Boolean = false,
+    val corridorBoxes: List<OfflineCorridorBox> = emptyList()
 ) {
     val centerLat: Double get() = (northLat + southLat) / 2.0
     val centerLng: Double

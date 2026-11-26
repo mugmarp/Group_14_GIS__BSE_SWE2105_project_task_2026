@@ -915,7 +915,14 @@ class LocationRepository(
 
             val point = safePoint.copy(speed = smoothedSpeedMps)
             _currentLocation.value = point
-            _lastKnownCachedLocation.value = point
+            val prevCached = _lastKnownCachedLocation.value
+            val shouldUpdateCachedFallback = prevCached == null ||
+                point.provider != "cellular" ||
+                prevCached.provider == "cellular" ||
+                (point.timestamp - prevCached.timestamp) > 10 * 60_000L
+            if (shouldUpdateCachedFallback) {
+                _lastKnownCachedLocation.value = point
+            }
 
             if (isActivelyRecording && session != null) {
                 val lastSaved = _activeTrailPoints.value.lastOrNull()
@@ -1252,9 +1259,9 @@ class LocationRepository(
     }
 
     suspend fun clearOfflineGpsAndCellCache() = withContext(Dispatchers.IO) {
-        _lastKnownCachedLocation.value = _currentLocation.value
-        _cachedObservedCells.value = _cellTowers.value
-        _cachedObservedAtMs.value = if (_cellTowers.value.isNotEmpty()) System.currentTimeMillis() else null
+        _lastKnownCachedLocation.value = null
+        _cachedObservedCells.value = emptyList()
+        _cachedObservedAtMs.value = null
         offlineCacheRepository.clearAllOfflineCaches()
         com.geotrace.service.OpenCellIdClient.clearCache()
     }
@@ -1922,6 +1929,11 @@ class LocationRepository(
                 } catch (_: Exception) {
                     MapTileType.SATELLITE
                 }
+                val isCorridorCol = c.getColumnIndex("is_corridor")
+                val boxesCol = c.getColumnIndex("corridor_boxes_json")
+                val isCorridor = isCorridorCol >= 0 && c.getInt(isCorridorCol) != 0
+                val rawBoxesJson = if (boxesCol >= 0) c.getString(boxesCol).orEmpty() else ""
+                val corridorBoxes = decodeCorridorBoxesJson(rawBoxesJson)
                 list.add(
                     OfflineMapRegion(
                         id = c.getString(c.getColumnIndexOrThrow("id")),
@@ -1935,13 +1947,54 @@ class LocationRepository(
                         maxZoom = c.getInt(c.getColumnIndexOrThrow("max_zoom")),
                         tileCount = c.getInt(c.getColumnIndexOrThrow("tile_count")),
                         estimatedSizeMb = c.getFloat(c.getColumnIndexOrThrow("estimated_size_mb")),
-                        downloadedAtMs = c.getLong(c.getColumnIndexOrThrow("downloaded_at"))
+                        downloadedAtMs = c.getLong(c.getColumnIndexOrThrow("downloaded_at")),
+                        isCorridor = isCorridor,
+                        corridorBoxes = corridorBoxes
                     )
                 )
             }
         }
         _offlineMapRegions.value = list
         refreshOfflinePlacesCountInternal()
+    }
+
+    private fun encodeCorridorBoxesJson(boxes: List<com.geotrace.model.OfflineCorridorBox>): String {
+        if (boxes.isEmpty()) return ""
+        val arr = org.json.JSONArray()
+        for (b in boxes) {
+            arr.put(
+                org.json.JSONArray().apply {
+                    put(b.north)
+                    put(b.south)
+                    put(b.east)
+                    put(b.west)
+                }
+            )
+        }
+        return arr.toString()
+    }
+
+    private fun decodeCorridorBoxesJson(raw: String): List<com.geotrace.model.OfflineCorridorBox> {
+        if (raw.isBlank()) return emptyList()
+        return try {
+            val arr = org.json.JSONArray(raw)
+            val result = ArrayList<com.geotrace.model.OfflineCorridorBox>(arr.length())
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONArray(i) ?: continue
+                if (item.length() >= 4) {
+                    val n = item.optDouble(0, Double.NaN)
+                    val s = item.optDouble(1, Double.NaN)
+                    val e = item.optDouble(2, Double.NaN)
+                    val w = item.optDouble(3, Double.NaN)
+                    if (n.isFinite() && s.isFinite() && e.isFinite() && w.isFinite()) {
+                        result.add(com.geotrace.model.OfflineCorridorBox(n, s, e, w))
+                    }
+                }
+            }
+            result
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     private fun refreshOfflinePlacesCountInternal() {
@@ -2004,13 +2057,28 @@ class LocationRepository(
             .replace("_", "\\_")
     }
 
-    suspend fun searchOfflinePlaces(query: String, limit: Int = 25): List<OfflinePlacePoi> = withContext(Dispatchers.IO) {
+    suspend fun searchOfflinePlaces(
+        query: String,
+        limit: Int = 25,
+        nearLat: Double? = null,
+        nearLon: Double? = null
+    ): List<OfflinePlacePoi> = withContext(Dispatchers.IO) {
         val list = mutableListOf<OfflinePlacePoi>()
         val seenKeys = HashSet<String>()
         val trimmed = query.trim()
         val fetchCap = (limit * 3).coerceAtLeast(45)
         val db = dbHelper.readableDatabase
         val cursor = if (trimmed.isBlank()) {
+            val orderClause = if (nearLat != null && nearLon != null && nearLat.isFinite() && nearLon.isFinite()) {
+                val cosLatSq = kotlin.math.cos(Math.toRadians(nearLat)).let { it * it }.coerceAtLeast(0.05)
+                String.format(
+                    java.util.Locale.US,
+                    "((latitude - %.6f) * (latitude - %.6f) + ((longitude - %.6f) * (longitude - %.6f) * %.4f)) ASC",
+                    nearLat, nearLat, nearLon, nearLon, cosLatSq
+                )
+            } else {
+                "name ASC"
+            }
             db.query(
                 LocationDbHelper.TABLE_OFFLINE_PLACES,
                 null,
@@ -2018,7 +2086,7 @@ class LocationRepository(
                 null,
                 null,
                 null,
-                "name ASC",
+                orderClause,
                 fetchCap.toString()
             )
         } else {
@@ -2404,6 +2472,8 @@ class LocationRepository(
             put("tile_count", region.tileCount)
             put("estimated_size_mb", region.estimatedSizeMb)
             put("downloaded_at", region.downloadedAtMs)
+            put("is_corridor", if (region.isCorridor) 1 else 0)
+            put("corridor_boxes_json", encodeCorridorBoxesJson(region.corridorBoxes))
         }
         db.insertWithOnConflict(
             LocationDbHelper.TABLE_OFFLINE_MAPS,

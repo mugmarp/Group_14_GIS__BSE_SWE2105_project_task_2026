@@ -29,16 +29,17 @@ class OfflineDownloadService : Service() {
         const val CHANNEL_ID = "offline_maps_channel"
         const val FOREGROUND_NOTIFICATION_ID = 4102
 
-        fun start(context: Context) {
-            try {
+        fun start(context: Context): Boolean {
+            return try {
                 val intent = Intent(context, OfflineDownloadService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     ContextCompat.startForegroundService(context, intent)
                 } else {
                     context.startService(intent)
                 }
+                true
             } catch (_: Exception) {
-                // Fallback safely if OS blocks background foreground-service launch
+                false
             }
         }
 
@@ -51,6 +52,7 @@ class OfflineDownloadService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var observerJob: Job? = null
+    private var graceStopJob: Job? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -62,11 +64,22 @@ class OfflineDownloadService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val app = application as? LocationTrackerApp
         val progress = app?.offlineMapManager?.downloadProgress?.value
-        val initialNotification = buildProgressNotification(
-            regionName = progress?.regionName?.ifBlank { "Offline map" } ?: "Offline map",
-            completed = progress?.completedTiles ?: 0,
-            total = progress?.totalTiles ?: 0
-        )
+        val indexingIds = app?.poiIndexingRegionIds?.value ?: emptySet()
+        val initialNotification = if (progress?.isDownloading == true) {
+            buildProgressNotification(
+                regionName = progress.regionName.ifBlank { "Offline map" },
+                completed = progress.completedTiles,
+                total = progress.totalTiles
+            )
+        } else if (indexingIds.isNotEmpty()) {
+            buildPoiIndexingNotification(indexingIds.size)
+        } else {
+            buildProgressNotification(
+                regionName = "Offline map",
+                completed = 0,
+                total = 0
+            )
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
@@ -85,26 +98,42 @@ class OfflineDownloadService : Service() {
 
         if (observerJob == null) {
             observerJob = serviceScope.launch {
-                var sawActiveDownload = app.offlineMapManager.downloadProgress.value.isDownloading
-                app.offlineMapManager.downloadProgress.collect { state ->
-                    if (state.isDownloading) {
-                        sawActiveDownload = true
+                var sawActiveWork = app.offlineMapManager.downloadProgress.value.isDownloading ||
+                    app.poiIndexingRegionIds.value.isNotEmpty()
+                kotlinx.coroutines.flow.combine(
+                    app.offlineMapManager.downloadProgress,
+                    app.poiIndexingRegionIds
+                ) { state, poiIds ->
+                    state to poiIds
+                }.collect { (state, poiIds) ->
+                    val activeNow = state.isDownloading || poiIds.isNotEmpty()
+                    if (activeNow) {
+                        sawActiveWork = true
+                        graceStopJob?.cancel()
+                        graceStopJob = null
                         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                        nm?.notify(
-                            FOREGROUND_NOTIFICATION_ID,
+                        val notification = if (state.isDownloading) {
                             buildProgressNotification(
                                 regionName = state.regionName.ifBlank { "Offline map" },
                                 completed = state.completedTiles,
                                 total = state.totalTiles
                             )
-                        )
-                    } else if (sawActiveDownload) {
+                        } else {
+                            buildPoiIndexingNotification(poiIds.size)
+                        }
+                        nm?.notify(FOREGROUND_NOTIFICATION_ID, notification)
+                    } else if (sawActiveWork) {
+                        graceStopJob?.cancel()
+                        graceStopJob = null
                         stopSelfSafely()
-                    } else {
-                        // Started slightly ahead of state flip or no active download anymore
-                        kotlinx.coroutines.delay(500L)
-                        if (!app.offlineMapManager.downloadProgress.value.isDownloading) {
-                            stopSelfSafely()
+                    } else if (graceStopJob == null) {
+                        graceStopJob = serviceScope.launch {
+                            kotlinx.coroutines.delay(500L)
+                            val stillIdle = !app.offlineMapManager.downloadProgress.value.isDownloading &&
+                                app.poiIndexingRegionIds.value.isEmpty()
+                            if (stillIdle) {
+                                stopSelfSafely()
+                            }
                         }
                     }
                 }
@@ -115,6 +144,8 @@ class OfflineDownloadService : Service() {
     }
 
     private fun stopSelfSafely() {
+        graceStopJob?.cancel()
+        graceStopJob = null
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -155,7 +186,25 @@ class OfflineDownloadService : Service() {
             .build()
     }
 
+    private fun buildPoiIndexingNotification(activeCount: Int): Notification {
+        val text = if (activeCount > 1) {
+            "Caching searchable landmarks for $activeCount offline regions"
+        } else {
+            "Caching searchable landmarks & shelters for offline use"
+        }
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("Indexing offline POIs…")
+            .setContentText(text)
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .setProgress(0, 0, true)
+            .build()
+    }
+
     override fun onDestroy() {
+        graceStopJob?.cancel()
+        graceStopJob = null
         observerJob?.cancel()
         observerJob = null
         serviceScope.cancel()

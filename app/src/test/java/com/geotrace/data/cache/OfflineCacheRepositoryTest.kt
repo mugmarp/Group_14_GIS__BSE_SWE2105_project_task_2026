@@ -289,4 +289,18 @@ class OfflineCacheRepositoryTest {
         repository.recordCachedLocationFix(sample)
         assertEquals(1, fixDao.getFixCount())
     }
+
+    @Test
+    fun recordCachedLocationFix_preservesRecentGnssOverCoarseCellular() = runBlocking {
+        val t0 = 1_700_000_000_000L
+        repository.recordCachedLocationFix(fix(lat = 0.3476, lon = 32.5825, provider = "gps", accuracy = 5f, timestamp = t0))
+        assertEquals(1, fixDao.getFixCount())
+
+        // Coarse cellular fallback 800m away arrives 30s later -> must NOT overwrite recent GNSS cache fix
+        repository.recordCachedLocationFix(
+            fix(lat = 0.3550, lon = 32.5825, provider = "cellular", accuracy = 850f, timestamp = t0 + 30_000L)
+        )
+        assertEquals(1, fixDao.getFixCount())
+        assertEquals("gps", repository.getLatestCachedLocationSnapshot()?.provider)
+    }
 }

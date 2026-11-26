@@ -31,10 +31,12 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -52,6 +54,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -108,6 +111,7 @@ fun OfflineMapsDialog(
     val settings by viewModel.settings.collectAsState()
     val savedRegions by viewModel.offlineMapRegions.collectAsState()
     val offlinePlacesCountByRegion by viewModel.offlinePlacesCountByRegion.collectAsState()
+    val poiIndexingRegionIds by viewModel.poiIndexingRegionIds.collectAsState()
     val progress by viewModel.offlineDownloadProgress.collectAsState()
     val cacheSizeMb by viewModel.offlineCacheSizeMb.collectAsState()
     val offlinePoiStatus by viewModel.offlinePoiStatus.collectAsState()
@@ -176,9 +180,14 @@ fun OfflineMapsDialog(
         }
     }
 
-    val estimate = remember(areaMode, targetBox, activeCorridorPoints, corridorHalfWidthKm, selectedType, detailTier) {
-        if (areaMode == OfflineAreaMode.ROUTE_CORRIDOR) {
-            if (activeCorridorPoints.size >= 2) {
+    val corridorEstimate by produceState<Pair<Int, Float>?>(
+        initialValue = null,
+        key1 = areaMode,
+        key2 = activeCorridorPoints,
+        key3 = Triple(corridorHalfWidthKm, selectedType, detailTier)
+    ) {
+        value = if (areaMode == OfflineAreaMode.ROUTE_CORRIDOR && activeCorridorPoints.size >= 2) {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
                 viewModel.estimateCorridorRegion(
                     points = activeCorridorPoints,
                     halfWidthKm = corridorHalfWidthKm,
@@ -186,7 +195,14 @@ fun OfflineMapsDialog(
                     minZoom = detailTier.minZoom,
                     maxZoom = detailTier.maxZoom
                 )
-            } else null
+            }
+        } else {
+            null
+        }
+    }
+    val estimate = remember(areaMode, targetBox, corridorEstimate, selectedType, detailTier) {
+        if (areaMode == OfflineAreaMode.ROUTE_CORRIDOR) {
+            corridorEstimate
         } else {
             targetBox?.let {
                 viewModel.estimateOfflineRegion(it, selectedType, detailTier.minZoom, detailTier.maxZoom)
@@ -602,6 +618,7 @@ fun OfflineMapsDialog(
                                 region = region,
                                 poiCount = offlinePlacesCountByRegion[region.id] ?: 0,
                                 isDownloading = progress.isDownloading,
+                                isIndexingPois = region.id in poiIndexingRegionIds,
                                 onViewOnMap = {
                                     viewModel.updateMapTileType(region.tileType)
                                     onJumpToRegion(
@@ -647,6 +664,8 @@ fun OfflineMapsDialog(
                     val summaryText = when {
                         areaMode == OfflineAreaMode.ROUTE_CORRIDOR && activeCorridorPoints.size < 2 ->
                             "Import, inspect, or record a trail to cache a route corridor."
+                        areaMode == OfflineAreaMode.ROUTE_CORRIDOR && corridorEstimate == null ->
+                            "Estimating route corridor tiles…"
                         areaMode != OfflineAreaMode.ROUTE_CORRIDOR && targetBox == null ->
                             "Open the Map tab or wait for a GPS fix to compute area bounds."
                         exceedsCap ->
@@ -788,6 +807,7 @@ private fun OfflineRegionCard(
     region: OfflineMapRegion,
     poiCount: Int,
     isDownloading: Boolean,
+    isIndexingPois: Boolean,
     onViewOnMap: () -> Unit,
     onRefreshPois: () -> Unit,
     onDelete: () -> Unit
@@ -808,21 +828,41 @@ private fun OfflineRegionCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                Icons.Default.OfflinePin,
-                contentDescription = "Saved Offline Region",
+                if (region.isCorridor) Icons.Default.Route else Icons.Default.OfflinePin,
+                contentDescription = if (region.isCorridor) "Saved Offline Corridor" else "Saved Offline Region",
                 tint = colorScheme.tertiary,
                 modifier = Modifier.size(22.dp)
             )
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = region.name,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = colorScheme.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = region.name,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (region.isCorridor) {
+                        Surface(
+                            shape = CircleShape,
+                            color = colorScheme.tertiaryContainer
+                        ) {
+                            Text(
+                                text = "STRIP",
+                                fontSize = 8.5.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = colorScheme.onTertiaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
                 Text(
                     text = "${region.tileType.label} • Z${region.minZoom}–${region.maxZoom} • ~${String.format(Locale.US, "%.1f", region.estimatedSizeMb)} MB • $poiCount POIs • $dateStr",
                     fontSize = 10.sp,
@@ -839,10 +879,18 @@ private fun OfflineRegionCard(
             }
             IconButton(
                 onClick = onRefreshPois,
-                enabled = !isDownloading,
+                enabled = !isDownloading && !isIndexingPois,
                 modifier = Modifier.size(48.dp).testTag("refresh_region_pois_${region.id}")
             ) {
-                Icon(Icons.Default.Refresh, contentDescription = "Refresh Offline POIs", tint = colorScheme.secondary, modifier = Modifier.size(18.dp))
+                if (isIndexingPois) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = colorScheme.secondary
+                    )
+                } else {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh Offline POIs", tint = colorScheme.secondary, modifier = Modifier.size(18.dp))
+                }
             }
             IconButton(
                 onClick = onDelete,

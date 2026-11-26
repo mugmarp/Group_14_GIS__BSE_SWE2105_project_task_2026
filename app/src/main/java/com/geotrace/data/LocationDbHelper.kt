@@ -19,7 +19,7 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
 
     companion object {
         const val DATABASE_NAME = "gis_tracker.db"
-        const val DATABASE_VERSION = 8
+        const val DATABASE_VERSION = 9
 
         const val TABLE_POINTS = "location_points"
         const val TABLE_SESSIONS = "tracking_sessions"
@@ -159,7 +159,9 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
                 max_zoom INTEGER NOT NULL,
                 tile_count INTEGER NOT NULL,
                 estimated_size_mb REAL NOT NULL,
-                downloaded_at INTEGER NOT NULL
+                downloaded_at INTEGER NOT NULL,
+                is_corridor INTEGER NOT NULL DEFAULT 0,
+                corridor_boxes_json TEXT NOT NULL DEFAULT ''
             )
             """.trimIndent()
         )
@@ -310,6 +312,10 @@ class LocationDbHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NA
         if (oldVersion < 8) {
             db.execSQL("UPDATE $TABLE_SESSIONS SET trip_id = NULL WHERE trip_id IS NOT NULL AND trip_id NOT IN (SELECT id FROM $TABLE_TRIPS)")
             db.execSQL("UPDATE $TABLE_SAVED_PLACES SET trip_id = NULL WHERE trip_id IS NOT NULL AND trip_id NOT IN (SELECT id FROM $TABLE_TRIPS)")
+        }
+        if (oldVersion < 9) {
+            db.execSQL("ALTER TABLE $TABLE_OFFLINE_MAPS ADD COLUMN is_corridor INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE $TABLE_OFFLINE_MAPS ADD COLUMN corridor_boxes_json TEXT NOT NULL DEFAULT ''")
         }
     }
 }

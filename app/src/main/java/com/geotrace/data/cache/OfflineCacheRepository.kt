@@ -158,6 +158,13 @@ class OfflineCacheRepository(
         }
 
         val prev = lastPersistedFix
+        if (!force && prev != null && prev.provider != "cellular" && point.provider == "cellular") {
+            val dtFromGnssMs = (point.timestamp - prev.timestamp).coerceAtLeast(0L)
+            val muchCoarser = prev.accuracy > 0f && point.accuracy > prev.accuracy * 3f
+            if (dtFromGnssMs < 10 * 60_000L || (muchCoarser && dtFromGnssMs < 30 * 60_000L)) {
+                return@withLock
+            }
+        }
         val shouldPersist = if (force || prev == null) {
             true
         } else {

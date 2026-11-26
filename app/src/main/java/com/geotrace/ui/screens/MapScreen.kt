@@ -222,6 +222,7 @@ fun MapScreen(
     val isGhostMode by (groupViewModel?.isGhostMode ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
     val isP2PEnabled by (groupViewModel?.isP2PEnabled ?: kotlinx.coroutines.flow.MutableStateFlow(false)).collectAsState()
     val mapFocusTarget by (groupViewModel?.mapFocusTarget ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
+    val localMapFocusTarget by viewModel.localMapFocusTarget.collectAsState()
     val currentDeviceId = groupViewModel?.currentDeviceId ?: ""
     val remotePersonalDevices = remember(personalDevices, currentDeviceId) {
         personalDevices.filter { it.deviceId != currentDeviceId && it.id != currentDeviceId }
@@ -421,6 +422,7 @@ fun MapScreen(
 
     val resolvedFocusTarget = remember(
         mapFocusTarget,
+        localMapFocusTarget,
         remoteGroupMembers,
         deduplicatedPersonalDevices,
         nearbyPeers,
@@ -428,7 +430,13 @@ fun MapScreen(
         settings.speedUnit,
         nowMs
     ) {
-        val target = mapFocusTarget ?: return@remember null
+        val grpTarget = mapFocusTarget
+        val locTarget = localMapFocusTarget
+        val target = when {
+            grpTarget != null && locTarget != null ->
+                if (locTarget.requestedAtMs >= grpTarget.requestedAtMs) locTarget else grpTarget
+            else -> grpTarget ?: locTarget
+        } ?: return@remember null
         val matchedMember = remoteGroupMembers.firstOrNull {
             it.id == target.id || it.userId == target.id || it.deviceId == target.id
         }
@@ -530,10 +538,12 @@ fun MapScreen(
             },
             onClearFocusTarget = {
                 groupViewModel?.clearMapFocusTarget()
+                viewModel.clearLocalMapFocusTarget()
                 if (settings.followUserLocation) viewModel.setMapFollowPaused(true)
             },
             onRecenterSelf = {
                 groupViewModel?.clearMapFocusTarget()
+                viewModel.clearLocalMapFocusTarget()
                 viewModel.clearInspectedTrail()
                 viewModel.clearSelectedSearchPin()
                 viewModel.setMapFollowPaused(false)
@@ -541,6 +551,7 @@ fun MapScreen(
             offlineRegionsCount = offlineMapRegions.size,
             offlineMapRegions = offlineMapRegions,
             coveredOfflineTileTypes = coveredTileTypes,
+            isNetworkOnline = isNetworkOnline,
             settings = settings,
             onSelectTileLayer = { selectedTile ->
                 viewModel.updateMapTileType(selectedTile)
@@ -2780,7 +2791,11 @@ fun MapScreen(
             onJumpToRegion = { _, target ->
                 viewModel.clearInspectedTrail()
                 viewModel.clearSelectedSearchPin()
-                groupViewModel?.focusMapOnTarget(target)
+                if (groupViewModel != null) {
+                    groupViewModel.focusMapOnTarget(target)
+                } else {
+                    viewModel.focusLocalMapTarget(target)
+                }
             },
             onDismiss = { showOfflineMapsDialog = false }
         )

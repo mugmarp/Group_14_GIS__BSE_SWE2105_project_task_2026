@@ -354,6 +354,7 @@ fun MapViewComposable(
     offlineRegionsCount: Int = 0,
     offlineMapRegions: List<com.geotrace.model.OfflineMapRegion> = emptyList(),
     coveredOfflineTileTypes: Set<com.geotrace.model.MapTileType> = emptySet(),
+    isNetworkOnline: Boolean = true,
     settings: com.geotrace.model.TrackerSettings = com.geotrace.model.TrackerSettings(),
     onSelectTileLayer: ((com.geotrace.model.MapTileType) -> Unit)? = null,
     onToggleCellTowerPin: ((Boolean) -> Unit)? = null,
@@ -631,7 +632,15 @@ fun MapViewComposable(
         }
     }
 
-    // Update Tile Source dynamically when user switches in Settings or Layer Menu
+    // Update Tile Source & offline data connection state dynamically
+    LaunchedEffect(isNetworkOnline, mapViewRef) {
+        hybridLabelsProvider.setUseDataConnection(isNetworkOnline)
+        mapViewRef?.let { map ->
+            map.setUseDataConnection(isNetworkOnline)
+            map.invalidate()
+        }
+    }
+
     LaunchedEffect(settings.mapTileType, mapViewRef) {
         mapViewRef?.let { map ->
             val newSource = MapTileSources.baseTileSourceFor(settings.mapTileType)
@@ -953,6 +962,8 @@ fun MapViewComposable(
             factory = { ctx ->
                 MapView(ctx).apply {
                     setTileSource(MapTileSources.baseTileSourceFor(settings.mapTileType))
+                    setUseDataConnection(isNetworkOnline)
+                    hybridLabelsProvider.setUseDataConnection(isNetworkOnline)
                     setMultiTouchControls(true)
                     isTilesScaledToDpi = true
                     minZoomLevel = 3.0
@@ -1373,14 +1384,26 @@ fun MapViewComposable(
                         val outlineTeal = android.graphics.Color.parseColor("#0D9488")
                         val fillTeal = android.graphics.Color.argb(18, 13, 148, 136)
                         for (region in offlineMapRegions) {
-                            val subBoxes = com.geotrace.service.OfflineMapManager.splitBoxAtAntimeridian(
-                                com.geotrace.service.OfflineMapManager.CorridorTileBox(
-                                    north = region.northLat.coerceIn(-85.0511, 85.0511),
-                                    south = region.southLat.coerceIn(-85.0511, 85.0511),
-                                    east = com.geotrace.service.OfflineMapManager.normalizeLongitude(region.eastLng),
-                                    west = com.geotrace.service.OfflineMapManager.normalizeLongitude(region.westLng)
+                            val rawBoxes = if (region.isCorridor && region.corridorBoxes.isNotEmpty()) {
+                                region.corridorBoxes.map { cb ->
+                                    com.geotrace.service.OfflineMapManager.CorridorTileBox(
+                                        north = cb.north.coerceIn(-85.0511, 85.0511),
+                                        south = cb.south.coerceIn(-85.0511, 85.0511),
+                                        east = com.geotrace.service.OfflineMapManager.normalizeLongitude(cb.east),
+                                        west = com.geotrace.service.OfflineMapManager.normalizeLongitude(cb.west)
+                                    )
+                                }
+                            } else {
+                                listOf(
+                                    com.geotrace.service.OfflineMapManager.CorridorTileBox(
+                                        north = region.northLat.coerceIn(-85.0511, 85.0511),
+                                        south = region.southLat.coerceIn(-85.0511, 85.0511),
+                                        east = com.geotrace.service.OfflineMapManager.normalizeLongitude(region.eastLng),
+                                        west = com.geotrace.service.OfflineMapManager.normalizeLongitude(region.westLng)
+                                    )
                                 )
-                            )
+                            }
+                            val subBoxes = rawBoxes.flatMap { com.geotrace.service.OfflineMapManager.splitBoxAtAntimeridian(it) }
                             for (sb in subBoxes) {
                                 if (sb.north > sb.south && sb.east > sb.west) {
                                     offlineRegionsLayer.add(Polygon(map).apply {

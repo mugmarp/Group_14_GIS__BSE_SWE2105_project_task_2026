@@ -46,10 +46,10 @@ interface CellTowerCacheDao {
 
 @Dao
 interface ObservedCellDao {
-    @Query("SELECT * FROM cached_observed_cells ORDER BY is_registered DESC, observed_at_ms DESC")
+    @Query("SELECT * FROM cached_observed_cells ORDER BY is_registered DESC, signal_dbm DESC, observed_at_ms DESC")
     fun observeLatestCells(): Flow<List<CachedObservedCellEntity>>
 
-    @Query("SELECT * FROM cached_observed_cells ORDER BY is_registered DESC, observed_at_ms DESC")
+    @Query("SELECT * FROM cached_observed_cells ORDER BY is_registered DESC, signal_dbm DESC, observed_at_ms DESC")
     suspend fun getLatestCells(): List<CachedObservedCellEntity>
 
     @Query("SELECT MAX(observed_at_ms) FROM cached_observed_cells")

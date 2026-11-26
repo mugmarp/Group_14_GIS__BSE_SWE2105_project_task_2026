@@ -299,12 +299,17 @@ class PlaceSearchManager(private val context: Context) {
             val network = cm.activeNetwork ?: return false
             val caps = cm.getNetworkCapabilities(network) ?: return false
             val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            val validated = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            } else {
+                true
+            }
             val notSuspended = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
                 caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_SUSPENDED)
             } else {
                 true
             }
-            hasInternet && notSuspended
+            hasInternet && validated && notSuspended
         } catch (_: Exception) {
             false
         }
@@ -506,14 +511,14 @@ class PlaceSearchManager(private val context: Context) {
         val e = OfflineMapManager.normalizeLongitude(region.eastLng)
         if (n <= s || e == w) return@withContext OverpassFetchOutcome(emptyList(), succeeded = false)
 
-        // Cap spans > 1.8 deg around region center while preserving antimeridian wrap
+        // Cap spans > 2.4 deg around region center while preserving antimeridian wrap
         val totalLatSpan = (n - s).coerceAtLeast(0.01)
         val totalLonSpan = lonSpanDegrees(w, e).coerceAtLeast(0.01)
-        val boundedBox = if (totalLatSpan > 1.8 || totalLonSpan > 1.8) {
+        val boundedBox = if (totalLatSpan > 2.4 || totalLonSpan > 2.4) {
             val cLat = ((n + s) / 2.0).coerceIn(-84.5, 84.5)
             val cLon = if (w <= e) (w + e) / 2.0 else OfflineMapManager.normalizeLongitude(w + totalLonSpan / 2.0)
-            val halfLat = minOf(0.85, totalLatSpan / 2.0)
-            val halfLon = minOf(0.85, totalLonSpan / 2.0)
+            val halfLat = minOf(1.2, totalLatSpan / 2.0)
+            val halfLon = minOf(1.2, totalLonSpan / 2.0)
             OfflineMapManager.CorridorTileBox(
                 north = (cLat + halfLat).coerceAtMost(85.0),
                 south = (cLat - halfLat).coerceAtLeast(-85.0),
@@ -615,8 +620,8 @@ class PlaceSearchManager(private val context: Context) {
         )
         if (rawBoxes.isEmpty()) return@withContext OverpassFetchOutcome(emptyList(), succeeded = false)
 
-        // Group into up to 4 sequential windows preserving antimeridian bounds
-        val stride = ((rawBoxes.size + 3) / 4).coerceAtLeast(1)
+        // Group into up to 6 tighter sequential windows preserving antimeridian bounds
+        val stride = ((rawBoxes.size + 5) / 6).coerceAtLeast(1)
         val mergedWindows = rawBoxes.chunked(stride).mapNotNull { chunk ->
             OfflineMapManager.unionBoundingBox(chunk)
         }
@@ -675,6 +680,59 @@ class PlaceSearchManager(private val context: Context) {
         val combined = (allPriority.take(300) + allLandmarks).take(300)
         OverpassFetchOutcome(combined, succeeded = anySucceeded)
     }
+
+    /**
+     * Refreshes offline POIs for a persisted corridor region using its stored corridor sub-boxes
+     * instead of scanning the entire outer rectangular bounding box.
+     */
+    suspend fun fetchCorridorBoxesPoisForOfflineCacheWithStatus(region: OfflineMapRegion): OverpassFetchOutcome =
+        withContext(Dispatchers.IO) {
+            if (!region.isCorridor || region.corridorBoxes.isEmpty()) {
+                return@withContext fetchRegionPoisForOfflineCacheWithStatus(region)
+            }
+            val rawBoxes = region.corridorBoxes.map {
+                OfflineMapManager.CorridorTileBox(north = it.north, south = it.south, east = it.east, west = it.west)
+            }
+            val stride = ((rawBoxes.size + 5) / 6).coerceAtLeast(1)
+            val mergedWindows = rawBoxes.chunked(stride).mapNotNull { chunk ->
+                OfflineMapManager.unionBoundingBox(chunk)
+            }
+
+            fun isInsideStoredCorridor(poi: OfflinePlacePoi): Boolean {
+                return rawBoxes.any { b ->
+                    poi.latitude in b.south..b.north &&
+                        OfflineMapManager.splitBoxAtAntimeridian(b).any { part ->
+                            poi.longitude in part.west..part.east
+                        }
+                }
+            }
+
+            val allPriority = mutableListOf<OfflinePlacePoi>()
+            val allLandmarks = mutableListOf<OfflinePlacePoi>()
+            val seenDedup = HashSet<String>()
+            var anySucceeded = false
+            for (window in mergedWindows) {
+                val wBoxes = OfflineMapManager.splitBoxAtAntimeridian(window)
+                for (wb in wBoxes) {
+                    val outcome = executeOverpassQueryForBox(
+                        south = wb.south,
+                        west = wb.west,
+                        north = wb.north,
+                        east = wb.east,
+                        regionId = region.id,
+                        regionName = region.name,
+                        seenDedup = seenDedup,
+                        maxPriorityResults = 110,
+                        maxLandmarkResults = 50
+                    )
+                    if (outcome.succeeded) anySucceeded = true
+                    allPriority.addAll(outcome.priorityPois.filter(::isInsideStoredCorridor))
+                    allLandmarks.addAll(outcome.landmarkPois.filter(::isInsideStoredCorridor))
+                }
+            }
+            val combined = (allPriority.take(300) + allLandmarks).take(300)
+            OverpassFetchOutcome(combined, succeeded = anySucceeded)
+        }
 
     private fun pointToSegmentMetersStatic(
         pLat: Double, pLon: Double,

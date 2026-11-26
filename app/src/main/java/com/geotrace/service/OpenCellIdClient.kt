@@ -343,6 +343,53 @@ object OpenCellIdClient {
                 message = result.errorMessage,
                 expiresAtMs = System.currentTimeMillis() + ttl
             )
+            if (forceRefresh) {
+                val cachedFallback = memoryCache[cacheKey]?.let { cached ->
+                    cached.location.copy(
+                        rangeMeters = computeEffectiveRange(cached.apiRangeMeters, cellInfo),
+                        operatorName = cellInfo.operatorDisplayName.ifBlank { cached.location.operatorName },
+                        radioType = cellInfo.type.ifBlank { cached.location.radioType },
+                        isServing = cellInfo.isRegistered,
+                        signalDbm = cellInfo.signalDbm,
+                        isFromOfflineCache = true
+                    )
+                } ?: store?.let { s ->
+                    try {
+                        s.getResolvedTower(mcc, mnc, lac, cid)
+                            ?.takeIf { isValidCoordinates(it.latitude, it.longitude) }
+                            ?.let { persisted ->
+                                CellTowerLocation(
+                                    latitude = persisted.latitude,
+                                    longitude = persisted.longitude,
+                                    rangeMeters = computeEffectiveRange(persisted.apiRangeMeters, cellInfo),
+                                    operatorName = cellInfo.operatorDisplayName.ifBlank { persisted.operatorName },
+                                    radioType = cellInfo.type.ifBlank { persisted.radioType },
+                                    cellId = cid,
+                                    lac = lac,
+                                    isFromOfflineCache = true,
+                                    addressEstimate = persisted.addressEstimate ?: "Resolved via OpenCellID (PLMN $mcc-$mnc)",
+                                    isServing = cellInfo.isRegistered,
+                                    signalDbm = cellInfo.signalDbm,
+                                    resolvedAtMs = persisted.resolvedAtMs
+                                )
+                            }
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+                if (cachedFallback != null) {
+                    if (updateStatus && cellInfo.isRegistered) {
+                        _lookupStatus.value = OpenCellIdStatus(
+                            state = OpenCellIdLookupState.RESOLVED,
+                            message = "Serving mast CID $cid (offline cache; live refresh failed)",
+                            resolvedCount = 1,
+                            queriedCount = 1,
+                            updatedAtMs = System.currentTimeMillis()
+                        )
+                    }
+                    return@withContext cachedFallback
+                }
+            }
             if (updateStatus && cellInfo.isRegistered) {
                 _lookupStatus.value = OpenCellIdStatus(
                     state = result.errorState,
@@ -382,10 +429,10 @@ object OpenCellIdClient {
             return@withContext emptyList()
         }
 
-        val resolved = coroutineScope {
+        val resolvedPairs = coroutineScope {
             candidates.map { info ->
                 async {
-                    resolveCellLocation(
+                    val loc = resolveCellLocation(
                         cellInfo = info,
                         apiKey = effectiveKey,
                         userLatitude = userLatitude,
@@ -393,12 +440,17 @@ object OpenCellIdClient {
                         updateStatus = info.isRegistered,
                         forceRefresh = forceRefresh
                     )
+                    info to loc
                 }
-            }.awaitAll().filterNotNull()
+            }.awaitAll()
         }
 
-        val seenCids = mutableSetOf<Long>()
-        val deduped = resolved.filter { seenCids.add(it.cellId) }
+        val seenKeys = mutableSetOf<String>()
+        val deduped = resolvedPairs.mapNotNull { (info, loc) ->
+            if (loc == null) return@mapNotNull null
+            val key = "${info.mcc ?: -1}_${info.mnc ?: -1}_${loc.lac}_${loc.cellId}"
+            if (seenKeys.add(key)) loc else null
+        }
         if (deduped.isNotEmpty()) {
             val allCached = deduped.all { it.isFromOfflineCache }
             _lookupStatus.value = OpenCellIdStatus(

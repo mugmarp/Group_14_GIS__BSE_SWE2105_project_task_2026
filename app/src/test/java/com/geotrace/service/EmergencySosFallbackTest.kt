@@ -64,6 +64,20 @@ class EmergencySosFallbackTest {
         )
         assertTrue(cellularMsg.contains("(Approx. Cell Mast)"))
 
+        val cachedGnssMsg = TrackExporter.buildEmergencyShareMessage(
+            point = samplePoint("cached_gps"),
+            cellTower = cell,
+            batteryPercent = 27
+        )
+        assertTrue(cachedGnssMsg.contains("(Cached Offline Fix)"))
+
+        val cachedCellMsg = TrackExporter.buildEmergencyShareMessage(
+            point = samplePoint("cached_cellular"),
+            cellTower = cell,
+            batteryPercent = 22
+        )
+        assertTrue(cachedCellMsg.contains("(Cached Cell Mast)"))
+
         val cellOnlyMsg = TrackExporter.buildEmergencyShareMessage(
             point = null,
             cellTower = cell,
