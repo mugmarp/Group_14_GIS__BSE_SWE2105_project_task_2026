@@ -34,7 +34,13 @@ data class OfflineMapRegion(
     val downloadedAtMs: Long = System.currentTimeMillis()
 ) {
     val centerLat: Double get() = (northLat + southLat) / 2.0
-    val centerLng: Double get() = (eastLng + westLng) / 2.0
+    val centerLng: Double
+        get() = if (westLng <= eastLng) {
+            (eastLng + westLng) / 2.0
+        } else {
+            val mid = (westLng + (eastLng + 360.0)) / 2.0
+            if (mid > 180.0) mid - 360.0 else mid
+        }
 }
 
 data class OfflineDownloadProgress(
@@ -63,6 +69,7 @@ data class TrackerSettings(
     val stationaryJitterThresholdMeters: Float = 1.5f,
     val keepScreenOn: Boolean = false,
     val showCellTowerPin: Boolean = true,
+    val showOfflineRegionsOverlay: Boolean = true,
     val openCellIdApiKey: String = "",
     val geofenceNotificationEnabled: Boolean = false,
     val geofenceHysteresisMeters: Float = 10f,

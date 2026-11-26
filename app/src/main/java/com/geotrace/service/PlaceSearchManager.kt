@@ -524,7 +524,7 @@ class PlaceSearchManager(private val context: Context) {
             OfflineMapManager.CorridorTileBox(north = n, south = s, east = e, west = w)
         }
 
-        // Split antimeridian first, then subdivide large boxes (>0.6 deg span) into up to 2x2 tiles
+        // Split antimeridian first, then subdivide large boxes (>0.6 deg span) into 2x2 or 3x3 tiles
         val baseRects = OfflineMapManager.splitBoxAtAntimeridian(boundedBox)
         val queryBoxes = mutableListOf<DoubleArray>()
         for (rect in baseRects) {
@@ -534,18 +534,26 @@ class PlaceSearchManager(private val context: Context) {
             val rE = rect.east
             val latSpan = (rN - rS).coerceAtLeast(0.01)
             val lonSpan = (rE - rW).coerceAtLeast(0.01)
-            if (latSpan > 0.6 || lonSpan > 0.6) {
-                val midLat = (rN + rS) / 2.0
-                val midLon = (rE + rW) / 2.0
-                val latSlices = if (latSpan > 0.6) listOf(rS to midLat, midLat to rN) else listOf(rS to rN)
-                val lonSlices = if (lonSpan > 0.6) listOf(rW to midLon, midLon to rE) else listOf(rW to rE)
-                for ((subS, subN) in latSlices) {
-                    for ((subW, subE) in lonSlices) {
-                        queryBoxes.add(doubleArrayOf(subS, subW, subN, subE))
-                    }
+            val latDiv = when {
+                latSpan > 1.2 -> 3
+                latSpan > 0.6 -> 2
+                else -> 1
+            }
+            val lonDiv = when {
+                lonSpan > 1.2 -> 3
+                lonSpan > 0.6 -> 2
+                else -> 1
+            }
+            val latSlices = (0 until latDiv).map { i ->
+                (rS + (latSpan * i) / latDiv) to (rS + (latSpan * (i + 1)) / latDiv)
+            }
+            val lonSlices = (0 until lonDiv).map { j ->
+                (rW + (lonSpan * j) / lonDiv) to (rW + (lonSpan * (j + 1)) / lonDiv)
+            }
+            for ((subS, subN) in latSlices) {
+                for ((subW, subE) in lonSlices) {
+                    queryBoxes.add(doubleArrayOf(subS, subW, subN, subE))
                 }
-            } else {
-                queryBoxes.add(doubleArrayOf(rS, rW, rN, rE))
             }
         }
 
@@ -553,7 +561,10 @@ class PlaceSearchManager(private val context: Context) {
         val allLandmarks = mutableListOf<OfflinePlacePoi>()
         val seenDedup = HashSet<String>()
         var anySucceeded = false
-        for (box in queryBoxes.take(4)) {
+        for ((idx, box) in queryBoxes.take(9).withIndex()) {
+            if (idx >= 3) {
+                delay(250L)
+            }
             val outcome = executeOverpassQueryForBox(
                 south = box[0],
                 west = box[1],

@@ -70,6 +70,9 @@ class LocationRepository(
     private val _cachedObservedCells = MutableStateFlow<List<CellTowerInfo>>(emptyList())
     val cachedObservedCells: StateFlow<List<CellTowerInfo>> = _cachedObservedCells.asStateFlow()
 
+    private val _cachedObservedAtMs = MutableStateFlow<Long?>(null)
+    val cachedObservedAtMs: StateFlow<Long?> = _cachedObservedAtMs.asStateFlow()
+
     private val _cachedLocationFixCount = MutableStateFlow(0)
     val cachedLocationFixCount: StateFlow<Int> = _cachedLocationFixCount.asStateFlow()
 
@@ -102,6 +105,9 @@ class LocationRepository(
 
     private val _offlinePlacesCount = MutableStateFlow(0)
     val offlinePlacesCount: StateFlow<Int> = _offlinePlacesCount.asStateFlow()
+
+    private val _offlinePlacesCountByRegion = MutableStateFlow<Map<String, Int>>(emptyMap())
+    val offlinePlacesCountByRegion: StateFlow<Map<String, Int>> = _offlinePlacesCountByRegion.asStateFlow()
 
     private val prefs = context.getSharedPreferences("geotrace_prefs", Context.MODE_PRIVATE)
 
@@ -367,13 +373,26 @@ class LocationRepository(
         scope.launch {
             offlineCacheRepository.latestCachedLocationFlow.collect { latest ->
                 if (latest != null) {
-                    _lastKnownCachedLocation.value = latest
+                    val live = _currentLocation.value
+                    val curCached = _lastKnownCachedLocation.value
+                    if (live == null && (curCached == null || latest.timestamp >= curCached.timestamp)) {
+                        _lastKnownCachedLocation.value = latest
+                    }
                 }
             }
         }
         scope.launch {
             offlineCacheRepository.latestObservedCellsFlow.collect { cells ->
-                _cachedObservedCells.value = cells
+                if (_cellTowers.value.isEmpty() && cells.isNotEmpty()) {
+                    _cachedObservedCells.value = cells
+                }
+            }
+        }
+        scope.launch {
+            offlineCacheRepository.latestObservedAtMsFlow.collect { ts ->
+                if (_cellTowers.value.isEmpty() && ts != null) {
+                    _cachedObservedAtMs.value = ts
+                }
             }
         }
         scope.launch {
@@ -388,8 +407,19 @@ class LocationRepository(
         }
         scope.launch {
             try {
-                _lastKnownCachedLocation.value = offlineCacheRepository.getLatestCachedLocationSnapshot()
-                _cachedObservedCells.value = offlineCacheRepository.getLatestObservedCellsSnapshot()
+                val cachedFixSnap = offlineCacheRepository.getLatestCachedLocationSnapshot()
+                if (cachedFixSnap != null && _currentLocation.value == null) {
+                    val curCached = _lastKnownCachedLocation.value
+                    if (curCached == null || cachedFixSnap.timestamp >= curCached.timestamp) {
+                        _lastKnownCachedLocation.value = cachedFixSnap
+                    }
+                }
+                val cachedCellsSnap = offlineCacheRepository.getLatestObservedCellsSnapshot()
+                val cachedObservedTs = offlineCacheRepository.getLatestObservedAtMsSnapshot()
+                if (cachedCellsSnap.isNotEmpty() && _cellTowers.value.isEmpty() && _cachedObservedCells.value.isEmpty()) {
+                    _cachedObservedCells.value = cachedCellsSnap
+                    _cachedObservedAtMs.value = cachedObservedTs
+                }
                 loadGeofences()
                 restoreActiveSessionIfAny()
                 loadTripsInternal()
@@ -1203,10 +1233,12 @@ class LocationRepository(
     fun updateCellTowers(towers: List<CellTowerInfo>) {
         _cellTowers.value = towers
         if (towers.isNotEmpty()) {
+            val nowMs = System.currentTimeMillis()
             _cachedObservedCells.value = towers
+            _cachedObservedAtMs.value = nowMs
             scope.launch {
                 try {
-                    offlineCacheRepository.saveObservedCellSnapshot(towers)
+                    offlineCacheRepository.saveObservedCellSnapshot(towers, nowMs)
                 } catch (_: Exception) {
                 }
             }
@@ -1216,6 +1248,7 @@ class LocationRepository(
     suspend fun clearOfflineGpsAndCellCache() = withContext(Dispatchers.IO) {
         _lastKnownCachedLocation.value = _currentLocation.value
         _cachedObservedCells.value = _cellTowers.value
+        _cachedObservedAtMs.value = if (_cellTowers.value.isNotEmpty()) System.currentTimeMillis() else null
         offlineCacheRepository.clearAllOfflineCaches()
         com.geotrace.service.OpenCellIdClient.clearCache()
     }
@@ -1913,8 +1946,19 @@ class LocationRepository(
                     _offlinePlacesCount.value = c.getInt(0)
                 }
             }
+            val perRegion = HashMap<String, Int>()
+            db.rawQuery(
+                "SELECT region_id, COUNT(*) FROM ${LocationDbHelper.TABLE_OFFLINE_PLACES} GROUP BY region_id",
+                null
+            ).use { c ->
+                while (c.moveToNext()) {
+                    perRegion[c.getString(0)] = c.getInt(1)
+                }
+            }
+            _offlinePlacesCountByRegion.value = perRegion
         } catch (_: Exception) {
             _offlinePlacesCount.value = 0
+            _offlinePlacesCountByRegion.value = emptyMap()
         }
     }
 
@@ -2364,11 +2408,14 @@ class LocationRepository(
         loadOfflineMapRegions()
     }
 
-    suspend fun deleteOfflineMapRegion(id: String) = withContext(Dispatchers.IO) {
+    suspend fun deleteOfflineMapRegion(id: String): Pair<OfflineMapRegion?, List<OfflineMapRegion>> = withContext(Dispatchers.IO) {
+        val current = _offlineMapRegions.value
+        val deleted = current.firstOrNull { it.id == id }
         val db = dbHelper.writableDatabase
         db.delete(LocationDbHelper.TABLE_OFFLINE_PLACES, "region_id = ?", arrayOf(id))
         db.delete(LocationDbHelper.TABLE_OFFLINE_MAPS, "id = ?", arrayOf(id))
         loadOfflineMapRegions()
+        deleted to _offlineMapRegions.value
     }
 
     suspend fun clearAllOfflineMapRegions() = withContext(Dispatchers.IO) {

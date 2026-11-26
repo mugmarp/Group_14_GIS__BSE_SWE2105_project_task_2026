@@ -21,6 +21,9 @@ interface CellTowerCacheDao {
     @Query("SELECT COUNT(*) FROM cached_cell_towers")
     fun observeTowerCount(): Flow<Int>
 
+    @Query("SELECT COUNT(*) FROM cached_cell_towers")
+    suspend fun getTowerCount(): Int
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertTower(entity: CachedCellTowerEntity)
 
@@ -48,6 +51,12 @@ interface ObservedCellDao {
 
     @Query("SELECT * FROM cached_observed_cells ORDER BY is_registered DESC, observed_at_ms DESC")
     suspend fun getLatestCells(): List<CachedObservedCellEntity>
+
+    @Query("SELECT MAX(observed_at_ms) FROM cached_observed_cells")
+    fun observeLatestObservedAtMs(): Flow<Long?>
+
+    @Query("SELECT MAX(observed_at_ms) FROM cached_observed_cells")
+    suspend fun getLatestObservedAtMs(): Long?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(cells: List<CachedObservedCellEntity>)
@@ -77,6 +86,9 @@ interface LocationFixCacheDao {
 
     @Query("SELECT COUNT(*) FROM cached_location_fixes")
     fun observeFixCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM cached_location_fixes")
+    suspend fun getFixCount(): Int
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertFix(entity: CachedLocationFixEntity)

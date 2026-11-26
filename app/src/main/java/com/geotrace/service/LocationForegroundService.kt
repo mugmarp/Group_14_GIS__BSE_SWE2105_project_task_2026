@@ -686,8 +686,9 @@ class LocationForegroundService : Service() {
         requestProtectionLocationUpdates()
         startProtectionHeartbeat()
 
-        // Seed immediate device visibility using existing fix or lastLocation (deduped against recent VM sync)
+        // Seed immediate device visibility using existing fix, fused lastLocation, or Room cached fix
         serviceScope.launch {
+            repo.awaitInitialRestore()
             val latestRepoSync = groupRepo.lastSyncTimestampMs.value ?: 0L
             val existing = repo.currentLocation.value
             if (existing != null) {
@@ -697,9 +698,11 @@ class LocationForegroundService : Service() {
                     groupRepo.syncDeviceAndGroupTelemetry(existing, repo.trackingMode.value.name)
                 }
             } else {
+                var syncedFromFused = false
                 try {
                     fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
                         if (loc != null) {
+                            syncedFromFused = true
                             val normalizedTime = loc.time.takeIf { it > 0L } ?: System.currentTimeMillis()
                             val point = LocationPoint(
                                 latitude = loc.latitude,
@@ -721,9 +724,51 @@ class LocationForegroundService : Service() {
                                     groupRepo.syncDeviceAndGroupTelemetry(point, repo.trackingMode.value.name)
                                 }
                             }
+                        } else if (!syncedFromFused) {
+                            val cached = repo.lastKnownCachedLocation.value
+                            if (cached != null) {
+                                serviceScope.launch {
+                                    val now = System.currentTimeMillis()
+                                    val latest = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
+                                    if (now - latest >= 10_000L) {
+                                        lastCloudSyncMs = now
+                                        val tagged = if (cached.provider.startsWith("cached_")) cached else cached.copy(
+                                            provider = "cached_${cached.provider}"
+                                        )
+                                        groupRepo.syncDeviceAndGroupTelemetry(tagged, repo.trackingMode.value.name)
+                                    }
+                                }
+                            }
+                        }
+                    }.addOnFailureListener {
+                        val cached = repo.lastKnownCachedLocation.value
+                        if (cached != null) {
+                            serviceScope.launch {
+                                val now = System.currentTimeMillis()
+                                val latest = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
+                                if (now - latest >= 10_000L) {
+                                    lastCloudSyncMs = now
+                                    val tagged = if (cached.provider.startsWith("cached_")) cached else cached.copy(
+                                        provider = "cached_${cached.provider}"
+                                    )
+                                    groupRepo.syncDeviceAndGroupTelemetry(tagged, repo.trackingMode.value.name)
+                                }
+                            }
                         }
                     }
                 } catch (_: Exception) {
+                    val cached = repo.lastKnownCachedLocation.value
+                    if (cached != null) {
+                        val now = System.currentTimeMillis()
+                        val latest = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
+                        if (now - latest >= 10_000L) {
+                            lastCloudSyncMs = now
+                            val tagged = if (cached.provider.startsWith("cached_")) cached else cached.copy(
+                                provider = "cached_${cached.provider}"
+                            )
+                            groupRepo.syncDeviceAndGroupTelemetry(tagged, repo.trackingMode.value.name)
+                        }
+                    }
                 }
             }
         }
@@ -1503,7 +1548,10 @@ class LocationForegroundService : Service() {
         point: LocationPoint,
         pct: Int
     ) {
-        val servingCell = repo.cellTowers.value.firstOrNull { it.isRegistered } ?: repo.cellTowers.value.firstOrNull()
+        val servingCell = repo.cellTowers.value.firstOrNull { it.isRegistered }
+            ?: repo.cellTowers.value.firstOrNull()
+            ?: repo.cachedObservedCells.value.firstOrNull { it.isRegistered }
+            ?: repo.cachedObservedCells.value.firstOrNull()
         val cellSummary = servingCell?.let {
             "${it.operatorDisplayName} (CID ${it.cid ?: "N/A"}, LAC ${it.lac ?: "N/A"})"
         } ?: ""
@@ -1554,19 +1602,30 @@ class LocationForegroundService : Service() {
         val app = application as LocationTrackerApp
         val repo = app.repository
         val groupRepo = app.groupRepository
-        val point = repo.currentLocation.value
+        val livePoint = repo.currentLocation.value
+        val cachedPoint = repo.lastKnownCachedLocation.value
+        val fallbackPoint = livePoint ?: cachedPoint
 
         if (decision.captureBeaconThreshold != null) {
-            if (point != null) {
+            if (livePoint != null) {
                 pendingLowBatteryBeaconPct = null
-                persistLastGaspBeacon(repo, groupRepo, point, pct)
+                persistLastGaspBeacon(repo, groupRepo, livePoint, pct)
+            } else if (cachedPoint != null) {
+                // Immediately persist Room cached fix as safety net, while keeping pending pct so a live GNSS fix upgrades it
+                pendingLowBatteryBeaconPct = pct
+                val taggedCached = if (cachedPoint.provider.startsWith("cached_")) {
+                    cachedPoint
+                } else {
+                    cachedPoint.copy(provider = "cached_${cachedPoint.provider}")
+                }
+                persistLastGaspBeacon(repo, groupRepo, taggedCached, pct)
             } else {
                 pendingLowBatteryBeaconPct = pct
             }
         }
 
         if (decision.notifyThreshold != null && hasNotificationPermission(this)) {
-            postLowBatterySafetyNotification(pct, hasPoint = point != null)
+            postLowBatterySafetyNotification(pct, hasPoint = fallbackPoint != null)
         }
     }
 

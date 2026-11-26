@@ -162,7 +162,8 @@ object OpenCellIdClient {
         apiKey: String = "",
         @Suppress("UNUSED_PARAMETER") userLatitude: Double? = null,
         @Suppress("UNUSED_PARAMETER") userLongitude: Double? = null,
-        updateStatus: Boolean = true
+        updateStatus: Boolean = true,
+        forceRefresh: Boolean = false
     ): CellTowerLocation? = withContext(Dispatchers.IO) {
         val cid = cellInfo.cid ?: return@withContext null
         val mcc = cellInfo.mcc ?: return@withContext null
@@ -171,71 +172,76 @@ object OpenCellIdClient {
 
         val cacheKey = "${mcc}_${mnc}_${cid}_$lac"
         val now = System.currentTimeMillis()
+        val store = persistentStore
 
         // 1. Check hot in-memory cache first (works completely offline)
-        memoryCache[cacheKey]?.let { cached ->
-            val resolved = cached.location.copy(
-                rangeMeters = computeEffectiveRange(cached.apiRangeMeters, cellInfo),
-                operatorName = cellInfo.operatorDisplayName.ifBlank { cached.location.operatorName },
-                radioType = cellInfo.type.ifBlank { cached.location.radioType },
-                isServing = cellInfo.isRegistered,
-                signalDbm = cellInfo.signalDbm,
-                isFromOfflineCache = true
-            )
-            if (updateStatus && cellInfo.isRegistered) {
-                _lookupStatus.value = OpenCellIdStatus(
-                    state = OpenCellIdLookupState.RESOLVED,
-                    message = "Serving mast CID $cid resolved (offline cache)",
-                    resolvedCount = 1,
-                    queriedCount = 1,
-                    updatedAtMs = now
-                )
-            }
-            return@withContext resolved
-        }
-
-        // 2. Check durable Room persistent cache (survives process restarts & connectivity loss)
-        val store = persistentStore
-        if (store != null) {
-            val persisted = try {
-                store.getResolvedTower(mcc, mnc, lac, cid)
-            } catch (e: Exception) {
-                Log.w(TAG, "Persistent cell lookup failed: ${e.message}")
-                null
-            }
-            if (persisted != null && isValidCoordinates(persisted.latitude, persisted.longitude)) {
-                val baseLocation = CellTowerLocation(
-                    latitude = persisted.latitude,
-                    longitude = persisted.longitude,
-                    rangeMeters = computeEffectiveRange(persisted.apiRangeMeters, cellInfo),
-                    operatorName = cellInfo.operatorDisplayName.ifBlank { persisted.operatorName },
-                    radioType = cellInfo.type.ifBlank { persisted.radioType },
-                    cellId = cid,
-                    lac = lac,
-                    isFromOfflineCache = true,
-                    addressEstimate = persisted.addressEstimate ?: "Resolved via OpenCellID (PLMN $mcc-$mnc)",
+        if (!forceRefresh) {
+            memoryCache[cacheKey]?.let { cached ->
+                val resolved = cached.location.copy(
+                    rangeMeters = computeEffectiveRange(cached.apiRangeMeters, cellInfo),
+                    operatorName = cellInfo.operatorDisplayName.ifBlank { cached.location.operatorName },
+                    radioType = cellInfo.type.ifBlank { cached.location.radioType },
                     isServing = cellInfo.isRegistered,
-                    signalDbm = cellInfo.signalDbm
+                    signalDbm = cellInfo.signalDbm,
+                    isFromOfflineCache = true
                 )
-                memoryCache[cacheKey] = CachedSuccess(baseLocation, persisted.apiRangeMeters)
-                negativeCache.remove(cacheKey)
-                if (now - persisted.lastSeenAtMs >= ROOM_TOUCH_THROTTLE_MS) {
-                    try {
-                        store.touchResolvedTower(mcc, mnc, lac, cid, now)
-                    } catch (_: Exception) {
-                    }
-                }
                 if (updateStatus && cellInfo.isRegistered) {
                     _lookupStatus.value = OpenCellIdStatus(
                         state = OpenCellIdLookupState.RESOLVED,
-                        message = "Serving mast CID $cid resolved (offline Room cache)",
+                        message = "Serving mast CID $cid resolved (offline cache)",
                         resolvedCount = 1,
                         queriedCount = 1,
                         updatedAtMs = now
                     )
                 }
-                return@withContext baseLocation
+                return@withContext resolved
             }
+
+            // 2. Check durable Room persistent cache (survives process restarts & connectivity loss)
+            if (store != null) {
+                val persisted = try {
+                    store.getResolvedTower(mcc, mnc, lac, cid)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Persistent cell lookup failed: ${e.message}")
+                    null
+                }
+                if (persisted != null && isValidCoordinates(persisted.latitude, persisted.longitude)) {
+                    val baseLocation = CellTowerLocation(
+                        latitude = persisted.latitude,
+                        longitude = persisted.longitude,
+                        rangeMeters = computeEffectiveRange(persisted.apiRangeMeters, cellInfo),
+                        operatorName = cellInfo.operatorDisplayName.ifBlank { persisted.operatorName },
+                        radioType = cellInfo.type.ifBlank { persisted.radioType },
+                        cellId = cid,
+                        lac = lac,
+                        isFromOfflineCache = true,
+                        addressEstimate = persisted.addressEstimate ?: "Resolved via OpenCellID (PLMN $mcc-$mnc)",
+                        isServing = cellInfo.isRegistered,
+                        signalDbm = cellInfo.signalDbm,
+                        resolvedAtMs = persisted.resolvedAtMs
+                    )
+                    memoryCache[cacheKey] = CachedSuccess(baseLocation, persisted.apiRangeMeters)
+                    negativeCache.remove(cacheKey)
+                    if (now - persisted.lastSeenAtMs >= ROOM_TOUCH_THROTTLE_MS) {
+                        try {
+                            store.touchResolvedTower(mcc, mnc, lac, cid, now)
+                        } catch (_: Exception) {
+                        }
+                    }
+                    if (updateStatus && cellInfo.isRegistered) {
+                        _lookupStatus.value = OpenCellIdStatus(
+                            state = OpenCellIdLookupState.RESOLVED,
+                            message = "Serving mast CID $cid resolved (offline Room cache)",
+                            resolvedCount = 1,
+                            queriedCount = 1,
+                            updatedAtMs = now
+                        )
+                    }
+                    return@withContext baseLocation
+                }
+            }
+        } else {
+            negativeCache.remove(cacheKey)
         }
 
         // 3. Online OpenCellID API resolution requires an API key
@@ -282,9 +288,10 @@ object OpenCellIdClient {
         )
 
         if (result.success != null) {
-            memoryCache[cacheKey] = result.success
-            negativeCache.remove(cacheKey)
             val resolvedNow = System.currentTimeMillis()
+            val locationWithTimestamp = result.success.location.copy(resolvedAtMs = resolvedNow)
+            memoryCache[cacheKey] = CachedSuccess(locationWithTimestamp, result.success.apiRangeMeters)
+            negativeCache.remove(cacheKey)
             if (store != null) {
                 try {
                     store.putResolvedTower(
@@ -293,12 +300,12 @@ object OpenCellIdClient {
                             mnc = mnc,
                             lac = lac,
                             cid = cid,
-                            latitude = result.success.location.latitude,
-                            longitude = result.success.location.longitude,
+                            latitude = locationWithTimestamp.latitude,
+                            longitude = locationWithTimestamp.longitude,
                             apiRangeMeters = result.success.apiRangeMeters,
-                            operatorName = result.success.location.operatorName,
-                            radioType = result.success.location.radioType,
-                            addressEstimate = result.success.location.addressEstimate,
+                            operatorName = locationWithTimestamp.operatorName,
+                            radioType = locationWithTimestamp.radioType,
+                            addressEstimate = locationWithTimestamp.addressEstimate,
                             resolvedAtMs = resolvedNow,
                             lastSeenAtMs = resolvedNow
                         )
@@ -307,7 +314,7 @@ object OpenCellIdClient {
                     Log.w(TAG, "Failed persisting cell tower to Room: ${e.message}")
                 }
             }
-            val resolved = result.success.location.copy(
+            val resolved = locationWithTimestamp.copy(
                 rangeMeters = computeEffectiveRange(result.success.apiRangeMeters, cellInfo),
                 isServing = cellInfo.isRegistered,
                 signalDbm = cellInfo.signalDbm,
@@ -355,7 +362,8 @@ object OpenCellIdClient {
         towers: List<CellTowerInfo>,
         apiKey: String = "",
         userLatitude: Double? = null,
-        userLongitude: Double? = null
+        userLongitude: Double? = null,
+        forceRefresh: Boolean = false
     ): List<CellTowerLocation> = withContext(Dispatchers.IO) {
         if (towers.isEmpty()) return@withContext emptyList()
 
@@ -382,7 +390,8 @@ object OpenCellIdClient {
                         apiKey = effectiveKey,
                         userLatitude = userLatitude,
                         userLongitude = userLongitude,
-                        updateStatus = info.isRegistered
+                        updateStatus = info.isRegistered,
+                        forceRefresh = forceRefresh
                     )
                 }
             }.awaitAll().filterNotNull()

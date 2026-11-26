@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.PackageManager
+import android.database.sqlite.SQLiteDatabase
 import android.os.Build
 import android.os.PowerManager
 import android.util.Log
@@ -26,8 +27,11 @@ import kotlinx.coroutines.withContext
 import org.osmdroid.tileprovider.cachemanager.CacheManager
 import org.osmdroid.tileprovider.modules.SqlTileWriter
 import org.osmdroid.util.BoundingBox
+import org.osmdroid.util.MapTileIndex
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.floor
@@ -49,12 +53,45 @@ class OfflineMapManager(private val context: Context) {
         val west: Double
     )
 
+    data class ExclusiveTileRemovalPlan(
+        val baseTileIndices: List<Long>,
+        val overlayTileIndices: List<Long>
+    )
+
+    private data class TileWindow(
+        val minZoom: Int,
+        val maxZoom: Int,
+        val north: Double,
+        val south: Double,
+        val west: Double,
+        val east: Double
+    )
+
     companion object {
         private const val TAG = "OfflineMapManager"
         const val MAX_TILES_PER_DOWNLOAD = 2500
         const val MAX_CACHE_BYTES_MB = 512
         private const val NOTIFICATION_CHANNEL_ID = "offline_maps_channel"
-        private const val NOTIFICATION_ID = 4102
+        private const val PROGRESS_NOTIFICATION_ID = OfflineDownloadService.FOREGROUND_NOTIFICATION_ID
+        private const val RESULT_NOTIFICATION_ID = 4103
+
+        fun maxZoomFor(tileType: MapTileType): Int = when (tileType) {
+            MapTileType.TOPO -> 17
+            MapTileType.SATELLITE,
+            MapTileType.HYBRID,
+            MapTileType.HUMANITARIAN,
+            MapTileType.STANDARD -> 19
+        }
+
+        private fun baseProviderKey(tileType: MapTileType): String = when (tileType) {
+            MapTileType.STANDARD -> "Mapnik"
+            MapTileType.SATELLITE, MapTileType.HYBRID -> "EsriWorldImagery"
+            MapTileType.TOPO -> "OpenTopoMap"
+            MapTileType.HUMANITARIAN -> "HumanitarianOSM"
+        }
+
+        private fun overlayProviderKey(tileType: MapTileType): String? =
+            if (tileType == MapTileType.HYBRID) "EsriReferenceLabels" else null
 
         private fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
             val r = 6371000.0
@@ -73,6 +110,10 @@ class OfflineMapManager(private val context: Context) {
             return y.coerceIn(0L, n - 1L)
         }
 
+        private fun lonToTileXStatic(lonDeg: Double, n: Long): Long {
+            return floor(((lonDeg + 180.0) / 360.0) * n).toLong().coerceIn(0L, n - 1L)
+        }
+
         fun normalizeLongitude(lon: Double): Double {
             if (!lon.isFinite()) return 0.0
             var wrapped = ((lon + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
@@ -89,6 +130,160 @@ class OfflineMapManager(private val context: Context) {
                     CorridorTileBox(north = box.north, south = box.south, east = box.east, west = -180.0)
                 )
             }
+        }
+
+        private fun boxesIntersect(a: CorridorTileBox, b: CorridorTileBox): Boolean {
+            if (a.north < b.south || a.south > b.north) return false
+            val aParts = splitBoxAtAntimeridian(a)
+            val bParts = splitBoxAtAntimeridian(b)
+            for (ap in aParts) {
+                for (bp in bParts) {
+                    if (ap.west <= bp.east && ap.east >= bp.west) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        fun coveredTileTypesForViewport(
+            regions: List<OfflineMapRegion>,
+            viewNorth: Double?,
+            viewSouth: Double?,
+            viewEast: Double?,
+            viewWest: Double?
+        ): Set<MapTileType> {
+            if (regions.isEmpty() || viewNorth == null || viewSouth == null || viewEast == null || viewWest == null) {
+                return emptySet()
+            }
+            if (!viewNorth.isFinite() || !viewSouth.isFinite() || !viewEast.isFinite() || !viewWest.isFinite()) {
+                return emptySet()
+            }
+            val viewBox = CorridorTileBox(
+                north = viewNorth.coerceIn(-85.0511, 85.0511),
+                south = viewSouth.coerceIn(-85.0511, 85.0511),
+                east = normalizeLongitude(viewEast),
+                west = normalizeLongitude(viewWest)
+            )
+            if (viewBox.north <= viewBox.south) return emptySet()
+            val covered = HashSet<MapTileType>()
+            for (region in regions) {
+                val rBox = CorridorTileBox(
+                    north = region.northLat.coerceIn(-85.0511, 85.0511),
+                    south = region.southLat.coerceIn(-85.0511, 85.0511),
+                    east = normalizeLongitude(region.eastLng),
+                    west = normalizeLongitude(region.westLng)
+                )
+                if (boxesIntersect(viewBox, rBox)) {
+                    covered.add(region.tileType)
+                    if (region.tileType == MapTileType.HYBRID) {
+                        covered.add(MapTileType.SATELLITE)
+                    }
+                }
+            }
+            return covered
+        }
+
+        /**
+         * Computes packed osmdroid [MapTileIndex] keys owned exclusively by [target] so deleting
+         * a downloaded region removes orphaned tiles without deleting tiles shared with overlapping
+         * [remainingRegions] that use the same tile provider.
+         */
+        fun collectExclusiveTileIndicesForRegion(
+            target: OfflineMapRegion,
+            remainingRegions: List<OfflineMapRegion>,
+            maxTiles: Int = 25_000
+        ): ExclusiveTileRemovalPlan {
+            val targetBaseKey = baseProviderKey(target.tileType)
+            val targetOverlayKey = overlayProviderKey(target.tileType)
+
+            val baseOverlapRegions = remainingRegions.filter { rem ->
+                baseProviderKey(rem.tileType) == targetBaseKey || overlayProviderKey(rem.tileType) == targetBaseKey
+            }
+            val overlayOverlapRegions = if (targetOverlayKey != null) {
+                remainingRegions.filter { rem ->
+                    baseProviderKey(rem.tileType) == targetOverlayKey || overlayProviderKey(rem.tileType) == targetOverlayKey
+                }
+            } else {
+                emptyList()
+            }
+
+            fun buildWindow(reg: OfflineMapRegion): TileWindow? {
+                val n = reg.northLat.coerceIn(-85.0511, 85.0511)
+                val s = reg.southLat.coerceIn(-85.0511, 85.0511)
+                val w = normalizeLongitude(reg.westLng)
+                val e = normalizeLongitude(reg.eastLng)
+                if (n <= s || w == e) return null
+                val maxZ = maxZoomFor(reg.tileType).coerceAtMost(18)
+                val minZ = reg.minZoom.coerceIn(0, maxZ)
+                val hiZ = reg.maxZoom.coerceIn(minZ, maxZ)
+                return TileWindow(minZ, hiZ, n, s, w, e)
+            }
+
+            val tWin = buildWindow(target) ?: return ExclusiveTileRemovalPlan(emptyList(), emptyList())
+            val baseOverlapWins = baseOverlapRegions.mapNotNull(::buildWindow)
+            val overlayOverlapWins = overlayOverlapRegions.mapNotNull(::buildWindow)
+
+            fun tileInWindow(z: Int, x: Long, y: Long, win: TileWindow): Boolean {
+                if (z !in win.minZoom..win.maxZoom) return false
+                val n = 1L shl z
+                val yMin = latToTileYStatic(win.north, n)
+                val yMax = latToTileYStatic(win.south, n)
+                if (y !in minOf(yMin, yMax)..maxOf(yMin, yMax)) return false
+                val xMin = lonToTileXStatic(win.west, n)
+                val xMax = lonToTileXStatic(win.east, n)
+                return if (win.west <= win.east) {
+                    x in xMin..xMax
+                } else {
+                    x >= xMin || x <= xMax
+                }
+            }
+
+            val baseOut = ArrayList<Long>()
+            val overlayOut = ArrayList<Long>()
+
+            val nLatYMin = mutableMapOf<Int, Pair<Long, Long>>()
+            val xRanges = mutableMapOf<Int, List<LongRange>>()
+            for (z in tWin.minZoom..tWin.maxZoom) {
+                val n = 1L shl z
+                val yA = latToTileYStatic(tWin.north, n)
+                val yB = latToTileYStatic(tWin.south, n)
+                nLatYMin[z] = minOf(yA, yB) to maxOf(yA, yB)
+                val xMin = lonToTileXStatic(tWin.west, n)
+                val xMax = lonToTileXStatic(tWin.east, n)
+                xRanges[z] = if (tWin.west <= tWin.east) {
+                    listOf(xMin..xMax)
+                } else {
+                    listOf(xMin until n, 0L..xMax)
+                }
+            }
+
+            outer@ for (z in tWin.minZoom..tWin.maxZoom) {
+                val (yLow, yHigh) = nLatYMin[z] ?: continue
+                val ranges = xRanges[z] ?: continue
+                for (xr in ranges) {
+                    for (x in xr) {
+                        for (y in yLow..yHigh) {
+                            if (baseOut.size + overlayOut.size >= maxTiles) break@outer
+                            val tileIdx = MapTileIndex.getTileIndex(z, x.toInt(), y.toInt())
+                            if (baseOverlapWins.none { tileInWindow(z, x, y, it) }) {
+                                baseOut.add(tileIdx)
+                            }
+                            if (targetOverlayKey != null &&
+                                baseOut.size + overlayOut.size < maxTiles &&
+                                overlayOverlapWins.none { tileInWindow(z, x, y, it) }
+                            ) {
+                                overlayOut.add(tileIdx)
+                            }
+                        }
+                    }
+                }
+            }
+
+            return ExclusiveTileRemovalPlan(
+                baseTileIndices = baseOut,
+                overlayTileIndices = overlayOut
+            )
         }
 
         /**
@@ -153,7 +348,6 @@ class OfflineMapManager(private val context: Context) {
                 }
                 return CorridorTileBox(north = n, south = s, east = e, west = w)
             }
-            // Shift longitudes onto [0, 360) for antimeridian-crossing unions
             var minShifted = 360.0
             var maxShifted = 0.0
             for (b in boxes) {
@@ -179,7 +373,7 @@ class OfflineMapManager(private val context: Context) {
 
         /**
          * Estimates exact deduplicated tile count across route corridor boxes using packed 64-bit `(z, x, y)` keys.
-         * Supports boxes crossing the ±180° antimeridian.
+         * Supports boxes crossing the ±180° antimeridian and clamps maxZoom to provider limit.
          * Returns Triple(totalTilesIncludingOverlay, estimatedMb, corridorBoxes).
          */
         fun estimateCorridorTilesAndMb(
@@ -192,8 +386,9 @@ class OfflineMapManager(private val context: Context) {
             val boxes = computeCorridorBoxes(points, halfWidthKm = halfWidthKm)
             if (boxes.isEmpty()) return Triple(0, 0f, emptyList())
 
-            val safeMin = minZoom.coerceIn(4, 17)
-            val safeMax = maxZoom.coerceIn(safeMin, 18)
+            val sourceMax = maxZoomFor(tileType).coerceAtMost(18)
+            val safeMin = minZoom.coerceIn(4, sourceMax)
+            val safeMax = maxZoom.coerceIn(safeMin, sourceMax)
             val seenKeys = HashSet<Long>()
             val cap = 100_000
 
@@ -268,6 +463,8 @@ class OfflineMapManager(private val context: Context) {
     private var isCancelled = false
 
     private val completionDispatched = AtomicBoolean(false)
+    private val downloadGeneration = AtomicLong(0L)
+    private val notificationLock = Any()
 
     @Volatile
     private var downloadWakeLock: PowerManager.WakeLock? = null
@@ -311,8 +508,9 @@ class OfflineMapManager(private val context: Context) {
         if (box.latNorth <= box.latSouth || box.lonEast == box.lonWest) {
             return 0 to 0f
         }
-        val safeMin = minZoom.coerceIn(4, 17)
-        val safeMax = maxZoom.coerceIn(safeMin, 18)
+        val sourceMax = maxZoomFor(tileType).coerceAtMost(18)
+        val safeMin = minZoom.coerceIn(4, sourceMax)
+        val safeMax = maxZoom.coerceIn(safeMin, sourceMax)
         val north = box.latNorth.coerceIn(-85.0511, 85.0511)
         val south = box.latSouth.coerceIn(-85.0511, 85.0511)
         val west = box.lonWest.coerceIn(-180.0, 180.0)
@@ -342,13 +540,7 @@ class OfflineMapManager(private val context: Context) {
         } else {
             baseTilesLong.toInt()
         }
-        val kbPerTile = when (tileType) {
-            MapTileType.SATELLITE -> 42f
-            MapTileType.HYBRID -> 28f // average across imagery (~42KB) + labels (~14KB)
-            MapTileType.TOPO -> 28f
-            MapTileType.HUMANITARIAN, MapTileType.STANDARD -> 18f
-        }
-        val estimatedMb = (totalTiles * kbPerTile) / 1024f
+        val estimatedMb = (totalTiles * kbPerTileFor(tileType)) / 1024f
         return totalTiles to estimatedMb
     }
 
@@ -370,8 +562,9 @@ class OfflineMapManager(private val context: Context) {
         if (_downloadProgress.value.isDownloading) return
 
         val effectiveType = if (tileType.supportsOfflineBulkDownload) tileType else MapTileType.HUMANITARIAN
-        val safeMin = minZoom.coerceIn(4, 17)
-        val safeMax = maxZoom.coerceIn(safeMin, 18)
+        val sourceMax = maxZoomFor(effectiveType).coerceAtMost(18)
+        val safeMin = minZoom.coerceIn(4, sourceMax)
+        val safeMax = maxZoom.coerceIn(safeMin, sourceMax)
         val (estTiles, estMb) = estimateRegionTilesAndMb(box, effectiveType, safeMin, safeMax)
 
         if (estTiles <= 0) {
@@ -398,6 +591,7 @@ class OfflineMapManager(private val context: Context) {
             return
         }
 
+        val activeGen = downloadGeneration.incrementAndGet()
         isCancelled = false
         completionDispatched.set(false)
         lastNotificationTimeMs = 0L
@@ -456,14 +650,17 @@ class OfflineMapManager(private val context: Context) {
             errorMessage = null
         )
         postProgressNotification(cleanName, 0, estTiles, force = true)
+        OfflineDownloadService.start(context)
 
         fun runRegionJob(jobIndex: Int, accumulatedProgress: Int, cumulativeErrors: Int) {
-            if (isCancelled) {
+            if (isCancelled || downloadGeneration.get() != activeGen) {
                 finishWithError("Download cancelled.")
                 return
             }
             if (jobIndex >= jobs.size) {
-                completeSuccess(cleanName, box, effectiveType, safeMin, safeMax, estTiles, estMb, onCompleted)
+                val finalTiles = (estTiles - cumulativeErrors).coerceAtLeast(0)
+                val finalMb = (finalTiles * kbPerTileFor(effectiveType)) / 1024f
+                completeSuccess(cleanName, box, effectiveType, safeMin, safeMax, finalTiles, finalMb, onCompleted)
                 return
             }
             val job = jobs[jobIndex]
@@ -478,7 +675,7 @@ class OfflineMapManager(private val context: Context) {
                     safeMax,
                     object : CacheManager.CacheManagerCallback {
                         override fun onTaskComplete() {
-                            if (isCancelled) {
+                            if (isCancelled || downloadGeneration.get() != activeGen) {
                                 finishWithError("Download cancelled.")
                                 return
                             }
@@ -489,6 +686,7 @@ class OfflineMapManager(private val context: Context) {
                         }
 
                         override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {
+                            if (isCancelled || downloadGeneration.get() != activeGen) return
                             val scaled = ((progress.toDouble() / activeSubTotal.toDouble()) * job.weightTiles)
                                 .toInt()
                                 .coerceIn(0, job.weightTiles)
@@ -507,7 +705,7 @@ class OfflineMapManager(private val context: Context) {
                         }
 
                         override fun onTaskFailed(errors: Int) {
-                            if (isCancelled) {
+                            if (isCancelled || downloadGeneration.get() != activeGen) {
                                 finishWithError("Download cancelled.")
                                 return
                             }
@@ -552,8 +750,9 @@ class OfflineMapManager(private val context: Context) {
         if (_downloadProgress.value.isDownloading) return
 
         val effectiveType = if (tileType.supportsOfflineBulkDownload) tileType else MapTileType.HUMANITARIAN
-        val safeMin = minZoom.coerceIn(4, 17)
-        val safeMax = maxZoom.coerceIn(safeMin, 18)
+        val sourceMax = maxZoomFor(effectiveType).coerceAtMost(18)
+        val safeMin = minZoom.coerceIn(4, sourceMax)
+        val safeMax = maxZoom.coerceIn(safeMin, sourceMax)
         val (estTiles, estMb, rawBoxes) = estimateCorridorTilesAndMb(
             points = points,
             halfWidthKm = halfWidthKm,
@@ -589,6 +788,7 @@ class OfflineMapManager(private val context: Context) {
         val overallUnion = unionBoundingBox(rawBoxes) ?: return
         val overallBox = BoundingBox(overallUnion.north, overallUnion.east, overallUnion.south, overallUnion.west)
 
+        val activeGen = downloadGeneration.incrementAndGet()
         isCancelled = false
         completionDispatched.set(false)
         lastNotificationTimeMs = 0L
@@ -641,14 +841,17 @@ class OfflineMapManager(private val context: Context) {
             errorMessage = null
         )
         postProgressNotification(cleanName, 0, estTiles, force = true)
+        OfflineDownloadService.start(context)
 
         fun runJob(jobIndex: Int, accumulatedProgress: Int, cumulativeErrors: Int) {
-            if (isCancelled) {
+            if (isCancelled || downloadGeneration.get() != activeGen) {
                 finishWithError("Download cancelled.")
                 return
             }
             if (jobIndex >= jobs.size) {
-                completeSuccess(cleanName, overallBox, effectiveType, safeMin, safeMax, estTiles, estMb, onCompleted)
+                val finalTiles = (estTiles - cumulativeErrors).coerceAtLeast(0)
+                val finalMb = (finalTiles * kbPerTileFor(effectiveType)) / 1024f
+                completeSuccess(cleanName, overallBox, effectiveType, safeMin, safeMax, finalTiles, finalMb, onCompleted)
                 return
             }
             val job = jobs[jobIndex]
@@ -663,6 +866,10 @@ class OfflineMapManager(private val context: Context) {
                     safeMax,
                     object : CacheManager.CacheManagerCallback {
                         override fun onTaskComplete() {
+                            if (isCancelled || downloadGeneration.get() != activeGen) {
+                                finishWithError("Download cancelled.")
+                                return
+                            }
                             val nextAccum = (accumulatedProgress + job.boxWeightTiles).coerceIn(0, estTiles)
                             _downloadProgress.value = _downloadProgress.value.copy(completedTiles = nextAccum)
                             postProgressNotification(cleanName, nextAccum, estTiles)
@@ -670,6 +877,7 @@ class OfflineMapManager(private val context: Context) {
                         }
 
                         override fun updateProgress(progress: Int, currentZoomLevel: Int, zoomMin: Int, zoomMax: Int) {
+                            if (isCancelled || downloadGeneration.get() != activeGen) return
                             val scaledBoxProgress = ((progress.toDouble() / activeBoxTotal.toDouble()) * job.boxWeightTiles)
                                 .toInt()
                                 .coerceIn(0, job.boxWeightTiles)
@@ -687,7 +895,7 @@ class OfflineMapManager(private val context: Context) {
                         }
 
                         override fun onTaskFailed(errors: Int) {
-                            if (isCancelled) {
+                            if (isCancelled || downloadGeneration.get() != activeGen) {
                                 finishWithError("Download cancelled.")
                                 return
                             }
@@ -724,6 +932,7 @@ class OfflineMapManager(private val context: Context) {
         cleanupActiveHandles(detachWriter = true)
         ioScope.launch { refreshCacheSizeAsync() }
         _downloadProgress.value = OfflineDownloadProgress(isDownloading = false)
+        OfflineDownloadService.stop(context)
         postResultNotification(
             title = "Offline map ready",
             message = "$cleanName ($tileCount tiles) cached for offline use"
@@ -754,6 +963,7 @@ class OfflineMapManager(private val context: Context) {
             isDownloading = false,
             errorMessage = msg
         )
+        OfflineDownloadService.stop(context)
         if (isCancelled) {
             clearDownloadNotification()
         } else {
@@ -762,6 +972,7 @@ class OfflineMapManager(private val context: Context) {
     }
 
     fun cancelActiveDownload() {
+        val cancelledGen = downloadGeneration.get()
         isCancelled = true
         val pendingWriter = activeTileWriter
         try {
@@ -771,9 +982,11 @@ class OfflineMapManager(private val context: Context) {
         if (pendingWriter != null) {
             ioScope.launch {
                 kotlinx.coroutines.delay(2500L)
-                try {
-                    pendingWriter.onDetach()
-                } catch (_: Exception) {}
+                if (downloadGeneration.get() == cancelledGen) {
+                    try {
+                        pendingWriter.onDetach()
+                    } catch (_: Exception) {}
+                }
             }
         }
     }
@@ -782,6 +995,43 @@ class OfflineMapManager(private val context: Context) {
         if (!_downloadProgress.value.isDownloading) {
             _downloadProgress.value = _downloadProgress.value.copy(errorMessage = null)
         }
+    }
+
+    suspend fun deleteTilesForRegion(
+        target: OfflineMapRegion,
+        remainingRegions: List<OfflineMapRegion>
+    ): Int = withContext(Dispatchers.IO) {
+        val plan = collectExclusiveTileIndicesForRegion(target, remainingRegions)
+        if (plan.baseTileIndices.isEmpty() && plan.overlayTileIndices.isEmpty()) {
+            refreshCacheSize()
+            return@withContext 0
+        }
+        val baseSource = MapTileSources.baseTileSourceFor(target.tileType)
+        val overlaySource = MapTileSources.overlayTileSourceFor(target.tileType)
+        val writer = SqlTileWriter()
+        var removedCount = 0
+        try {
+            for (tileIdx in plan.baseTileIndices) {
+                if (writer.remove(baseSource, tileIdx)) {
+                    removedCount++
+                }
+            }
+            if (overlaySource != null) {
+                for (tileIdx in plan.overlayTileIndices) {
+                    if (writer.remove(overlaySource, tileIdx)) {
+                        removedCount++
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Partial error removing region tiles: ${e.message}")
+        } finally {
+            try {
+                writer.onDetach()
+            } catch (_: Exception) {}
+            refreshCacheSize()
+        }
+        removedCount
     }
 
     fun clearAllTileCache(): Boolean {
@@ -811,12 +1061,47 @@ class OfflineMapManager(private val context: Context) {
         _cacheSizeMb.value = computeCacheSizeMb()
     }
 
+    private fun measureSqliteLiveBytes(dbFile: File): Long {
+        if (!dbFile.exists()) return 0L
+        return try {
+            SQLiteDatabase.openDatabase(dbFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+                val tileRows = db.rawQuery("SELECT COUNT(*) FROM tiles", null).use { c ->
+                    if (c.moveToFirst()) c.getLong(0) else -1L
+                }
+                if (tileRows == 0L) return 0L
+                val pageCount = db.rawQuery("PRAGMA page_count", null).use { c ->
+                    if (c.moveToFirst()) c.getLong(0) else 0L
+                }
+                val freeCount = db.rawQuery("PRAGMA freelist_count", null).use { c ->
+                    if (c.moveToFirst()) c.getLong(0) else 0L
+                }
+                val pageSize = db.rawQuery("PRAGMA page_size", null).use { c ->
+                    if (c.moveToFirst()) c.getLong(0) else 4096L
+                }
+                if (pageCount > 0L && pageSize > 0L) {
+                    ((pageCount - freeCount).coerceAtLeast(0L) * pageSize)
+                } else {
+                    dbFile.length()
+                }
+            }
+        } catch (_: Exception) {
+            dbFile.length()
+        }
+    }
+
     private fun computeCacheSizeMb(): Float {
         return try {
             val tileDir = org.osmdroid.config.Configuration.getInstance().osmdroidTileCache
             if (tileDir != null && tileDir.exists()) {
-                val bytes = tileDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-                bytes / (1024f * 1024f)
+                var totalBytes = 0L
+                tileDir.walkTopDown().filter { it.isFile }.forEach { file ->
+                    totalBytes += when {
+                        file.name == "cache.db" -> measureSqliteLiveBytes(file)
+                        file.name.startsWith("cache.db-") -> 0L
+                        else -> file.length()
+                    }
+                }
+                totalBytes / (1024f * 1024f)
             } else {
                 0f
             }
@@ -878,44 +1163,55 @@ class OfflineMapManager(private val context: Context) {
     }
 
     private fun postProgressNotification(regionName: String, completed: Int, total: Int, force: Boolean = false) {
-        if (!canPostNotifications()) return
-        val pct = if (total > 0) ((completed * 100) / total).coerceIn(0, 100) else 0
-        val now = System.currentTimeMillis()
-        if (!force && (now - lastNotificationTimeMs < 1500L) && (pct - lastNotifiedPercent < 5)) return
-        lastNotificationTimeMs = now
-        lastNotifiedPercent = pct
+        synchronized(notificationLock) {
+            if (!canPostNotifications()) return
+            val pct = if (total > 0) ((completed * 100) / total).coerceIn(0, 100) else 0
+            val now = System.currentTimeMillis()
+            if (!force && (now - lastNotificationTimeMs < 1500L) && (pct - lastNotifiedPercent < 5)) return
+            lastNotificationTimeMs = now
+            lastNotifiedPercent = pct
 
-        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-        ensureNotificationChannel(nm)
-        val notification = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Downloading offline map ($pct%)")
-            .setContentText("$regionName • $completed / $total tiles")
-            .setOnlyAlertOnce(true)
-            .setOngoing(true)
-            .setProgress(total.coerceAtLeast(1), completed.coerceAtLeast(0), total <= 0)
-            .build()
-        nm.notify(NOTIFICATION_ID, notification)
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            ensureNotificationChannel(nm)
+            if (force) {
+                nm.cancel(RESULT_NOTIFICATION_ID)
+            }
+            val notification = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.stat_sys_download)
+                .setContentTitle("Downloading offline map ($pct%)")
+                .setContentText("$regionName • $completed / $total tiles")
+                .setOnlyAlertOnce(true)
+                .setOngoing(true)
+                .setProgress(total.coerceAtLeast(1), completed.coerceAtLeast(0), total <= 0)
+                .build()
+            nm.notify(PROGRESS_NOTIFICATION_ID, notification)
+        }
     }
 
     private fun postResultNotification(title: String, message: String) {
-        if (!canPostNotifications()) return
-        val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-        ensureNotificationChannel(nm)
-        val notification = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setOngoing(false)
-            .setAutoCancel(true)
-            .build()
-        nm.notify(NOTIFICATION_ID, notification)
+        synchronized(notificationLock) {
+            if (!canPostNotifications()) return
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            ensureNotificationChannel(nm)
+            nm.cancel(PROGRESS_NOTIFICATION_ID)
+            val notification = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.stat_sys_download_done)
+                .setContentTitle(title)
+                .setContentText(message)
+                .setOngoing(false)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(RESULT_NOTIFICATION_ID, notification)
+        }
     }
 
     private fun clearDownloadNotification() {
-        try {
-            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
-            nm.cancel(NOTIFICATION_ID)
-        } catch (_: Exception) {}
+        synchronized(notificationLock) {
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+                nm.cancel(PROGRESS_NOTIFICATION_ID)
+                nm.cancel(RESULT_NOTIFICATION_ID)
+            } catch (_: Exception) {}
+        }
     }
 }

@@ -5,14 +5,24 @@ import com.geotrace.model.LocationPoint
 import com.geotrace.service.OpenCellIdClient
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
 
 class OfflineCacheRepository(
-    database: OfflineCacheDatabase
+    private val cellDao: CellTowerCacheDao,
+    private val observedCellDao: ObservedCellDao,
+    private val locationFixDao: LocationFixCacheDao
 ) : OpenCellIdClient.CellTowerCacheStore {
+
+    constructor(database: OfflineCacheDatabase) : this(
+        database.cellTowerCacheDao(),
+        database.observedCellDao(),
+        database.locationFixCacheDao()
+    )
 
     companion object {
         const val MAX_CACHED_CELL_TOWERS = 2000
@@ -20,20 +30,17 @@ class OfflineCacheRepository(
         private const val LOCATION_PERSIST_MIN_INTERVAL_MS = 15_000L
         private const val LOCATION_PERSIST_MIN_DISTANCE_METERS = 25.0
         private const val OBSERVED_CELLS_MIN_INTERVAL_MS = 20_000L
+        private const val LOCATION_PRUNE_BATCH = 10
+        private const val TOWER_PRUNE_BATCH = 25
     }
 
-    private val cellDao = database.cellTowerCacheDao()
-    private val observedCellDao = database.observedCellDao()
-    private val locationFixDao = database.locationFixCacheDao()
+    private val cacheMutex = Mutex()
 
-    @Volatile
     private var lastPersistedFix: LocationPoint? = null
-
-    @Volatile
     private var lastObservedSnapshotSignature: String? = null
-
-    @Volatile
     private var lastObservedSnapshotMs: Long = 0L
+    private var locationInsertsSincePrune: Int = 0
+    private var towerUpsertsSincePrune: Int = 0
 
     val latestCachedLocationFlow: Flow<LocationPoint?> = locationFixDao.observeLatestFix().map { entity ->
         entity?.toDomain()
@@ -50,6 +57,8 @@ class OfflineCacheRepository(
     val latestObservedCellsFlow: Flow<List<CellTowerInfo>> = observedCellDao.observeLatestCells().map { list ->
         list.map { it.toDomain() }
     }
+
+    val latestObservedAtMsFlow: Flow<Long?> = observedCellDao.observeLatestObservedAtMs()
 
     override suspend fun getResolvedTower(
         mcc: Int,
@@ -75,23 +84,34 @@ class OfflineCacheRepository(
     }
 
     override suspend fun putResolvedTower(entry: OpenCellIdClient.PersistentCachedTower) {
-        cellDao.upsertTower(
-            CachedCellTowerEntity(
-                mcc = entry.mcc,
-                mnc = entry.mnc,
-                lac = entry.lac,
-                cid = entry.cid,
-                latitude = entry.latitude,
-                longitude = entry.longitude,
-                apiRangeMeters = entry.apiRangeMeters,
-                operatorName = entry.operatorName,
-                radioType = entry.radioType,
-                addressEstimate = entry.addressEstimate,
-                resolvedAtMs = entry.resolvedAtMs,
-                lastSeenAtMs = entry.lastSeenAtMs
+        val shouldPrune = cacheMutex.withLock {
+            cellDao.upsertTower(
+                CachedCellTowerEntity(
+                    mcc = entry.mcc,
+                    mnc = entry.mnc,
+                    lac = entry.lac,
+                    cid = entry.cid,
+                    latitude = entry.latitude,
+                    longitude = entry.longitude,
+                    apiRangeMeters = entry.apiRangeMeters,
+                    operatorName = entry.operatorName,
+                    radioType = entry.radioType,
+                    addressEstimate = entry.addressEstimate,
+                    resolvedAtMs = entry.resolvedAtMs,
+                    lastSeenAtMs = entry.lastSeenAtMs
+                )
             )
-        )
-        cellDao.pruneOldestTowers(MAX_CACHED_CELL_TOWERS)
+            towerUpsertsSincePrune++
+            towerUpsertsSincePrune >= TOWER_PRUNE_BATCH
+        }
+        if (shouldPrune) {
+            cacheMutex.withLock {
+                if (cellDao.getTowerCount() > MAX_CACHED_CELL_TOWERS) {
+                    cellDao.pruneOldestTowers(MAX_CACHED_CELL_TOWERS)
+                }
+                towerUpsertsSincePrune = 0
+            }
+        }
     }
 
     override suspend fun touchResolvedTower(
@@ -105,13 +125,17 @@ class OfflineCacheRepository(
     }
 
     override suspend fun clearResolvedTowers() {
-        cellDao.clearAll()
+        cacheMutex.withLock {
+            towerUpsertsSincePrune = 0
+            cellDao.clearAll()
+        }
     }
 
-    suspend fun getLatestCachedLocationSnapshot(): LocationPoint? {
-        return locationFixDao.getLatestFix()?.toDomain()?.also {
-            if (lastPersistedFix == null) {
-                lastPersistedFix = it
+    suspend fun getLatestCachedLocationSnapshot(): LocationPoint? = cacheMutex.withLock {
+        locationFixDao.getLatestFix()?.toDomain()?.also { snap ->
+            val current = lastPersistedFix
+            if (current == null || snap.timestamp > current.timestamp) {
+                lastPersistedFix = snap
             }
         }
     }
@@ -120,13 +144,17 @@ class OfflineCacheRepository(
         return observedCellDao.getLatestCells().map { it.toDomain() }
     }
 
-    suspend fun recordCachedLocationFix(point: LocationPoint, force: Boolean = false) {
+    suspend fun getLatestObservedAtMsSnapshot(): Long? {
+        return observedCellDao.getLatestObservedAtMs()
+    }
+
+    suspend fun recordCachedLocationFix(point: LocationPoint, force: Boolean = false) = cacheMutex.withLock {
         if (!point.latitude.isFinite() || !point.longitude.isFinite() ||
             point.latitude !in -90.0..90.0 || point.longitude !in -180.0..180.0 ||
             (point.latitude == 0.0 && point.longitude == 0.0) ||
             point.provider == "last_gasp"
         ) {
-            return
+            return@withLock
         }
 
         val prev = lastPersistedFix
@@ -143,7 +171,7 @@ class OfflineCacheRepository(
                 accuracyMuchBetter
         }
 
-        if (!shouldPersist) return
+        if (!shouldPersist) return@withLock
 
         locationFixDao.insertFix(
             CachedLocationFixEntity(
@@ -158,22 +186,35 @@ class OfflineCacheRepository(
                 sessionId = point.sessionId
             )
         )
-        locationFixDao.pruneOldestFixes(MAX_CACHED_LOCATION_FIXES)
         lastPersistedFix = point
+        locationInsertsSincePrune++
+        if (locationInsertsSincePrune >= LOCATION_PRUNE_BATCH) {
+            if (locationFixDao.getFixCount() > MAX_CACHED_LOCATION_FIXES) {
+                locationFixDao.pruneOldestFixes(MAX_CACHED_LOCATION_FIXES)
+            }
+            locationInsertsSincePrune = 0
+        }
     }
 
-    suspend fun saveObservedCellSnapshot(towers: List<CellTowerInfo>, observedAtMs: Long = System.currentTimeMillis()) {
-        if (towers.isEmpty()) return
+    suspend fun saveObservedCellSnapshot(
+        towers: List<CellTowerInfo>,
+        observedAtMs: Long = System.currentTimeMillis()
+    ) = cacheMutex.withLock {
+        if (towers.isEmpty()) return@withLock
         val signature = towers.joinToString("|") { cell ->
-            "${cell.type}:${cell.mcc}:${cell.mnc}:${cell.lac}:${cell.cid}:${cell.pci}:${cell.isRegistered}:${cell.signalDbm}"
+            "${cell.type}:${cell.mcc}:${cell.mnc}:${cell.lac}:${cell.cid}:${cell.pci}:${cell.earfcn}:${cell.timingAdvance}:${cell.isRegistered}:${cell.signalDbm}"
         }
         val prevSig = lastObservedSnapshotSignature
         if (signature == prevSig && (observedAtMs - lastObservedSnapshotMs) < OBSERVED_CELLS_MIN_INTERVAL_MS) {
-            return
+            return@withLock
         }
 
-        val entities = towers.mapIndexed { idx, cell ->
-            val stableKey = "${cell.type}_${cell.mcc ?: -1}_${cell.mnc ?: -1}_${cell.lac ?: -1}_${cell.cid ?: -1}_${cell.pci ?: -1}_$idx"
+        val seenCounts = HashMap<String, Int>(towers.size)
+        val entities = towers.map { cell ->
+            val baseKey = "${cell.type}_${cell.mcc ?: -1}_${cell.mnc ?: -1}_${cell.lac ?: -1}_${cell.cid ?: -1}_${cell.pci ?: -1}_${cell.earfcn ?: -1}"
+            val occurrence = (seenCounts[baseKey] ?: 0) + 1
+            seenCounts[baseKey] = occurrence
+            val stableKey = if (occurrence == 1) baseKey else "${baseKey}#$occurrence"
             CachedObservedCellEntity(
                 cellKey = stableKey,
                 radioType = cell.type,
@@ -197,15 +238,18 @@ class OfflineCacheRepository(
         lastObservedSnapshotMs = observedAtMs
     }
 
-    suspend fun clearLocationFixCache() {
+    suspend fun clearLocationFixCache() = cacheMutex.withLock {
         lastPersistedFix = null
+        locationInsertsSincePrune = 0
         locationFixDao.clearAll()
     }
 
-    suspend fun clearAllOfflineCaches() {
+    suspend fun clearAllOfflineCaches() = cacheMutex.withLock {
         lastPersistedFix = null
         lastObservedSnapshotSignature = null
         lastObservedSnapshotMs = 0L
+        locationInsertsSincePrune = 0
+        towerUpsertsSincePrune = 0
         cellDao.clearAll()
         observedCellDao.clearAll()
         locationFixDao.clearAll()

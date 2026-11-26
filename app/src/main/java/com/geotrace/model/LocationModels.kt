@@ -233,7 +233,8 @@ data class CellTowerLocation(
     val isFromOfflineCache: Boolean = false,
     val addressEstimate: String? = null,
     val isServing: Boolean = true,
-    val signalDbm: Int? = null
+    val signalDbm: Int? = null,
+    val resolvedAtMs: Long? = null
 )
 
 data class ParkedSpot(
