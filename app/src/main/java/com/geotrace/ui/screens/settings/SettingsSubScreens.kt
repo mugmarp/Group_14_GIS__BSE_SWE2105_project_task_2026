@@ -90,6 +90,7 @@ import com.geotrace.model.SpeedUnit
 import com.geotrace.model.TrackerSettings
 import com.geotrace.service.GeofenceApiStatus
 import com.geotrace.service.LocationForegroundService
+import com.geotrace.service.OfflineMapManager
 import com.geotrace.service.UpdateStatus
 import com.geotrace.ui.components.GeoTraceTopBar
 import com.geotrace.ui.components.HeadingUpToggleRow
@@ -363,7 +364,7 @@ internal fun MapLayersSettingsPage(
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = "${offlineMapRegions.size} saved regions • ${String.format(Locale.US, "%.1f", offlineCacheSizeMb)} / 512 MB",
+                                    text = "${offlineMapRegions.size} saved regions • ${String.format(Locale.US, "%.1f", offlineCacheSizeMb)} / ${OfflineMapManager.MAX_CACHE_BYTES_MB} MB",
                                     color = colorScheme.onSurfaceVariant,
                                     fontSize = 11.sp
                                 )

@@ -789,7 +789,10 @@ class OfflineMapManager(private val context: Context) {
                             val maxAllowedErrors = if (job.isOverlay) max(2, estTiles / 5) else max(2, baseTarget / 8)
                             if (nextErrors <= maxAllowedErrors) {
                                 val nextAccum = (accumulatedProgress + job.weightTiles).coerceIn(0, estTiles)
-                                runRegionJob(jobIndex + 1, nextAccum, nextErrors)
+                                val monotonicAccum = maxOf(_downloadProgress.value.completedTiles, nextAccum)
+                                _downloadProgress.value = _downloadProgress.value.copy(completedTiles = monotonicAccum)
+                                postProgressNotification(cleanName, monotonicAccum, estTiles)
+                                runRegionJob(jobIndex + 1, monotonicAccum, nextErrors)
                             } else {
                                 val errMsg = if (job.isOverlay) {
                                     "Reference labels failed ($nextErrors tiles). Imagery cached; check network to retry."
@@ -1040,6 +1043,8 @@ class OfflineMapManager(private val context: Context) {
                                     _downloadProgress.value.completedTiles,
                                     (accumulatedProgress + job.boxWeightTiles).coerceIn(0, estTiles)
                                 )
+                                _downloadProgress.value = _downloadProgress.value.copy(completedTiles = nextAccum)
+                                postProgressNotification(cleanName, nextAccum, estTiles)
                                 runJob(jobIndex + 1, nextAccum, nextErr)
                             } else {
                                 finishWithError("Corridor download failed ($nextErr tiles could not be fetched). Check network.")

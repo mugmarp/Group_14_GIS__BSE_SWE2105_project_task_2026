@@ -207,6 +207,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private var searchJob: Job? = null
     private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
     private val forceNextCellRefresh = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val cellScanToken = java.util.concurrent.atomic.AtomicLong(0L)
 
     @Volatile
     var lastHandledFocusRequestMs: Long = 0L
@@ -457,30 +458,33 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 val effectiveTowers = if (hasLiveRadioScan) liveTowers else cachedTowers
                 val servingCell = effectiveTowers.firstOrNull { it.isRegistered } ?: effectiveTowers.firstOrNull()
 
-                if (servingCell != null) {
-                    val location = com.geotrace.service.OpenCellIdClient.resolveCellLocation(
-                        cellInfo = servingCell,
+                try {
+                    if (servingCell != null) {
+                        val location = com.geotrace.service.OpenCellIdClient.resolveCellLocation(
+                            cellInfo = servingCell,
+                            apiKey = apiKey,
+                            userLatitude = loc?.latitude,
+                            userLongitude = loc?.longitude,
+                            forceRefresh = forceRefresh
+                        )
+                        _cellTowerLocation.value = location
+                    } else {
+                        _cellTowerLocation.value = null
+                    }
+
+                    // Resolve all visible (or Room-cached fallback) towers detected by TelephonyManager
+                    val allResolved = com.geotrace.service.OpenCellIdClient.resolveAllCellLocations(
+                        towers = effectiveTowers,
                         apiKey = apiKey,
                         userLatitude = loc?.latitude,
                         userLongitude = loc?.longitude,
                         forceRefresh = forceRefresh
                     )
-                    _cellTowerLocation.value = location
-                } else {
-                    _cellTowerLocation.value = null
-                }
-
-                // Resolve all visible (or Room-cached fallback) towers detected by TelephonyManager
-                val allResolved = com.geotrace.service.OpenCellIdClient.resolveAllCellLocations(
-                    towers = effectiveTowers,
-                    apiKey = apiKey,
-                    userLatitude = loc?.latitude,
-                    userLongitude = loc?.longitude,
-                    forceRefresh = forceRefresh
-                )
-                _allCellTowerLocations.value = allResolved
-                if (forceRefresh) {
-                    _isRefreshingCells.value = false
+                    _allCellTowerLocations.value = allResolved
+                } finally {
+                    if (forceRefresh && !forceNextCellRefresh.get()) {
+                        _isRefreshingCells.value = false
+                    }
                 }
 
                 // In Cell-Only mode with a live modem scan: fall back to OpenCellID-resolved serving tower
@@ -1607,6 +1611,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun hasCellLocationPermission(): Boolean = cellManager.hasFineLocationPermission()
 
     fun refreshCellTowers() {
+        val scanToken = cellScanToken.incrementAndGet()
         cellRefreshJob?.cancel()
         cellRefreshJob = viewModelScope.launch {
             _isRefreshingCells.value = true
@@ -1615,12 +1620,15 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 repository.updateCellTowers(towers)
                 cellLookupRefreshTrigger.value += 1
             } finally {
-                _isRefreshingCells.value = false
+                if (cellScanToken.get() == scanToken && !forceNextCellRefresh.get()) {
+                    _isRefreshingCells.value = false
+                }
             }
         }
     }
 
     fun refreshServingMastOnline() {
+        cellScanToken.incrementAndGet()
         _isRefreshingCells.value = true
         forceNextCellRefresh.set(true)
         cellLookupRefreshTrigger.value += 1

@@ -686,7 +686,7 @@ class LocationForegroundService : Service() {
         requestProtectionLocationUpdates()
         startProtectionHeartbeat()
 
-        // Seed immediate device visibility using existing fix, fused lastLocation, or Room cached fix
+        // Seed immediate device visibility using existing fix, mode-compliant lastLocation, or Room cached fix
         serviceScope.launch {
             repo.awaitInitialRestore()
             val latestRepoSync = groupRepo.lastSyncTimestampMs.value ?: 0L
@@ -697,12 +697,19 @@ class LocationForegroundService : Service() {
                     lastCloudSyncMs = now
                     groupRepo.syncDeviceAndGroupTelemetry(existing, repo.trackingMode.value.name)
                 }
+            } else if (repo.trackingMode.value == TrackingMode.POWER_SAVER) {
+                // Cell-Only mode prohibits cached GNSS/Fused fixes; rely on Room fallback or network fallback
+                syncCachedProtectionFallback(repo, groupRepo)
+                if (repo.lastKnownCachedLocation.value == null) {
+                    requestNetworkLastKnownServiceFallback(TrackingMode.POWER_SAVER)
+                }
             } else {
-                var syncedFromFused = false
                 try {
                     fusedLocationClient.lastLocation.addOnSuccessListener { loc ->
-                        if (loc != null) {
-                            syncedFromFused = true
+                        val activeMode = repo.trackingMode.value
+                        val modeBlocksFix = activeMode == TrackingMode.POWER_SAVER ||
+                            (activeMode == TrackingMode.BALANCED && loc?.provider == LocationManager.GPS_PROVIDER)
+                        if (loc != null && !modeBlocksFix) {
                             val normalizedTime = loc.time.takeIf { it > 0L } ?: System.currentTimeMillis()
                             val point = LocationPoint(
                                 latitude = loc.latitude,
@@ -724,53 +731,39 @@ class LocationForegroundService : Service() {
                                     groupRepo.syncDeviceAndGroupTelemetry(point, repo.trackingMode.value.name)
                                 }
                             }
-                        } else if (!syncedFromFused) {
-                            val cached = repo.lastKnownCachedLocation.value
-                            if (cached != null) {
-                                serviceScope.launch {
-                                    val now = System.currentTimeMillis()
-                                    val latest = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
-                                    if (now - latest >= 10_000L) {
-                                        lastCloudSyncMs = now
-                                        val tagged = if (cached.provider.startsWith("cached_")) cached else cached.copy(
-                                            provider = "cached_${cached.provider}"
-                                        )
-                                        groupRepo.syncDeviceAndGroupTelemetry(tagged, repo.trackingMode.value.name)
-                                    }
-                                }
+                        } else {
+                            if (loc != null && activeMode == TrackingMode.BALANCED && loc.provider == LocationManager.GPS_PROVIDER) {
+                                requestNetworkLastKnownServiceFallback(activeMode)
+                            }
+                            serviceScope.launch {
+                                syncCachedProtectionFallback(repo, groupRepo)
                             }
                         }
                     }.addOnFailureListener {
-                        val cached = repo.lastKnownCachedLocation.value
-                        if (cached != null) {
-                            serviceScope.launch {
-                                val now = System.currentTimeMillis()
-                                val latest = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
-                                if (now - latest >= 10_000L) {
-                                    lastCloudSyncMs = now
-                                    val tagged = if (cached.provider.startsWith("cached_")) cached else cached.copy(
-                                        provider = "cached_${cached.provider}"
-                                    )
-                                    groupRepo.syncDeviceAndGroupTelemetry(tagged, repo.trackingMode.value.name)
-                                }
-                            }
+                        serviceScope.launch {
+                            syncCachedProtectionFallback(repo, groupRepo)
                         }
                     }
                 } catch (_: Exception) {
-                    val cached = repo.lastKnownCachedLocation.value
-                    if (cached != null) {
-                        val now = System.currentTimeMillis()
-                        val latest = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
-                        if (now - latest >= 10_000L) {
-                            lastCloudSyncMs = now
-                            val tagged = if (cached.provider.startsWith("cached_")) cached else cached.copy(
-                                provider = "cached_${cached.provider}"
-                            )
-                            groupRepo.syncDeviceAndGroupTelemetry(tagged, repo.trackingMode.value.name)
-                        }
-                    }
+                    syncCachedProtectionFallback(repo, groupRepo)
                 }
             }
+        }
+    }
+
+    private suspend fun syncCachedProtectionFallback(
+        repo: com.geotrace.data.LocationRepository,
+        groupRepo: com.geotrace.data.GroupRepository
+    ) {
+        val cached = repo.lastKnownCachedLocation.value ?: return
+        val now = System.currentTimeMillis()
+        val latest = maxOf(lastCloudSyncMs, groupRepo.lastSyncTimestampMs.value ?: 0L)
+        if (now - latest >= 10_000L) {
+            lastCloudSyncMs = now
+            val tagged = if (cached.provider.startsWith("cached_")) cached else cached.copy(
+                provider = "cached_${cached.provider}"
+            )
+            groupRepo.syncDeviceAndGroupTelemetry(tagged, repo.trackingMode.value.name)
         }
     }
 
