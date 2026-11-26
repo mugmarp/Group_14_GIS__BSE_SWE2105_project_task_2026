@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.OfflinePin
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -106,6 +107,7 @@ fun OfflineMapsDialog(
 
     val settings by viewModel.settings.collectAsState()
     val savedRegions by viewModel.offlineMapRegions.collectAsState()
+    val offlinePlacesCountByRegion by viewModel.offlinePlacesCountByRegion.collectAsState()
     val progress by viewModel.offlineDownloadProgress.collectAsState()
     val cacheSizeMb by viewModel.offlineCacheSizeMb.collectAsState()
     val offlinePoiStatus by viewModel.offlinePoiStatus.collectAsState()
@@ -598,6 +600,8 @@ fun OfflineMapsDialog(
                         savedRegions.forEach { region ->
                             OfflineRegionCard(
                                 region = region,
+                                poiCount = offlinePlacesCountByRegion[region.id] ?: 0,
+                                isDownloading = progress.isDownloading,
                                 onViewOnMap = {
                                     viewModel.updateMapTileType(region.tileType)
                                     onJumpToRegion(
@@ -617,6 +621,7 @@ fun OfflineMapsDialog(
                                     )
                                     onDismiss()
                                 },
+                                onRefreshPois = { viewModel.refreshOfflineRegionPois(region) },
                                 onDelete = { viewModel.deleteOfflineMapRegion(region.id) }
                             )
                         }
@@ -730,7 +735,7 @@ fun OfflineMapsDialog(
                     }
                     TextButton(
                         onClick = { showClearCacheConfirm = true },
-                        enabled = !progress.isDownloading && cacheSizeMb > 0.05f,
+                        enabled = !progress.isDownloading && (cacheSizeMb > 0.05f || savedRegions.isNotEmpty()),
                         modifier = Modifier.heightIn(min = 48.dp).testTag("clear_tile_cache_btn")
                     ) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(16.dp), tint = colorScheme.error)
@@ -781,7 +786,10 @@ fun OfflineMapsDialog(
 @Composable
 private fun OfflineRegionCard(
     region: OfflineMapRegion,
+    poiCount: Int,
+    isDownloading: Boolean,
     onViewOnMap: () -> Unit,
+    onRefreshPois: () -> Unit,
     onDelete: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -816,7 +824,7 @@ private fun OfflineRegionCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "${region.tileType.label} • Z${region.minZoom}–${region.maxZoom} • ~${String.format(Locale.US, "%.1f", region.estimatedSizeMb)} MB • $dateStr",
+                    text = "${region.tileType.label} • Z${region.minZoom}–${region.maxZoom} • ~${String.format(Locale.US, "%.1f", region.estimatedSizeMb)} MB • $poiCount POIs • $dateStr",
                     fontSize = 10.sp,
                     color = colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -828,6 +836,13 @@ private fun OfflineRegionCard(
                 modifier = Modifier.size(48.dp).testTag("jump_offline_region_${region.id}")
             ) {
                 Icon(Icons.Default.MyLocation, contentDescription = "View Region on Map", tint = colorScheme.primary, modifier = Modifier.size(18.dp))
+            }
+            IconButton(
+                onClick = onRefreshPois,
+                enabled = !isDownloading,
+                modifier = Modifier.size(48.dp).testTag("refresh_region_pois_${region.id}")
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = "Refresh Offline POIs", tint = colorScheme.secondary, modifier = Modifier.size(18.dp))
             }
             IconButton(
                 onClick = onDelete,

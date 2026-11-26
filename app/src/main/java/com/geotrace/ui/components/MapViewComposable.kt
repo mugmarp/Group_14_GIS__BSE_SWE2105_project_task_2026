@@ -352,9 +352,12 @@ fun MapViewComposable(
     onClearFocusTarget: (() -> Unit)? = null,
     onRecenterSelf: (() -> Unit)? = null,
     offlineRegionsCount: Int = 0,
+    offlineMapRegions: List<com.geotrace.model.OfflineMapRegion> = emptyList(),
+    coveredOfflineTileTypes: Set<com.geotrace.model.MapTileType> = emptySet(),
     settings: com.geotrace.model.TrackerSettings = com.geotrace.model.TrackerSettings(),
     onSelectTileLayer: ((com.geotrace.model.MapTileType) -> Unit)? = null,
     onToggleCellTowerPin: ((Boolean) -> Unit)? = null,
+    onToggleOfflineRegionsOverlay: ((Boolean) -> Unit)? = null,
     onToggleAutoRotateHeadingUp: ((Boolean) -> Unit)? = null,
     onOpenOfflineMaps: (() -> Unit)? = null,
     onMapBoundsChanged: ((BoundingBox) -> Unit)? = null,
@@ -405,10 +408,22 @@ fun MapViewComposable(
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
     var hasCenteredOnFirstFix by remember { mutableStateOf(initialMapCenter != null) }
     var hasCenteredOnCachedFallback by remember { mutableStateOf(initialMapCenter != null || currentLocation != null || fallbackCachedCenter != null) }
+    var isShowingNeutralOrigin by remember {
+        mutableStateOf(
+            initialMapCenter == null &&
+                currentLocation == null &&
+                fallbackCachedCenter == null &&
+                !((focusedTarget != null &&
+                    (focusedTarget.latitude != 0.0 || focusedTarget.longitude != 0.0) &&
+                    focusedTarget.requestedAtMs > lastHandledFocusMs) ||
+                    (selectedSearchPin != null && selectedSearchPin.requestedAtMs > lastHandledSearchMs))
+        )
+    }
+    var hasUserMovedCamera by remember { mutableStateOf(false) }
     var isUserInteractingWithMap by remember { mutableStateOf(false) }
     var liveMapOrientation by remember { mutableStateOf(initialMapOrientation) }
     var liveZoomLevel by remember { mutableStateOf(initialMapZoom ?: 16.5) }
-    var liveCenterLat by remember { mutableStateOf(initialMapCenter?.latitude ?: currentLocation?.latitude ?: 0.0) }
+    var liveCenterLat by remember { mutableStateOf(initialMapCenter?.latitude ?: currentLocation?.latitude ?: fallbackCachedCenter?.latitude ?: 0.0) }
     var isHeadingUpPausedByUser by remember { mutableStateOf(false) }
     val orientationAnimatorHolder = remember { arrayOfNulls<ValueAnimator>(1) }
     var inspectCardHeightPx by remember { mutableIntStateOf(0) }
@@ -636,6 +651,8 @@ fun MapViewComposable(
         val fallback = fallbackCachedCenter ?: return@LaunchedEffect
         if (!hasCenteredOnCachedFallback &&
             !hasCenteredOnFirstFix &&
+            !hasUserMovedCamera &&
+            isShowingNeutralOrigin &&
             initialMapCenter == null &&
             currentLocation == null &&
             inspectedTrailName == null &&
@@ -646,6 +663,8 @@ fun MapViewComposable(
             map.controller.setCenter(fallback)
             map.controller.setZoom(15.5)
             hasCenteredOnCachedFallback = true
+            isShowingNeutralOrigin = false
+            currentOnSaveMapCamera?.invoke(fallback, 15.5, map.mapOrientation)
         }
     }
 
@@ -655,14 +674,18 @@ fun MapViewComposable(
         if (inspectedTrailName == null && focusedTarget == null && selectedSearchPin == null && currentLocation != null) {
             val map = mapViewRef
             if (!hasCenteredOnFirstFix) {
+                val targetPt = GeoPoint(currentLocation.latitude, currentLocation.longitude)
                 map?.controller?.animateTo(
-                    GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                    targetPt,
                     16.5,
                     800L
                 )
                 hasCenteredOnFirstFix = true
+                isShowingNeutralOrigin = false
+                currentOnSaveMapCamera?.invoke(targetPt, 16.5, map?.mapOrientation ?: liveMapOrientation)
             } else if (settings.followUserLocation && !isFollowPaused && !isUserInteractingWithMap) {
                 if (map != null && !map.isAnimating) {
+                    isShowingNeutralOrigin = false
                     map.controller.animateTo(
                         GeoPoint(currentLocation.latitude, currentLocation.longitude)
                     )
@@ -733,7 +756,10 @@ fun MapViewComposable(
         val s = target.bboxSouth
         val e = target.bboxEast
         val w = target.bboxWest
-        if (n != null && s != null && e != null && w != null && (n - s) > 0.002 && w <= e) {
+        val lonSpan = if (e != null && w != null) {
+            if (w <= e) e - w else (180.0 - w) + (e + 180.0)
+        } else 0.0
+        if (n != null && s != null && e != null && w != null && (n - s) > 0.002 && lonSpan > 0.002 && w <= e) {
             selectedMarkerInfo = null
             droppedInspectPin = null
             val box = BoundingBox(
@@ -754,17 +780,20 @@ fun MapViewComposable(
                 }
             }
             hasCenteredOnFirstFix = true
+            isShowingNeutralOrigin = false
             localHandledFocusMs = target.requestedAtMs
             onMarkFocusHandled?.invoke(target.requestedAtMs)
         } else if (target.latitude != 0.0 || target.longitude != 0.0) {
             selectedMarkerInfo = null
             droppedInspectPin = null
+            val fallbackZoom = target.targetZoom ?: if (n != null && s != null && e != null && w != null && w > e) 12.5 else 17.5
             map.controller.animateTo(
                 GeoPoint(target.latitude, target.longitude),
-                target.targetZoom ?: 17.5,
+                fallbackZoom,
                 750L
             )
             hasCenteredOnFirstFix = true
+            isShowingNeutralOrigin = false
             localHandledFocusMs = target.requestedAtMs
             onMarkFocusHandled?.invoke(target.requestedAtMs)
         }
@@ -778,11 +807,15 @@ fun MapViewComposable(
         selectedMarkerInfo = null
         droppedInspectPin = null
         hasCenteredOnFirstFix = true
+        isShowingNeutralOrigin = false
         val n = place.bboxNorth
         val s = place.bboxSouth
         val e = place.bboxEast
         val w = place.bboxWest
-        if (n != null && s != null && e != null && w != null && (n - s) > 0.002 && (e - w) > 0.002) {
+        val lonSpan = if (e != null && w != null) {
+            if (w <= e) e - w else (180.0 - w) + (e + 180.0)
+        } else 0.0
+        if (n != null && s != null && e != null && w != null && (n - s) > 0.002 && lonSpan > 0.002 && w <= e) {
             val box = BoundingBox(n.coerceIn(-85.0, 85.0), e.coerceIn(-180.0, 180.0), s.coerceIn(-85.0, 85.0), w.coerceIn(-180.0, 180.0))
             map.post {
                 try {
@@ -792,11 +825,12 @@ fun MapViewComposable(
                 }
             }
         } else {
-            val targetZoom = when (place.source) {
-                com.geotrace.model.SearchResultSource.COORDINATE,
-                com.geotrace.model.SearchResultSource.SAVED_PLACE,
-                com.geotrace.model.SearchResultSource.WAYPOINT,
-                com.geotrace.model.SearchResultSource.OFFLINE_POI -> 17.2
+            val targetZoom = when {
+                n != null && s != null && e != null && w != null && w > e -> 13.0
+                place.source == com.geotrace.model.SearchResultSource.COORDINATE ||
+                    place.source == com.geotrace.model.SearchResultSource.SAVED_PLACE ||
+                    place.source == com.geotrace.model.SearchResultSource.WAYPOINT ||
+                    place.source == com.geotrace.model.SearchResultSource.OFFLINE_POI -> 17.2
                 else -> 16.5
             }
             map.controller.animateTo(GeoPoint(place.latitude, place.longitude), targetZoom, 750L)
@@ -806,6 +840,7 @@ fun MapViewComposable(
     }
 
     // Persistent differential FolderOverlay layers (zero full overlay clear/recreate churn per tick)
+    val offlineRegionsLayer = remember { FolderOverlay() }
     val geofenceLayer = remember { FolderOverlay() }
     val cellTowerLayer = remember { FolderOverlay() }
     val referenceRouteLayer = remember { FolderOverlay() }
@@ -814,6 +849,7 @@ fun MapViewComposable(
     val staticPinsLayer = remember { FolderOverlay() }
     val userTargetLayer = remember { FolderOverlay() }
 
+    val lastOfflineRegionsSigHolder = remember { arrayOfNulls<Pair<List<com.geotrace.model.OfflineMapRegion>, Boolean>>(1) }
     val lastGeofenceSigHolder = remember { arrayOfNulls<GeofenceLayerSig>(1) }
     val lastCellSigHolder = remember { arrayOfNulls<CellLayerSig>(1) }
     val lastReferenceRouteSigHolder = remember { arrayOfNulls<ReferenceRouteLayerSig>(1) }
@@ -892,8 +928,10 @@ fun MapViewComposable(
             orientationAnimatorHolder[0]?.cancel()
             orientationAnimatorHolder[0] = null
             mapViewRef?.let { m ->
-                val c = m.mapCenter
-                currentOnSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), m.zoomLevelDouble, m.mapOrientation)
+                if (!isShowingNeutralOrigin || hasUserMovedCamera) {
+                    val c = m.mapCenter
+                    currentOnSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), m.zoomLevelDouble, m.mapOrientation)
+                }
             }
             lifecycleOwner.lifecycle.removeObserver(observer)
             hybridLabelsProvider.setTileRequestCompleteHandler(null)
@@ -971,10 +1009,14 @@ fun MapViewComposable(
                                 downY = event.y
                                 hasTriggeredGesturePause = false
                                 isUserInteractingWithMap = true
+                                hasUserMovedCamera = true
+                                isShowingNeutralOrigin = false
                                 orientationAnimatorHolder[0]?.cancel()
                             }
                             MotionEvent.ACTION_POINTER_DOWN -> {
                                 isUserInteractingWithMap = true
+                                hasUserMovedCamera = true
+                                isShowingNeutralOrigin = false
                                 orientationAnimatorHolder[0]?.cancel()
                                 if (event.pointerCount >= 2) {
                                     centroidDownX = (event.getX(0) + event.getX(1)) * 0.5f
@@ -1024,7 +1066,9 @@ fun MapViewComposable(
                             val c = mapCenter
                             liveCenterLat = c.latitude
                             liveZoomLevel = zoomLevelDouble
-                            currentOnSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), zoomLevelDouble, mapOrientation)
+                            if (!isShowingNeutralOrigin || hasUserMovedCamera) {
+                                currentOnSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), zoomLevelDouble, mapOrientation)
+                            }
                             return false
                         }
 
@@ -1033,7 +1077,9 @@ fun MapViewComposable(
                             val c = mapCenter
                             liveCenterLat = c.latitude
                             liveZoomLevel = zoomLevelDouble
-                            currentOnSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), zoomLevelDouble, mapOrientation)
+                            if (!isShowingNeutralOrigin || hasUserMovedCamera) {
+                                currentOnSaveMapCamera?.invoke(GeoPoint(c.latitude, c.longitude), zoomLevelDouble, mapOrientation)
+                            }
                             return false
                         }
                     })
@@ -1049,6 +1095,7 @@ fun MapViewComposable(
             update = { map ->
                 if (!hasAttachedBaseLayersHolder[0]) {
                     map.overlays.clear()
+                    map.overlays.add(offlineRegionsLayer)
                     map.overlays.add(geofenceLayer)
                     map.overlays.add(cellTowerLayer)
                     map.overlays.add(referenceRouteLayer)
@@ -1312,6 +1359,45 @@ fun MapViewComposable(
                                     true
                                 }
                             })
+                        }
+                    }
+                }
+
+                // 1b. Differential Offline Region Boundary Outlines
+                val offlineRegionsSig = offlineMapRegions to settings.showOfflineRegionsOverlay
+                if (lastOfflineRegionsSigHolder[0] != offlineRegionsSig) {
+                    lastOfflineRegionsSigHolder[0] = offlineRegionsSig
+                    anyLayerChanged = true
+                    offlineRegionsLayer.items.clear()
+                    if (settings.showOfflineRegionsOverlay && offlineMapRegions.isNotEmpty()) {
+                        val outlineTeal = android.graphics.Color.parseColor("#0D9488")
+                        val fillTeal = android.graphics.Color.argb(18, 13, 148, 136)
+                        for (region in offlineMapRegions) {
+                            val subBoxes = com.geotrace.service.OfflineMapManager.splitBoxAtAntimeridian(
+                                com.geotrace.service.OfflineMapManager.CorridorTileBox(
+                                    north = region.northLat.coerceIn(-85.0511, 85.0511),
+                                    south = region.southLat.coerceIn(-85.0511, 85.0511),
+                                    east = com.geotrace.service.OfflineMapManager.normalizeLongitude(region.eastLng),
+                                    west = com.geotrace.service.OfflineMapManager.normalizeLongitude(region.westLng)
+                                )
+                            )
+                            for (sb in subBoxes) {
+                                if (sb.north > sb.south && sb.east > sb.west) {
+                                    offlineRegionsLayer.add(Polygon(map).apply {
+                                        points = listOf(
+                                            GeoPoint(sb.north, sb.west),
+                                            GeoPoint(sb.north, sb.east),
+                                            GeoPoint(sb.south, sb.east),
+                                            GeoPoint(sb.south, sb.west)
+                                        )
+                                        infoWindow = null
+                                        fillPaint.color = fillTeal
+                                        outlinePaint.color = outlineTeal
+                                        outlinePaint.strokeWidth = 3f
+                                        outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(14f, 10f), 0f)
+                                    })
+                                }
+                            }
                         }
                     }
                 }
@@ -2604,13 +2690,14 @@ fun MapViewComposable(
 
                     TileLayerPickerGrid(
                         selectedTileType = settings.mapTileType,
+                        offlineCoveredTypes = coveredOfflineTileTypes,
                         onSelectTileType = { tileType ->
                             onSelectTileLayer(tileType)
                             showLayerMenu = false
                         }
                     )
 
-                    if (onToggleAutoRotateHeadingUp != null || onToggleCellTowerPin != null || onOpenOfflineMaps != null) {
+                    if (onToggleAutoRotateHeadingUp != null || onToggleCellTowerPin != null || onToggleOfflineRegionsOverlay != null || onOpenOfflineMaps != null) {
                         HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
                         Text(
                             text = "GIS OVERLAYS & OFFLINE",
@@ -2637,6 +2724,17 @@ fun MapViewComposable(
                             checked = settings.showCellTowerPin,
                             onCheckedChange = { onToggleCellTowerPin(it) },
                             testTag = "cell_tower_layer_toggle"
+                        )
+                    }
+
+                    if (onToggleOfflineRegionsOverlay != null) {
+                        SharedMapOverlayToggleRow(
+                            title = "Offline Region Outlines",
+                            description = "Show boundaries of downloaded offline map areas",
+                            icon = Icons.Default.Layers,
+                            checked = settings.showOfflineRegionsOverlay,
+                            onCheckedChange = { onToggleOfflineRegionsOverlay(it) },
+                            testTag = "offline_regions_layer_toggle"
                         )
                     }
 

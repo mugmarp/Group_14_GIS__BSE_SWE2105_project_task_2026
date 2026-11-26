@@ -278,6 +278,12 @@ class LocationRepository(
         prefs.edit().putBoolean("show_cell_tower_pin", show).apply()
     }
 
+    fun getSavedShowOfflineRegionsOverlay(): Boolean = prefs.getBoolean("show_offline_regions_overlay", true)
+
+    fun saveShowOfflineRegionsOverlay(show: Boolean) {
+        prefs.edit().putBoolean("show_offline_regions_overlay", show).apply()
+    }
+
     fun getSavedJitterThreshold(): Float = prefs.getFloat("jitter_threshold_meters", 1.5f)
 
     fun saveJitterThreshold(thresholdMeters: Float) {

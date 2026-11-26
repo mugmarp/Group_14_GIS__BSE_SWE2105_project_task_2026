@@ -482,6 +482,15 @@ fun MapScreen(
         val inspectedSummary = activeInspect?.let {
             "${it.session.formattedDistance} • ${it.session.formattedDuration} • ${it.points.size} pts • ${it.waypoints.size} wpts"
         }
+        val coveredTileTypes = remember(offlineMapRegions, currentMapBounds) {
+            com.geotrace.service.OfflineMapManager.coveredTileTypesForViewport(
+                regions = offlineMapRegions,
+                viewNorth = currentMapBounds?.latNorth,
+                viewSouth = currentMapBounds?.latSouth,
+                viewEast = currentMapBounds?.lonEast,
+                viewWest = currentMapBounds?.lonWest
+            )
+        }
 
         // Persistent Full-Bleed Spatial Viewport with Google Maps-style Bottom Layer Sheet & Unified Inspect Card
         MapViewComposable(
@@ -530,12 +539,17 @@ fun MapScreen(
                 viewModel.setMapFollowPaused(false)
             },
             offlineRegionsCount = offlineMapRegions.size,
+            offlineMapRegions = offlineMapRegions,
+            coveredOfflineTileTypes = coveredTileTypes,
             settings = settings,
             onSelectTileLayer = { selectedTile ->
                 viewModel.updateMapTileType(selectedTile)
             },
             onToggleCellTowerPin = { enabled ->
                 viewModel.toggleCellTowerPin(enabled)
+            },
+            onToggleOfflineRegionsOverlay = { enabled ->
+                viewModel.toggleOfflineRegionsOverlay(enabled)
             },
             onToggleAutoRotateHeadingUp = { enabled ->
                 viewModel.toggleAutoRotateHeadingUp(enabled)
@@ -551,6 +565,9 @@ fun MapScreen(
             initialMapZoom = viewModel.savedMapZoom,
             initialMapOrientation = viewModel.savedMapOrientation,
             onSaveMapCamera = { center, zoom, orientation ->
+                if (viewModel.savedMapCenter == null && center.latitude == 0.0 && center.longitude == 0.0 && zoom <= 3.5) {
+                    return@MapViewComposable
+                }
                 viewModel.savedMapCenter = center
                 viewModel.savedMapZoom = zoom
                 viewModel.savedMapOrientation = orientation
@@ -685,8 +702,11 @@ fun MapScreen(
                                         val fixText = when {
                                             currentLocation != null ->
                                                 "${String.format(Locale.US, "%.1f", compactSpeed)} ${settings.speedUnit.label} • ±${currentLocation?.accuracy?.toInt()}m"
-                                            lastKnownCachedLocation != null ->
-                                                "Cached fix (±${lastKnownCachedLocation?.accuracy?.toInt() ?: 0}m) • Awaiting GNSS"
+                                            lastKnownCachedLocation != null -> {
+                                                val cached = lastKnownCachedLocation!!
+                                                val age = formatCachedAge(cached.timestamp, nowMs)
+                                                "Cached $age (±${cached.accuracy.toInt()}m) • Awaiting GNSS"
+                                            }
                                             else -> "Awaiting fix"
                                         }
                                         when {
@@ -701,7 +721,11 @@ fun MapScreen(
                                             trackingMode == TrackingMode.POWER_SAVER -> "CELLULAR ONLY • BASE STATION TELEMETRY"
                                             currentLocation?.provider == "cellular" -> "CELLULAR FIX • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
                                             currentLocation != null -> "POSITION LOCKED • ACCURACY ±${currentLocation?.accuracy?.toInt()}M"
-                                            lastKnownCachedLocation != null -> "OFFLINE CACHED FIX (±${lastKnownCachedLocation?.accuracy?.toInt() ?: 0}M) • AWAITING GNSS"
+                                            lastKnownCachedLocation != null -> {
+                                                val cached = lastKnownCachedLocation!!
+                                                val age = formatCachedAge(cached.timestamp, nowMs).uppercase(Locale.US)
+                                                "OFFLINE CACHED FIX ($age • ±${cached.accuracy.toInt()}M) • AWAITING GNSS"
+                                            }
                                             else -> "STANDBY • AWAITING LOCATION FIX"
                                         }
                                     },
@@ -3412,4 +3436,14 @@ private fun toDms(decimal: Double, isLat: Boolean): String {
     val min = minDec.toInt()
     val sec = (minDec - min) * 60.0
     return String.format(Locale.US, "%d°%02d'%04.1f\"%s", deg, min, sec, dir)
+}
+
+private fun formatCachedAge(timestampMs: Long, nowMs: Long): String {
+    val diffSec = ((nowMs - timestampMs) / 1000L).coerceAtLeast(0L)
+    return when {
+        diffSec < 60L -> "just now"
+        diffSec < 3600L -> "${diffSec / 60L}m ago"
+        diffSec < 86_400L -> "${diffSec / 3600L}h ago"
+        else -> "${diffSec / 86_400L}d ago"
+    }
 }

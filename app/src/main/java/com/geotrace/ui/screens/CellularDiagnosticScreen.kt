@@ -46,11 +46,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -121,14 +123,34 @@ fun CellularDiagnosticScreen(
 
     val cellTowers by viewModel.cellTowers.collectAsState()
     val cachedObservedCells by viewModel.cachedObservedCells.collectAsState()
+    val cachedObservedAtMs by viewModel.cachedObservedAtMs.collectAsState()
     val cachedCellTowerCount by viewModel.cachedCellTowerCount.collectAsState()
     val cellTowerLocation by viewModel.cellTowerLocation.collectAsState()
     val allCellTowerLocations by viewModel.allCellTowerLocations.collectAsState()
     val openCellIdStatus by viewModel.openCellIdStatus.collectAsState()
     val isRefreshingCells by viewModel.isRefreshingCells.collectAsState()
 
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(15_000L)
+            nowMs = System.currentTimeMillis()
+        }
+    }
+
     val servingCell = cellTowers.firstOrNull { it.isRegistered } ?: cellTowers.firstOrNull()
     val neighborCells = cellTowers.filter { it != servingCell }
+    val cachedServingCell = remember(servingCell, cachedObservedCells) {
+        if (servingCell != null) null
+        else cachedObservedCells.firstOrNull { it.isRegistered } ?: cachedObservedCells.firstOrNull()
+    }
+    val displayedNeighbors = remember(servingCell, neighborCells, cachedServingCell, cachedObservedCells) {
+        when {
+            servingCell != null -> neighborCells
+            cachedServingCell != null -> cachedObservedCells.filter { it != cachedServingCell }
+            else -> emptyList()
+        }
+    }
 
     Box(
         modifier = modifier
@@ -209,7 +231,7 @@ fun CellularDiagnosticScreen(
                 )
             }
 
-        // Serving Cell Mast Card / Permission Prompt / Empty State
+        // Serving Cell Mast Card / Cached Room Snapshot / Permission Prompt / Empty State
         item {
             if (!hasLocationPermission) {
                 CellPermissionRequiredCard(
@@ -219,6 +241,14 @@ fun CellularDiagnosticScreen(
                 )
             } else if (servingCell != null) {
                 ServingCellCard(cell = servingCell)
+            } else if (cachedServingCell != null) {
+                ServingCellCard(
+                    cell = cachedServingCell,
+                    isCachedSnapshot = true,
+                    cachedAgeLabel = cachedObservedAtMs?.let { formatRelativeAge(it, nowMs) },
+                    isRefreshing = isRefreshingCells,
+                    onRetryRadioScan = { viewModel.refreshCellTowers() }
+                )
             } else {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -289,6 +319,9 @@ fun CellularDiagnosticScreen(
                     servingTowerLocation = cellTowerLocation,
                     resolvedCount = allCellTowerLocations.size,
                     cachedRoomTowerCount = cachedCellTowerCount,
+                    nowMs = nowMs,
+                    isRefreshing = isRefreshingCells,
+                    onRefreshMastOnline = { viewModel.refreshServingMastOnline() },
                     onLocateTowerOnMap = onLocateTowerOnMap,
                     onOpenSettings = onOpenSettings
                 )
@@ -297,8 +330,13 @@ fun CellularDiagnosticScreen(
 
         // Neighboring Base Stations
         item {
+            val isCachedNeighbors = servingCell == null && cachedServingCell != null
             Text(
-                text = "DETECTED NEIGHBOR MASTS (${neighborCells.size})",
+                text = if (isCachedNeighbors) {
+                    "CACHED NEIGHBOR MASTS (${displayedNeighbors.size})"
+                } else {
+                    "DETECTED NEIGHBOR MASTS (${displayedNeighbors.size})"
+                },
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.04.sp,
@@ -306,7 +344,7 @@ fun CellularDiagnosticScreen(
             )
         }
 
-        if (neighborCells.isEmpty()) {
+        if (displayedNeighbors.isEmpty()) {
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -318,6 +356,7 @@ fun CellularDiagnosticScreen(
                         text = when {
                             !hasLocationPermission -> "Grant Precise Location permission above to scan neighbor RF sectors."
                             servingCell != null -> "Single sector serving (no neighbor base stations in immediate measurement frame)"
+                            cachedServingCell != null -> "No neighbor sectors stored in last cached radio frame."
                             else -> "No neighbor cells detected"
                         },
                         color = colorScheme.onSurfaceVariant,
@@ -328,7 +367,7 @@ fun CellularDiagnosticScreen(
             }
         } else {
             itemsIndexed(
-                items = neighborCells,
+                items = displayedNeighbors,
                 key = { idx, cell ->
                     "${idx}_${cell.type}_${cell.cid}_${cell.lac}_${cell.pci}_${cell.earfcn}"
                 }
@@ -420,11 +459,13 @@ private fun OpenCellIdStatusCard(
     servingTowerLocation: CellTowerLocation?,
     resolvedCount: Int,
     cachedRoomTowerCount: Int,
+    nowMs: Long,
+    isRefreshing: Boolean,
+    onRefreshMastOnline: (() -> Unit)?,
     onLocateTowerOnMap: ((CellTowerLocation) -> Unit)?,
     onOpenSettings: (() -> Unit)?
 ) {
     val colorScheme = MaterialTheme.colorScheme
-    val customColors = LocalCustomColors.current
 
     val (badgeLabel, badgeTone) = when {
         status.state == OpenCellIdLookupState.RESOLVED && servingTowerLocation?.isFromOfflineCache == true ->
@@ -476,8 +517,11 @@ private fun OpenCellIdStatusCard(
 
             Spacer(modifier = Modifier.height(4.dp))
 
+            val cacheAgeSuffix = servingTowerLocation?.takeIf { it.isFromOfflineCache }?.resolvedAtMs?.let { ts ->
+                " • Cached ${formatRelativeAge(ts, nowMs)}"
+            } ?: ""
             Text(
-                text = "Offline Room Mast Cache: $cachedRoomTowerCount tower(s) persisted locally",
+                text = "Offline Room Mast Cache: $cachedRoomTowerCount tower(s) persisted locally$cacheAgeSuffix",
                 fontSize = 11.sp,
                 color = colorScheme.onSurfaceVariant
             )
@@ -500,23 +544,44 @@ private fun OpenCellIdStatusCard(
                     ),
                     color = colorScheme.onSurfaceVariant
                 )
-                if (onLocateTowerOnMap != null) {
+                if (onLocateTowerOnMap != null || onRefreshMastOnline != null) {
                     Spacer(modifier = Modifier.height(10.dp))
-                    Button(
-                        onClick = { onLocateTowerOnMap(servingTowerLocation) },
-                        shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = colorScheme.primary,
-                            contentColor = colorScheme.onPrimary
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("locate_cell_mast_btn")
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Locate Serving Mast on Map", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        if (onLocateTowerOnMap != null) {
+                            Button(
+                                onClick = { onLocateTowerOnMap(servingTowerLocation) },
+                                shape = CircleShape,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = colorScheme.primary,
+                                    contentColor = colorScheme.onPrimary
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("locate_cell_mast_btn")
+                            ) {
+                                Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Locate on Map", fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        if (onRefreshMastOnline != null) {
+                            OutlinedButton(
+                                onClick = onRefreshMastOnline,
+                                enabled = !isRefreshing,
+                                shape = CircleShape,
+                                modifier = Modifier
+                                    .height(48.dp)
+                                    .testTag("refresh_mast_lookup_btn")
+                            ) {
+                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Re-query Online", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                            }
+                        }
                     }
                 }
             } else if ((status.state == OpenCellIdLookupState.NO_API_KEY || status.state == OpenCellIdLookupState.AUTH_ERROR) && onOpenSettings != null) {
@@ -539,7 +604,13 @@ private fun OpenCellIdStatusCard(
 }
 
 @Composable
-private fun ServingCellCard(cell: CellTowerInfo) {
+private fun ServingCellCard(
+    cell: CellTowerInfo,
+    isCachedSnapshot: Boolean = false,
+    cachedAgeLabel: String? = null,
+    isRefreshing: Boolean = false,
+    onRetryRadioScan: (() -> Unit)? = null
+) {
     val colorScheme = MaterialTheme.colorScheme
     val customColors = LocalCustomColors.current
 
@@ -558,7 +629,7 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(4.dp)
-                    .background(colorScheme.primary)
+                    .background(if (isCachedSnapshot) customColors.warning else colorScheme.primary)
             )
 
             Column(modifier = Modifier.padding(14.dp)) {
@@ -576,22 +647,29 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                         Icon(
                             Icons.Default.CellTower,
                             contentDescription = null,
-                            tint = colorScheme.primary,
+                            tint = if (isCachedSnapshot) customColors.warning else colorScheme.primary,
                             modifier = Modifier.size(22.dp)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
                             Surface(
                                 shape = CircleShape,
-                                color = customColors.statusActiveBg,
-                                border = BorderStroke(1.dp, customColors.statusActiveBorder)
+                                color = if (isCachedSnapshot) colorScheme.secondaryContainer else customColors.statusActiveBg,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (isCachedSnapshot) colorScheme.outlineVariant else customColors.statusActiveBorder
+                                )
                             ) {
                                 Text(
-                                    text = "PRIMARY SERVING CELL",
+                                    text = if (isCachedSnapshot) {
+                                        "CACHED RADIO SNAPSHOT${cachedAgeLabel?.let { " • $it" } ?: ""}"
+                                    } else {
+                                        "PRIMARY SERVING CELL"
+                                    },
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     letterSpacing = 0.04.sp,
-                                    color = customColors.statusActiveText,
+                                    color = if (isCachedSnapshot) colorScheme.onSecondaryContainer else customColors.statusActiveText,
                                     modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp)
                                 )
                             }
@@ -619,6 +697,23 @@ private fun ServingCellCard(cell: CellTowerInfo) {
                             color = colorScheme.primary,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         )
+                    }
+                }
+
+                if (isCachedSnapshot && onRetryRadioScan != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = onRetryRadioScan,
+                        enabled = !isRefreshing,
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("retry_radio_scan_btn")
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Scan Live Radio", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     }
                 }
 
@@ -919,5 +1014,15 @@ private fun ComparisonRow(criterion: String, gpsText: String, cellText: String) 
             Text("Cell: $cellText", fontSize = 11.sp, color = colorScheme.primary, modifier = Modifier.weight(1f))
         }
         Spacer(modifier = Modifier.height(3.dp))
+    }
+}
+
+private fun formatRelativeAge(timestampMs: Long, nowMs: Long): String {
+    val diffSec = ((nowMs - timestampMs) / 1000L).coerceAtLeast(0L)
+    return when {
+        diffSec < 60L -> "just now"
+        diffSec < 3600L -> "${diffSec / 60L}m ago"
+        diffSec < 86_400L -> "${diffSec / 3600L}h ago"
+        else -> "${diffSec / 86_400L}d ago"
     }
 }

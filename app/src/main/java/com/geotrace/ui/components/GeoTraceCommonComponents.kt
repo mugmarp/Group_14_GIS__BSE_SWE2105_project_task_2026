@@ -315,6 +315,7 @@ private fun MapTileType.compactLabel(): String = when (this) {
 fun TileLayerPickerGrid(
     selectedTileType: MapTileType,
     onSelectTileType: (MapTileType) -> Unit,
+    offlineCoveredTypes: Set<MapTileType> = emptySet(),
     modifier: Modifier = Modifier
 ) {
     val rows = MapTileType.entries.chunked(3)
@@ -331,6 +332,7 @@ fun TileLayerPickerGrid(
                     BasemapSwatchTile(
                         tileType = tileType,
                         isSelected = selectedTileType == tileType,
+                        isOfflineCovered = tileType in offlineCoveredTypes,
                         onClick = { onSelectTileType(tileType) },
                         modifier = Modifier.weight(1f)
                     )
@@ -347,6 +349,7 @@ fun TileLayerPickerGrid(
 private fun BasemapSwatchTile(
     tileType: MapTileType,
     isSelected: Boolean,
+    isOfflineCovered: Boolean = false,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -379,6 +382,25 @@ private fun BasemapSwatchTile(
                 tileType = tileType,
                 modifier = Modifier.fillMaxSize()
             )
+            if (isOfflineCovered) {
+                Surface(
+                    shape = CircleShape,
+                    color = colorScheme.tertiaryContainer,
+                    border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.55f)),
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(5.dp)
+                ) {
+                    Text(
+                        text = "OFFLINE",
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.4.sp,
+                        color = colorScheme.onTertiaryContainer,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                    )
+                }
+            }
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomStart)

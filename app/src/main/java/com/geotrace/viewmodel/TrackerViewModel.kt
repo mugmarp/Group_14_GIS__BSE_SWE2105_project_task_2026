@@ -49,14 +49,17 @@ import java.util.UUID
 
 class TrackerViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val repository = (application as LocationTrackerApp).repository
-    private val cellManager = (application as LocationTrackerApp).cellManager
+    private val app = application as LocationTrackerApp
+    private val repository = app.repository
+    private val cellManager = app.cellManager
 
     val currentLocation: StateFlow<LocationPoint?> = repository.currentLocation
     val lastKnownCachedLocation: StateFlow<LocationPoint?> = repository.lastKnownCachedLocation
     val cachedObservedCells: StateFlow<List<CellTowerInfo>> = repository.cachedObservedCells
+    val cachedObservedAtMs: StateFlow<Long?> = repository.cachedObservedAtMs
     val cachedLocationFixCount: StateFlow<Int> = repository.cachedLocationFixCount
     val cachedCellTowerCount: StateFlow<Int> = repository.cachedCellTowerCount
+    val offlinePlacesCountByRegion: StateFlow<Map<String, Int>> = repository.offlinePlacesCountByRegion
     val activeSession: StateFlow<TrackingSession?> = repository.activeSession
     val activeTrailPoints: StateFlow<List<LocationPoint>> = repository.activeTrailPoints
     val activeWaypoints: StateFlow<List<TrailWaypoint>> = repository.activeWaypoints
@@ -141,6 +144,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             stationaryJitterThresholdMeters = repository.getSavedJitterThreshold(),
             keepScreenOn = repository.getSavedKeepScreenOn(),
             showCellTowerPin = repository.getSavedShowCellTowerPin(),
+            showOfflineRegionsOverlay = repository.getSavedShowOfflineRegionsOverlay(),
             openCellIdApiKey = repository.getSavedOpenCellIdApiKey(),
             geofenceNotificationEnabled = repository.geofenceNotificationsEnabled,
             geofenceHysteresisMeters = repository.getSavedGeofenceHysteresis(),
@@ -175,15 +179,14 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val appUpdateManager = com.geotrace.service.AppUpdateManager(application)
     val updateStatus = appUpdateManager.updateStatus
 
-    val offlineMapManager = com.geotrace.service.OfflineMapManager(application)
+    val offlineMapManager = app.offlineMapManager
     val offlineMapRegions: StateFlow<List<OfflineMapRegion>> = repository.offlineMapRegions
     val offlineDownloadProgress: StateFlow<OfflineDownloadProgress> = offlineMapManager.downloadProgress
     val offlineCacheSizeMb: StateFlow<Float> = offlineMapManager.cacheSizeMb
     val offlinePlacesCount: StateFlow<Int> = repository.offlinePlacesCount
-    private val _offlinePoiStatus = MutableStateFlow<String?>(null)
-    val offlinePoiStatus: StateFlow<String?> = _offlinePoiStatus.asStateFlow()
+    val offlinePoiStatus: StateFlow<String?> = app.offlinePoiStatus
 
-    val placeSearchManager = PlaceSearchManager(application)
+    val placeSearchManager = app.placeSearchManager
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
     private val _searchResults = MutableStateFlow<List<SearchPlaceResult>>(emptyList())
@@ -1564,6 +1567,32 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun refreshServingMastOnline() {
+        viewModelScope.launch {
+            _isRefreshingCells.value = true
+            try {
+                val effectiveTowers = if (cellTowers.value.isNotEmpty()) cellTowers.value else cachedObservedCells.value
+                val servingCell = effectiveTowers.firstOrNull { it.isRegistered } ?: effectiveTowers.firstOrNull()
+                    ?: return@launch
+                val loc = currentLocation.value ?: lastKnownCachedLocation.value
+                val resolved = com.geotrace.service.OpenCellIdClient.resolveCellLocation(
+                    cellInfo = servingCell,
+                    apiKey = _settings.value.openCellIdApiKey,
+                    userLatitude = loc?.latitude,
+                    userLongitude = loc?.longitude,
+                    updateStatus = true,
+                    forceRefresh = true
+                )
+                if (resolved != null) {
+                    _cellTowerLocation.value = resolved
+                    _allCellTowerLocations.value = _allCellTowerLocations.value.filterNot { it.cellId == resolved.cellId } + resolved
+                }
+            } finally {
+                _isRefreshingCells.value = false
+            }
+        }
+    }
+
     fun updateSpeedUnit(unit: com.geotrace.model.SpeedUnit) {
         repository.saveSpeedUnit(unit)
         _settings.value = _settings.value.copy(speedUnit = unit)
@@ -1620,31 +1649,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         minZoom: Int,
         maxZoom: Int
     ) {
-        _offlinePoiStatus.value = null
-        offlineMapManager.startRegionDownload(
-            name = name,
-            box = box,
-            tileType = tileType,
-            minZoom = minZoom,
-            maxZoom = maxZoom,
-            onCompleted = { region ->
-                viewModelScope.launch {
-                    repository.saveOfflineMapRegion(region)
-                    // Best-effort offline POI & street index pre-cache inside downloaded bounding box
-                    launch(Dispatchers.IO) {
-                        val outcome = placeSearchManager.fetchRegionPoisForOfflineCacheWithStatus(region)
-                        if (outcome.pois.isNotEmpty()) {
-                            repository.saveOfflinePlaces(region.id, outcome.pois)
-                            _offlinePoiStatus.value = "Cached ${outcome.pois.size} offline POIs for '${region.name}'"
-                        } else if (!outcome.succeeded) {
-                            _offlinePoiStatus.value = "Tiles saved for '${region.name}'; Overpass POI index unavailable offline"
-                        } else {
-                            _offlinePoiStatus.value = "Tiles saved for '${region.name}' (no mapped OSM POIs in bounds)"
-                        }
-                    }
-                }
-            }
-        )
+        app.startOfflineRegionDownload(name, box, tileType, minZoom, maxZoom)
     }
 
     fun startCorridorOfflineDownload(
@@ -1655,40 +1660,15 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         minZoom: Int,
         maxZoom: Int
     ) {
-        _offlinePoiStatus.value = null
-        offlineMapManager.startCorridorDownload(
-            name = name,
-            points = points,
-            halfWidthKm = halfWidthKm,
-            tileType = tileType,
-            minZoom = minZoom,
-            maxZoom = maxZoom,
-            onCompleted = { region ->
-                viewModelScope.launch {
-                    repository.saveOfflineMapRegion(region)
-                    launch(Dispatchers.IO) {
-                        val outcome = placeSearchManager.fetchCorridorPoisForOfflineCacheWithStatus(
-                            points = points,
-                            regionId = region.id,
-                            regionName = region.name,
-                            halfWidthKm = halfWidthKm
-                        )
-                        if (outcome.pois.isNotEmpty()) {
-                            repository.saveOfflinePlaces(region.id, outcome.pois)
-                            _offlinePoiStatus.value = "Cached ${outcome.pois.size} trail corridor POIs for '${region.name}'"
-                        } else if (!outcome.succeeded) {
-                            _offlinePoiStatus.value = "Corridor tiles saved for '${region.name}'; Overpass POI index unavailable"
-                        } else {
-                            _offlinePoiStatus.value = "Corridor tiles saved for '${region.name}' (no mapped POIs in strip)"
-                        }
-                    }
-                }
-            }
-        )
+        app.startCorridorOfflineDownload(name, points, halfWidthKm, tileType, minZoom, maxZoom)
+    }
+
+    fun refreshOfflineRegionPois(region: OfflineMapRegion) {
+        app.refreshOfflineRegionPois(region)
     }
 
     fun clearOfflinePoiStatus() {
-        _offlinePoiStatus.value = null
+        app.clearOfflinePoiStatus()
     }
 
     fun cancelOfflineRegionDownload() {
@@ -1701,8 +1681,16 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteOfflineMapRegion(id: String) {
         viewModelScope.launch {
-            repository.deleteOfflineMapRegion(id)
+            val (deleted, remaining) = repository.deleteOfflineMapRegion(id)
+            if (deleted != null) {
+                offlineMapManager.deleteTilesForRegion(deleted, remaining)
+            }
         }
+    }
+
+    fun toggleOfflineRegionsOverlay(show: Boolean) {
+        repository.saveShowOfflineRegionsOverlay(show)
+        _settings.value = _settings.value.copy(showOfflineRegionsOverlay = show)
     }
 
     fun clearAllTileCache() {
@@ -1945,6 +1933,19 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                         )
                     )
                 }
+            } else if (offlinePlacesCount.value > 0) {
+                repository.searchOfflinePlaces("", limit = 16).map { poi ->
+                    withDist(
+                        SearchPlaceResult(
+                            id = "poi_${poi.id}",
+                            name = poi.name,
+                            subtitle = poi.subtitle,
+                            latitude = poi.latitude,
+                            longitude = poi.longitude,
+                            source = SearchResultSource.OFFLINE_POI
+                        )
+                    )
+                }.sortedBy { it.distanceMeters ?: Double.MAX_VALUE }.take(8)
             } else {
                 emptyList()
             }
@@ -1994,12 +1995,13 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                 }
 
             if (trimmed.isBlank()) {
-                // On blank query show Recents, Saved Places, Parked Spot, Safe Zones & Offline Regions
+                // On blank query show Recents, Saved Places, Parked Spot, Safe Zones, Offline Regions & nearby Offline POIs
                 localMatches.addAll(parkedMatches)
                 localMatches.addAll(savedPlaceMatches)
                 localMatches.addAll(recents)
                 localMatches.addAll(safeZoneMatches)
                 localMatches.addAll(regionMatches)
+                localMatches.addAll(offlinePoiMatches)
             } else {
                 // On active search prefer authoritative typed local sources before Recents
                 localMatches.addAll(parkedMatches)
