@@ -474,19 +474,15 @@ class LocationForegroundService : Service() {
                         requestLocationUpdates(mode, forceImmediateFix = true)
                         startPeriodicCellDiagnostics(restart = true)
                     } else if (isNavigating) {
-                        requestLocationUpdates(mode, forceImmediateFix = true)
+                        requestLocationUpdates(TrackingMode.HIGH_ACCURACY, forceImmediateFix = true)
                     } else if (isProtectionActive && !isProtectionPaused && hasLocationPermission(this)) {
                         requestProtectionLocationUpdates(modeChanged = true)
                     }
                     syncCurrentModeTelemetry(mode)
                 } else if (isNavigating && hasLocationPermission(this)) {
                     ensureForeground(buildStatusNotification(mode))
-                    requestLocationUpdates(mode, forceImmediateFix = true)
-                    if (mode == TrackingMode.POWER_SAVER) {
-                        startPeriodicCellDiagnostics(restart = true)
-                    } else {
-                        stopCellDiagnostics()
-                    }
+                    requestLocationUpdates(TrackingMode.HIGH_ACCURACY, forceImmediateFix = true)
+                    stopCellDiagnostics()
                     syncCurrentModeTelemetry(mode)
                 } else if (isProtectionActive || (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this))) {
                     isProtectionActive = true
@@ -629,13 +625,8 @@ class LocationForegroundService : Service() {
                     return START_NOT_STICKY
                 }
                 val isActivelyRecordingUnpaused = isRecordingSession && repo.activeSession.value?.isPaused != true
-                if (!isActivelyRecordingUnpaused) {
-                    val navMode = if (currentMode == TrackingMode.POWER_SAVER) {
-                        TrackingMode.BALANCED
-                    } else {
-                        TrackingMode.HIGH_ACCURACY
-                    }
-                    requestLocationUpdates(navMode)
+                if (!isActivelyRecordingUnpaused || currentMode != TrackingMode.HIGH_ACCURACY) {
+                    requestLocationUpdates(TrackingMode.HIGH_ACCURACY, forceImmediateFix = true)
                     stopCellDiagnostics()
                     stopProtectionHeartbeat()
                 }
@@ -652,6 +643,9 @@ class LocationForegroundService : Service() {
                 isNavigating = false
                 if (fromNotification) {
                     repo.requestStopNavigationFromService()
+                    serviceScope.launch {
+                        repo.clearActiveNavRouteFlag()
+                    }
                 } else {
                     repo.updateActiveNavNotificationText(null)
                 }
@@ -666,6 +660,9 @@ class LocationForegroundService : Service() {
                                 requestProtectionLocationUpdates()
                                 startProtectionHeartbeat()
                             }
+                        } else if (hasLocationPermission(this)) {
+                            requestLocationUpdates(currentMode, forceImmediateFix = true)
+                            startPeriodicCellDiagnostics(restart = true)
                         }
                         ensureForeground(buildStatusNotification(currentMode))
                     }
@@ -719,8 +716,7 @@ class LocationForegroundService : Service() {
                     } else if (isNavigating && hasLocationPermission(this@LocationForegroundService)) {
                         acquireWakeLock()
                         ensureForeground(buildStatusNotification(currentMode))
-                        val navMode = if (currentMode == TrackingMode.POWER_SAVER) TrackingMode.BALANCED else TrackingMode.HIGH_ACCURACY
-                        requestLocationUpdates(navMode)
+                        requestLocationUpdates(TrackingMode.HIGH_ACCURACY, forceImmediateFix = true)
                     } else if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this@LocationForegroundService)) {
                         isRecordingSession = false
                         isProtectionActive = true
@@ -758,8 +754,7 @@ class LocationForegroundService : Service() {
                             if (isNavigating && hasLocationPermission(this@LocationForegroundService)) {
                                 acquireWakeLock()
                                 ensureForeground(buildStatusNotification(currentMode))
-                                val navMode = if (currentMode == TrackingMode.POWER_SAVER) TrackingMode.BALANCED else TrackingMode.HIGH_ACCURACY
-                                requestLocationUpdates(navMode)
+                                requestLocationUpdates(TrackingMode.HIGH_ACCURACY, forceImmediateFix = true)
                             } else {
                                 releaseWakeLock()
                                 stopCellDiagnostics()
@@ -772,12 +767,14 @@ class LocationForegroundService : Service() {
                             }
                         } else {
                             startForegroundTracking(currentMode)
+                            if (isNavigating && currentMode != TrackingMode.HIGH_ACCURACY && hasLocationPermission(this@LocationForegroundService)) {
+                                requestLocationUpdates(TrackingMode.HIGH_ACCURACY, forceImmediateFix = true)
+                            }
                         }
                     } else if (isNavigating && hasLocationPermission(this@LocationForegroundService)) {
                         acquireWakeLock()
                         ensureForeground(buildStatusNotification(currentMode))
-                        val navMode = if (currentMode == TrackingMode.POWER_SAVER) TrackingMode.BALANCED else TrackingMode.HIGH_ACCURACY
-                        requestLocationUpdates(navMode)
+                        requestLocationUpdates(TrackingMode.HIGH_ACCURACY, forceImmediateFix = true)
                     } else if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this@LocationForegroundService)) {
                         isProtectionActive = true
                         groupRepo.ensurePersonalDevicesListenerActive()
@@ -1377,13 +1374,13 @@ class LocationForegroundService : Service() {
             }
         }
 
-        // In Balanced mode, suppress raw hardware GPS provider overrides
-        if (effectiveMode == TrackingMode.BALANCED && loc.provider == LocationManager.GPS_PROVIDER) {
+        // In Balanced mode (outside active turn-by-turn nav), suppress raw hardware GPS provider overrides
+        if (!isNavigating && effectiveMode == TrackingMode.BALANCED && loc.provider == LocationManager.GPS_PROVIDER) {
             return
         }
 
-        // In Cell-Only mode, never allow hardware GPS leaks, and defer to fresh OpenCellID mast coordinates when available
-        if (effectiveMode == TrackingMode.POWER_SAVER) {
+        // In Cell-Only mode (outside active turn-by-turn nav), never allow hardware GPS leaks, and defer to fresh OpenCellID mast coordinates
+        if (!isNavigating && effectiveMode == TrackingMode.POWER_SAVER) {
             if (loc.provider == LocationManager.GPS_PROVIDER) {
                 return
             }
@@ -1873,8 +1870,7 @@ class LocationForegroundService : Service() {
             if (isNavigating && hasLocationPermission(this@LocationForegroundService)) {
                 acquireWakeLock()
                 ensureForeground(buildStatusNotification(currentMode))
-                val navMode = if (currentMode == TrackingMode.POWER_SAVER) TrackingMode.BALANCED else TrackingMode.HIGH_ACCURACY
-                requestLocationUpdates(navMode)
+                requestLocationUpdates(TrackingMode.HIGH_ACCURACY, forceImmediateFix = true)
             } else if (groupRepo.isBackgroundProtectionActiveAndSignedIn() && hasLocationPermission(this@LocationForegroundService)) {
                 isProtectionActive = true
                 groupRepo.ensurePersonalDevicesListenerActive()

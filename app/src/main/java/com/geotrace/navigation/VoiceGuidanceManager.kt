@@ -9,6 +9,7 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 
 class VoiceGuidanceManager(context: Context) {
 
@@ -18,6 +19,8 @@ class VoiceGuidanceManager(context: Context) {
 
     private val appContext = context.applicationContext
     private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    private val ttsLock = Any()
+    private val utteranceSeq = AtomicLong(0L)
 
     @Volatile
     private var tts: TextToSpeech? = null
@@ -25,6 +28,10 @@ class VoiceGuidanceManager(context: Context) {
     private var isReady: Boolean = false
     @Volatile
     private var currentRouteId: String? = null
+    @Volatile
+    private var activeUtteranceId: String? = null
+    @Volatile
+    private var pendingUtterance: String? = null
     private val spokenKeys = HashSet<String>()
     private var activeFocusRequest: AudioFocusRequest? = null
 
@@ -34,39 +41,67 @@ class VoiceGuidanceManager(context: Context) {
         .build()
 
     fun ensureInitialized() {
-        if (tts != null) return
-        try {
-            tts = TextToSpeech(appContext) { status ->
-                if (status == TextToSpeech.SUCCESS) {
-                    val instance = tts ?: return@TextToSpeech
-                    val langRes = instance.setLanguage(Locale.getDefault())
-                    if (langRes == TextToSpeech.LANG_MISSING_DATA || langRes == TextToSpeech.LANG_NOT_SUPPORTED) {
-                        instance.setLanguage(Locale.US)
+        synchronized(ttsLock) {
+            if (tts != null) return
+            try {
+                tts = TextToSpeech(appContext) { status ->
+                    if (status == TextToSpeech.SUCCESS) {
+                        val queuedToSpeak: String?
+                        synchronized(ttsLock) {
+                            val instance = tts ?: return@TextToSpeech
+                            val langRes = instance.setLanguage(Locale.getDefault())
+                            if (langRes == TextToSpeech.LANG_MISSING_DATA || langRes == TextToSpeech.LANG_NOT_SUPPORTED) {
+                                instance.setLanguage(Locale.US)
+                            }
+                            instance.setAudioAttributes(audioAttributes)
+                            instance.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                                override fun onStart(utteranceId: String?) {}
+                                override fun onDone(utteranceId: String?) {
+                                    if (utteranceId == null || utteranceId == activeUtteranceId) {
+                                        activeUtteranceId = null
+                                        abandonAudioFocus()
+                                    }
+                                }
+                                override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                                    if (utteranceId == null || utteranceId == activeUtteranceId) {
+                                        activeUtteranceId = null
+                                        abandonAudioFocus()
+                                    }
+                                }
+                                @Deprecated("Deprecated in Java")
+                                override fun onError(utteranceId: String?) {
+                                    if (utteranceId == null || utteranceId == activeUtteranceId) {
+                                        activeUtteranceId = null
+                                        abandonAudioFocus()
+                                    }
+                                }
+                            })
+                            isReady = true
+                            queuedToSpeak = pendingUtterance
+                            pendingUtterance = null
+                        }
+                        if (!queuedToSpeak.isNullOrBlank()) {
+                            speak(queuedToSpeak)
+                        }
+                    } else {
+                        Log.w(TAG, "TextToSpeech init failed with status=$status")
                     }
-                    instance.setAudioAttributes(audioAttributes)
-                    instance.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                        override fun onStart(utteranceId: String?) {}
-                        override fun onDone(utteranceId: String?) {
-                            abandonAudioFocus()
-                        }
-                        @Deprecated("Deprecated in Java")
-                        override fun onError(utteranceId: String?) {
-                            abandonAudioFocus()
-                        }
-                    })
-                    isReady = true
-                } else {
-                    Log.w(TAG, "TextToSpeech init failed with status=$status")
                 }
+            } catch (e: Exception) {
+                Log.w(TAG, "Unable to initialize TTS: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Unable to initialize TTS: ${e.message}")
         }
     }
 
-    fun resetForRoute(routeId: String) {
-        currentRouteId = routeId
-        spokenKeys.clear()
+    fun resetForRoute(routeId: String, suppressStartPrompt: Boolean = false) {
+        synchronized(ttsLock) {
+            currentRouteId = routeId
+            spokenKeys.clear()
+            if (suppressStartPrompt) {
+                spokenKeys.add("0_start")
+            }
+            pendingUtterance = null
+        }
     }
 
     fun evaluateAndSpeak(
@@ -98,6 +133,8 @@ class VoiceGuidanceManager(context: Context) {
                 speak(msg)
             }
             return
+        } else {
+            spokenKeys.removeAll { it.startsWith("offroute_") }
         }
 
         val upcoming = navState.nextStep ?: navState.currentStep ?: return
@@ -146,15 +183,29 @@ class VoiceGuidanceManager(context: Context) {
     }
 
     private fun speak(text: String) {
-        val engine = tts
-        if (!isReady || engine == null || text.isBlank()) return
+        if (text.isBlank()) return
+        val engine: TextToSpeech
+        val utteranceId: String
+        synchronized(ttsLock) {
+            val current = tts
+            if (!isReady || current == null) {
+                pendingUtterance = text
+                return
+            }
+            engine = current
+            utteranceId = "nav_${utteranceSeq.incrementAndGet()}"
+            activeUtteranceId = utteranceId
+        }
         try {
             requestAudioFocus()
             val params = Bundle().apply {
                 putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
             }
-            engine.speak(text, TextToSpeech.QUEUE_FLUSH, params, "nav_${System.currentTimeMillis()}")
+            engine.speak(text, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
         } catch (e: Exception) {
+            if (activeUtteranceId == utteranceId) {
+                activeUtteranceId = null
+            }
             abandonAudioFocus()
             Log.w(TAG, "TTS speak failed: ${e.message}")
         }
@@ -192,6 +243,10 @@ class VoiceGuidanceManager(context: Context) {
     }
 
     fun stopSpeaking() {
+        synchronized(ttsLock) {
+            pendingUtterance = null
+            activeUtteranceId = null
+        }
         try {
             tts?.stop()
         } catch (_: Exception) {
@@ -201,11 +256,15 @@ class VoiceGuidanceManager(context: Context) {
 
     fun shutdown() {
         stopSpeaking()
-        try {
-            tts?.shutdown()
-        } catch (_: Exception) {
+        synchronized(ttsLock) {
+            isReady = false
+            pendingUtterance = null
+            activeUtteranceId = null
+            try {
+                tts?.shutdown()
+            } catch (_: Exception) {
+            }
+            tts = null
         }
-        tts = null
-        isReady = false
     }
 }

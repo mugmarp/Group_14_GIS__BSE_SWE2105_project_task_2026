@@ -1379,10 +1379,17 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     isOfflineRerouteBlockedFlag = false
                     rerouteStatusNoteText = null
                     navEngine.setRoute(updated, resetRerouteCooldown = false)
-                    voiceGuidance.resetForRoute(updated.id)
+                    val firstInstr = updated.steps.firstOrNull()?.instruction?.takeIf { it.isNotBlank() }
+                    val suppressStart = _voiceGuidanceMode.value == VoiceGuidanceMode.VOICE_ON && firstInstr != null
+                    voiceGuidance.resetForRoute(updated.id, suppressStartPrompt = suppressStart)
                     _activeNavRouteFlow.value = updated
                     repository.saveCachedNavRoute(updated, isActive = true)
-                    voiceGuidance.speakAlert("Route updated.", _voiceGuidanceMode.value)
+                    val rerouteMsg = if (suppressStart) {
+                        "Route updated. $firstInstr"
+                    } else {
+                        "Route updated."
+                    }
+                    voiceGuidance.speakAlert(rerouteMsg, _voiceGuidanceMode.value)
                 } else {
                     isReroutingActive = false
                     rerouteStatusNoteText = "No alternate road route found"
@@ -1442,7 +1449,13 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         routePreviewJob = viewModelScope.launch {
             val onlineNow = placeSearchManager.isNetworkConnected()
             _isNetworkOnline.value = onlineNow
-            val cachedFallback = repository.findCachedNavRouteNear(destinationLat, destinationLon, profile)
+            val cachedFallback = repository.findCachedNavRouteNear(
+                originLat = origin.latitude,
+                originLon = origin.longitude,
+                destinationLat = destinationLat,
+                destinationLon = destinationLon,
+                profile = profile
+            )
 
             val result = routingProvider.computeRoutes(
                 originLat = origin.latitude,

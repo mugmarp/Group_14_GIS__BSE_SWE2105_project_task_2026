@@ -208,12 +208,9 @@ class OfflineRoutingPackManager(
         lat2: Double,
         lon2: Double
     ): Boolean = withContext(Dispatchers.IO) {
-        val packs = cacheRepository.getOfflineRoutingPacksSnapshot()
+        val packs = cacheRepository.getOfflineRoutingPacksSnapshot().filter { File(it.filePath).exists() }
         if (packs.isEmpty()) return@withContext false
-        packs.any { p ->
-            File(p.filePath).exists() &&
-                (pointNearPack(lat1, lon1, p) || pointNearPack(lat2, lon2, p))
-        }
+        packs.any { pointNearPack(lat1, lon1, it) } && packs.any { pointNearPack(lat2, lon2, it) }
     }
 
     suspend fun computeOfflineRoutes(

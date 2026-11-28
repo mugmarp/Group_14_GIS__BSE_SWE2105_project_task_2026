@@ -200,4 +200,44 @@ class OsmRoadGraphAndRouterTest {
         assertEquals(0, tick!!.state.currentStepIndex)
         assertEquals(NavManeuverType.LEFT, tick.state.nextStep?.maneuverType)
     }
+
+    @Test
+    fun mergeGraphs_preservesParallelEdgesWithSameWayIdAndEndpoints() {
+        // Simulate a horseshoe/loop split where way 9001 produces two distinct edges between vertex 1 and 2
+        // (e.g., short 50m chord vs longer 220m curved loop) and merge across two packs.
+        val v1 = RoadVertex(1L, 0.0, 0.0)
+        val v2 = RoadVertex(2L, 0.0, 0.0005)
+        val chordFwd = RoadEdge(
+            fromVertex = 0,
+            toVertex = 1,
+            wayOsmId = 9001L,
+            streetName = "Loop Crescent",
+            roadClass = RoadClass.RESIDENTIAL,
+            maxSpeedKmh = 30,
+            distanceMeters = 55f,
+            flags = OsmRoadFlags.CAR or OsmRoadFlags.WALK,
+            interiorLats = DoubleArray(0),
+            interiorLons = DoubleArray(0)
+        )
+        val loopFwd = RoadEdge(
+            fromVertex = 0,
+            toVertex = 1,
+            wayOsmId = 9001L,
+            streetName = "Loop Crescent",
+            roadClass = RoadClass.RESIDENTIAL,
+            maxSpeedKmh = 30,
+            distanceMeters = 240f,
+            flags = OsmRoadFlags.CAR or OsmRoadFlags.WALK,
+            interiorLats = doubleArrayOf(0.001, 0.001),
+            interiorLons = doubleArrayOf(0.0, 0.0005)
+        )
+
+        val g1 = OsmRoadGraphData(listOf(v1, v2), listOf(chordFwd))
+        val g2 = OsmRoadGraphData(listOf(v1, v2), listOf(loopFwd))
+        val gDuplicate = OsmRoadGraphData(listOf(v1, v2), listOf(chordFwd))
+
+        val merged = OsmRoadGraphCodec.mergeGraphs(listOf(g1, g2, gDuplicate))
+        assertEquals(2, merged.vertices.size)
+        assertEquals("Distinct loop and chord edges on same way must both survive merge", 2, merged.edges.size)
+    }
 }

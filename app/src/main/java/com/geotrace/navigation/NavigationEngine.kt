@@ -89,9 +89,16 @@ class NavigationEngine {
         val lastSegIdx = pts.lastIndex - 1
         val hasMovingBearing = location.speed >= 1.8f && location.bearing.isFinite()
 
-        // 1. Forward-biased search window around previous matched segment
-        val winStart = (lastMatchedSegIndex - 3).coerceAtLeast(0)
-        val winEnd = (lastMatchedSegIndex + 40).coerceAtMost(lastSegIdx)
+        // 1. Forward-biased, distance-aware search window (>=80m back, >=600m forward, min [-3, +40] segments)
+        val anchorDist = cumulativeDistToPoint.getOrElse(lastMatchedSegIndex) { 0.0 }
+        var winStart = (lastMatchedSegIndex - 3).coerceAtLeast(0)
+        while (winStart > 0 && (anchorDist - cumulativeDistToPoint[winStart]) < 80.0) {
+            winStart--
+        }
+        var winEnd = (lastMatchedSegIndex + 40).coerceAtMost(lastSegIdx)
+        while (winEnd < lastSegIdx && (cumulativeDistToPoint.getOrElse(winEnd) { anchorDist } - anchorDist) < 600.0) {
+            winEnd++
+        }
         val localMatch = findBestSegment(
             lat = location.latitude,
             lon = location.longitude,
@@ -158,9 +165,21 @@ class NavigationEngine {
         val distToTurnMeters = (cumulativeDistToPoint.getOrElse(maneuverPointIdx) { coveredDistance } - coveredDistance)
             .coerceAtLeast(0.0)
 
-        // 4. Adaptive remaining duration (blends route model duration with live speed)
+        // 4. Adaptive remaining duration (per-step road-class durations blended with live speed)
         val baseRatio = if (totalPolyDist > 10.0) (remainingMeters / totalPolyDist).coerceIn(0.0, 1.0) else 0.0
-        val plannedRemSec = route.totalDurationSeconds * baseRatio
+        val plannedRemSec = if (currentStep != null && currentStep.durationSeconds > 0.0) {
+            val stepStartDist = cumulativeDistToPoint.getOrElse(currentStep.beginPointIndex.coerceIn(0, pts.lastIndex)) { coveredDistance }
+            val stepEndDist = cumulativeDistToPoint.getOrElse(currentStep.endPointIndex.coerceIn(0, pts.lastIndex)) { coveredDistance }
+            val stepSpanDist = (stepEndDist - stepStartDist).coerceAtLeast(1.0)
+            val stepRemFrac = ((stepEndDist - coveredDistance) / stepSpanDist).coerceIn(0.0, 1.0)
+            var sumSec = currentStep.durationSeconds * stepRemFrac
+            for (i in (stepIdx + 1) until steps.size) {
+                sumSec += steps[i].durationSeconds.coerceAtLeast(0.0)
+            }
+            sumSec
+        } else {
+            route.totalDurationSeconds * baseRatio
+        }
         val blendedRemSec = if (location.speed >= 2.0f) {
             val liveSpeedEtaSec = remainingMeters / location.speed.toDouble()
             0.65 * plannedRemSec + 0.35 * liveSpeedEtaSec

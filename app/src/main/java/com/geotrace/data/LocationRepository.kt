@@ -2529,11 +2529,13 @@ class LocationRepository(
     }
 
     suspend fun findCachedNavRouteNear(
+        originLat: Double,
+        originLon: Double,
         destinationLat: Double,
         destinationLon: Double,
         profile: com.geotrace.navigation.NavProfile
     ): com.geotrace.navigation.NavRoute? = withContext(Dispatchers.IO) {
-        offlineCacheRepository.findCachedNavRouteNear(destinationLat, destinationLon, profile)
+        offlineCacheRepository.findCachedNavRouteNear(originLat, originLon, destinationLat, destinationLon, profile)
     }
 
     fun calculateDistanceMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {

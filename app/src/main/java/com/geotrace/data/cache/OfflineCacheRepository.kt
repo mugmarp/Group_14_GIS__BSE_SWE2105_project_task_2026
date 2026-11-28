@@ -297,17 +297,29 @@ class OfflineCacheRepository(
     }
 
     suspend fun findCachedNavRouteNear(
+        originLat: Double,
+        originLon: Double,
         destinationLat: Double,
         destinationLon: Double,
         profile: NavProfile
     ): NavRoute? = cacheMutex.withLock {
         val dao = navRouteDao ?: return@withLock null
         val rows = dao.getRecentRoutes(MAX_CACHED_NAV_ROUTES)
-        val matched = rows.firstOrNull { row ->
-            row.profile == profile.name &&
-                haversineMeters(row.destinationLat, row.destinationLon, destinationLat, destinationLon) <= 150.0
-        } ?: return@withLock null
-        deserializeNavRoute(matched.routeJson)?.copy(source = NavRouteSource.CACHED_OFFLINE)
+        for (row in rows) {
+            if (row.profile != profile.name) continue
+            if (haversineMeters(row.destinationLat, row.destinationLon, destinationLat, destinationLon) > 150.0) {
+                continue
+            }
+            val parsed = deserializeNavRoute(row.routeJson) ?: continue
+            val nearOrigin = haversineMeters(parsed.originLat, parsed.originLon, originLat, originLon) <= 1500.0
+            val nearPolyline = nearOrigin || parsed.points.any { pt ->
+                haversineMeters(pt.latitude, pt.longitude, originLat, originLon) <= 1500.0
+            }
+            if (nearPolyline) {
+                return@withLock parsed.copy(source = NavRouteSource.CACHED_OFFLINE)
+            }
+        }
+        null
     }
 
     fun observeRecentCachedNavRoutes(): Flow<List<NavRoute>> {

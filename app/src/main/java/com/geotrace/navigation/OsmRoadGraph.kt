@@ -439,7 +439,7 @@ object OsmRoadGraphCodec {
                 val newTo = localToMerged[e.toVertex]
                 val fromOsm = g.vertices[e.fromVertex].osmNodeId
                 val toOsm = g.vertices[e.toVertex].osmNodeId
-                val key = "${fromOsm}_${toOsm}_${e.wayOsmId}"
+                val key = "${fromOsm}_${toOsm}_${e.wayOsmId}_${e.interiorLats.size}_${e.distanceMeters.roundToInt()}"
                 if (seenEdgeKeys.add(key)) {
                     mergedEdges.add(e.copy(fromVertex = newFrom, toVertex = newTo))
                 }

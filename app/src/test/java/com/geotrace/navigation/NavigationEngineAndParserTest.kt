@@ -296,4 +296,116 @@ class NavigationEngineAndParserTest {
         assertFalse(tickArrived.state.isOffRoute)
         assertTrue(tickArrived.state.hasArrived)
     }
+
+    @Test
+    fun navigationEngine_usesDistanceAwareWindowOverDensePolylineSegments() {
+        // Construct a dense U-turn route within 600m total distance (~373m to target) over >65 segments:
+        // - Seg 0 goes South ~167m along lon=0.00065 (passing ~39m east of the northbound return point)
+        // - Seg 1 goes West ~39m to lon=0.00030
+        // - Segs 2..76 head North in ~2.4m steps (75 dense segments, total ~183m) past (0.0020, 0.00030).
+        // A fixed [+40] window from seg 0 stops around seg 40 (~100m up the return leg), sees seg 0 at 39m
+        // (<=60m so global fallback never triggers), and stays stuck at seg 0.
+        // The distance-aware (>=600m) window reaches seg ~70 (~373m) directly with <2m cross-track error.
+        val pts = mutableListOf<LocationPoint>()
+        pts.add(LocationPoint(latitude = 0.0020, longitude = 0.00065, accuracy = 5f, sessionId = "dense"))
+        pts.add(LocationPoint(latitude = 0.0005, longitude = 0.00065, accuracy = 5f, sessionId = "dense"))
+        pts.add(LocationPoint(latitude = 0.0005, longitude = 0.00030, accuracy = 5f, sessionId = "dense"))
+        for (i in 1..75) {
+            pts.add(
+                LocationPoint(
+                    latitude = 0.0005 + i * 0.000022,
+                    longitude = 0.00030,
+                    accuracy = 5f,
+                    sessionId = "dense"
+                )
+            )
+        }
+        val route = NavRoute(
+            id = "dense_route",
+            profile = NavProfile.DRIVING,
+            originLat = pts.first().latitude,
+            originLon = pts.first().longitude,
+            destinationName = "North End",
+            destinationLat = pts.last().latitude,
+            destinationLon = pts.last().longitude,
+            points = pts,
+            steps = listOf(
+                NavStep(
+                    index = 0,
+                    maneuverType = NavManeuverType.START,
+                    instruction = "Follow dense road",
+                    verbalPrompt = "Follow dense road",
+                    streetName = "Dense Rd",
+                    distanceMeters = 390.0,
+                    durationSeconds = 39.0,
+                    beginPointIndex = 0,
+                    endPointIndex = pts.lastIndex
+                )
+            ),
+            totalDistanceMeters = 390.0,
+            totalDurationSeconds = 39.0,
+            source = NavRouteSource.ONLINE_ORS
+        )
+
+        val engine = NavigationEngine()
+        engine.setRoute(route)
+
+        // Initial lock near seg 0
+        val t0 = engine.onLocationUpdate(
+            LocationPoint(latitude = 0.00195, longitude = 0.00065, accuracy = 5f, speed = 10f, bearing = 180f, sessionId = "nav"),
+            VoiceGuidanceMode.MUTED,
+            nowMs = 1_000L
+        )!!
+        assertEquals(0, t0.state.nearestPointIndex)
+
+        // Jump onto dense northbound leg (~373m along route, >60 segments ahead, 39m west of seg 0)
+        val t1 = engine.onLocationUpdate(
+            LocationPoint(latitude = 0.00200, longitude = 0.00030, accuracy = 5f, speed = 10f, bearing = 0f, sessionId = "nav"),
+            VoiceGuidanceMode.MUTED,
+            nowMs = 5_000L
+        )!!
+        assertTrue(
+            "Expected distance-aware window to advance onto dense leg (>40 segments ahead), got ${t1.state.nearestPointIndex}",
+            t1.state.nearestPointIndex >= 60
+        )
+        assertTrue(t1.state.crossTrackDistanceMeters < 2.0)
+    }
+
+    @Test
+    fun navigationEngine_usesPerStepDurationWeightsForEta() {
+        // Step 0: 500m in 50s (fast highway); Step 1: 500m in 200s (slow congested street). Total = 250s.
+        val pts = listOf(
+            LocationPoint(latitude = 0.0, longitude = 0.0, accuracy = 5f, sessionId = "eta"),
+            LocationPoint(latitude = 0.0, longitude = 0.0044915, accuracy = 5f, sessionId = "eta"),
+            LocationPoint(latitude = 0.0, longitude = 0.0089830, accuracy = 5f, sessionId = "eta")
+        )
+        val route = NavRoute(
+            id = "eta_route",
+            profile = NavProfile.DRIVING,
+            originLat = 0.0,
+            originLon = 0.0,
+            destinationName = "Center",
+            destinationLat = 0.0,
+            destinationLon = 0.0089830,
+            points = pts,
+            steps = listOf(
+                NavStep(0, NavManeuverType.START, "Fast highway", "Fast highway", "Hwy 1", 500.0, 50.0, 0, 1),
+                NavStep(1, NavManeuverType.STRAIGHT, "Slow street", "Slow street", "Main St", 500.0, 200.0, 1, 2)
+            ),
+            totalDistanceMeters = 1000.0,
+            totalDurationSeconds = 250.0,
+            source = NavRouteSource.ONLINE_ORS
+        )
+        val engine = NavigationEngine()
+        engine.setRoute(route)
+
+        // Halfway along fast step (lon = 0.00224575, stopped/slow speed < 2 m/s so speed blend doesn't mask plannedRemSec)
+        // Remaining time should be ~25s (half of fast step) + 200s (full slow step) = ~225s (NOT uniform 0.75 * 250 = 187.5s)
+        val tick = engine.onLocationUpdate(
+            LocationPoint(latitude = 0.0, longitude = 0.00224575, accuracy = 5f, speed = 0.5f, bearing = 90f, sessionId = "nav"),
+            VoiceGuidanceMode.MUTED,
+            nowMs = 1_000L
+        )!!
+        assertEquals(225.0, tick.state.remainingDurationSeconds, 5.0)
+    }
 }
