@@ -135,8 +135,16 @@ class LocationRepository(
     private val _activeNavNotificationText = MutableStateFlow<String?>(null)
     val activeNavNotificationText: StateFlow<String?> = _activeNavNotificationText.asStateFlow()
 
+    private val _navStopRequestedSignal = MutableStateFlow(0L)
+    val navStopRequestedSignal: StateFlow<Long> = _navStopRequestedSignal.asStateFlow()
+
     fun updateActiveNavNotificationText(text: String?) {
         _activeNavNotificationText.value = text
+    }
+
+    fun requestStopNavigationFromService() {
+        _activeNavNotificationText.value = null
+        _navStopRequestedSignal.value = System.currentTimeMillis()
     }
 
     private fun loadLastGaspBeacon(): LastGaspBeacon? {

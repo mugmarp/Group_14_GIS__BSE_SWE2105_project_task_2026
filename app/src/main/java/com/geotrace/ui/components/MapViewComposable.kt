@@ -109,6 +109,9 @@ import com.geotrace.model.ActiveGuideTarget
 import com.geotrace.model.LocationPoint
 import com.geotrace.model.ParkedSpot
 import com.geotrace.model.SavedPlace
+import com.geotrace.navigation.ActiveNavigationState
+import com.geotrace.navigation.NavManeuverType
+import com.geotrace.navigation.NavPreviewState
 import com.geotrace.service.normalizeHeadingDegrees
 import com.geotrace.service.rememberCompassReading
 import com.geotrace.service.shortestAngleDeltaDegrees
@@ -189,9 +192,24 @@ private data class ReferenceRouteLayerSig(
     val coordinateFormat: com.geotrace.model.CoordinateFormat
 )
 
+private data class NavRouteLayerSig(
+    val activeRouteId: String?,
+    val nearestPointIndex: Int,
+    val isOffRoute: Boolean,
+    val currentStepIndex: Int,
+    val previewKey: String?,
+    val previewSelectedIndex: Int
+)
+
 private data class UserTargetLayerSig(
     val currentLocation: LocationPoint?,
     val resolvedBearing: Float,
+    val snappedNavLat: Double?,
+    val snappedNavLon: Double?,
+    val snappedNavBearing: Float?,
+    val isOffRoute: Boolean,
+    val snappedToProjLat: Double?,
+    val snappedToProjLon: Double?,
     val showAccuracyRing: Boolean,
     val speedUnit: com.geotrace.model.SpeedUnit,
     val focusedTarget: com.geotrace.model.MapFocusTarget?,
@@ -382,6 +400,10 @@ fun MapViewComposable(
     onClearParkedSpot: (() -> Unit)? = null,
     onOpenSavePlaceDialog: ((String, Double, Double, Double) -> Unit)? = null,
     onDeleteSavedPlace: ((String) -> Unit)? = null,
+    navPreviewState: NavPreviewState = NavPreviewState.Idle,
+    activeNavigation: ActiveNavigationState? = null,
+    onRequestDirections: ((String, Double, Double) -> Unit)? = null,
+    fabExtraBottomPadding: Dp = 0.dp,
     onCompassStateChanged: ((Float?, Boolean) -> Unit)? = null,
     bottomOverlayPadding: Dp = 0.dp,
     modifier: Modifier = Modifier
@@ -455,11 +477,21 @@ fun MapViewComposable(
     LaunchedEffect(compassReading.azimuthDegrees, compassReading.isLowAccuracy) {
         onCompassStateChanged?.invoke(compassReading.azimuthDegrees, compassReading.isLowAccuracy)
     }
-    val resolvedUserBearing = remember(currentLocation?.bearing, currentLocation?.speed, compassHeading) {
+    val resolvedUserBearing = remember(
+        currentLocation?.bearing,
+        currentLocation?.speed,
+        compassHeading,
+        activeNavigation?.isSnappedToRoad,
+        activeNavigation?.snappedBearingDegrees
+    ) {
         val loc = currentLocation
+        val navSnap = activeNavigation?.takeIf { it.isSnappedToRoad }
         when {
+            navSnap != null && loc != null && loc.speed >= 1.5f ->
+                normalizeHeadingDegrees(navSnap.snappedBearingDegrees)
             loc != null && loc.speed >= 1.5f && loc.bearing.isFinite() -> normalizeHeadingDegrees(loc.bearing)
             compassHeading != null -> compassHeading
+            navSnap != null -> normalizeHeadingDegrees(navSnap.snappedBearingDegrees)
             loc != null && loc.bearing.isFinite() -> normalizeHeadingDegrees(loc.bearing)
             else -> 0f
         }
@@ -616,6 +648,12 @@ fun MapViewComposable(
     val routeEndDrawable = remember(context) {
         createPinBadgeDrawable(context, "B", android.graphics.Color.parseColor("#0F766E"))
     }
+    val navTurnDotDrawable = remember(context) {
+        createPinBadgeDrawable(context, "•", android.graphics.Color.parseColor("#1D4ED8"))
+    }
+    val navDestPinDrawable = remember(context) {
+        createPinBadgeDrawable(context, "★", android.graphics.Color.parseColor("#DC2626"))
+    }
 
     // Cache member & peer avatar drawables to prevent per-second Bitmap allocations
     val avatarDrawableCache = remember { mutableMapOf<String, android.graphics.drawable.Drawable>() }
@@ -679,27 +717,66 @@ fun MapViewComposable(
 
     // Auto-center map ONLY on first genuine fix, or when followUserLocation is enabled AND user hasn't manually panned/zoomed away.
     // Never pass targetZoom on follow ticks (prevents fighting pinch-out / zoom-out gestures).
-    LaunchedEffect(currentLocation, settings.followUserLocation, isFollowPaused, focusedTarget, selectedSearchPin, inspectedTrailName) {
-        if (inspectedTrailName == null && focusedTarget == null && selectedSearchPin == null && currentLocation != null) {
+    LaunchedEffect(
+        currentLocation,
+        activeNavigation?.snappedLatitude,
+        activeNavigation?.snappedLongitude,
+        activeNavigation?.isSnappedToRoad,
+        navPreviewState,
+        settings.followUserLocation,
+        isFollowPaused,
+        focusedTarget,
+        selectedSearchPin,
+        inspectedTrailName
+    ) {
+        val isPreviewActive = navPreviewState !is NavPreviewState.Idle
+        if (!isPreviewActive && inspectedTrailName == null && focusedTarget == null && selectedSearchPin == null && currentLocation != null) {
             val map = mapViewRef
+            val followLat = activeNavigation?.takeIf { it.isSnappedToRoad }?.snappedLatitude ?: currentLocation.latitude
+            val followLon = activeNavigation?.takeIf { it.isSnappedToRoad }?.snappedLongitude ?: currentLocation.longitude
             if (!hasCenteredOnFirstFix) {
-                val targetPt = GeoPoint(currentLocation.latitude, currentLocation.longitude)
+                val targetPt = GeoPoint(followLat, followLon)
                 map?.controller?.animateTo(
                     targetPt,
-                    16.5,
+                    if (activeNavigation != null) 17.5 else 16.5,
                     800L
                 )
                 hasCenteredOnFirstFix = true
                 isShowingNeutralOrigin = false
-                currentOnSaveMapCamera?.invoke(targetPt, 16.5, map?.mapOrientation ?: liveMapOrientation)
+                currentOnSaveMapCamera?.invoke(targetPt, if (activeNavigation != null) 17.5 else 16.5, map?.mapOrientation ?: liveMapOrientation)
             } else if (settings.followUserLocation && !isFollowPaused && !isUserInteractingWithMap) {
                 if (map != null && !map.isAnimating) {
                     isShowingNeutralOrigin = false
                     map.controller.animateTo(
-                        GeoPoint(currentLocation.latitude, currentLocation.longitude)
+                        GeoPoint(followLat, followLon)
                     )
                 }
             }
+        }
+    }
+
+    var localHandledNavPreviewId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(navPreviewState, mapViewRef) {
+        val map = mapViewRef ?: return@LaunchedEffect
+        val previewRoute = when (navPreviewState) {
+            is NavPreviewState.Ready -> navPreviewState.selectedRoute
+            is NavPreviewState.Error -> navPreviewState.cachedFallbackRoute
+            else -> null
+        } ?: return@LaunchedEffect
+        if (previewRoute.id == localHandledNavPreviewId) return@LaunchedEffect
+        val geoPts = previewRoute.points.map { GeoPoint(it.latitude, it.longitude) }
+        if (geoPts.size >= 2) {
+            val box = BoundingBox.fromGeoPointsSafe(geoPts)
+            map.post {
+                try {
+                    map.zoomToBoundingBox(box, true, 140)
+                } catch (_: Exception) {
+                    map.controller.animateTo(geoPts.first(), 14.5, 700L)
+                }
+            }
+            hasCenteredOnFirstFix = true
+            isShowingNeutralOrigin = false
+            localHandledNavPreviewId = previewRoute.id
         }
     }
 
@@ -853,6 +930,7 @@ fun MapViewComposable(
     val geofenceLayer = remember { FolderOverlay() }
     val cellTowerLayer = remember { FolderOverlay() }
     val referenceRouteLayer = remember { FolderOverlay() }
+    val navRouteLayer = remember { FolderOverlay() }
     val trailLayer = remember { FolderOverlay() }
     val peersLayer = remember { FolderOverlay() }
     val staticPinsLayer = remember { FolderOverlay() }
@@ -862,6 +940,7 @@ fun MapViewComposable(
     val lastGeofenceSigHolder = remember { arrayOfNulls<GeofenceLayerSig>(1) }
     val lastCellSigHolder = remember { arrayOfNulls<CellLayerSig>(1) }
     val lastReferenceRouteSigHolder = remember { arrayOfNulls<ReferenceRouteLayerSig>(1) }
+    val lastNavRouteSigHolder = remember { arrayOfNulls<NavRouteLayerSig>(1) }
     val lastTrailSigHolder = remember { arrayOfNulls<TrailLayerSig>(1) }
     val lastPeersSigHolder = remember { arrayOfNulls<PeersLayerSig>(1) }
     val lastStaticPinsSigHolder = remember { arrayOfNulls<StaticPinsLayerSig>(1) }
@@ -1110,6 +1189,7 @@ fun MapViewComposable(
                     map.overlays.add(geofenceLayer)
                     map.overlays.add(cellTowerLayer)
                     map.overlays.add(referenceRouteLayer)
+                    map.overlays.add(navRouteLayer)
                     map.overlays.add(trailLayer)
                     map.overlays.add(peersLayer)
                     map.overlays.add(staticPinsLayer)
@@ -1241,6 +1321,175 @@ fun MapViewComposable(
                                     }
                                 })
                             }
+                        }
+                    }
+                }
+
+                // 0c. Differential Turn-by-Turn Road Navigation Preview & Active Route Layer
+                val previewKeyStr = when (navPreviewState) {
+                    is NavPreviewState.Ready -> navPreviewState.routes.joinToString("|") { it.id }
+                    is NavPreviewState.Error -> navPreviewState.cachedFallbackRoute?.id
+                    else -> null
+                }
+                val previewSelectedIdx = (navPreviewState as? NavPreviewState.Ready)?.selectedIndex ?: 0
+                val navSig = NavRouteLayerSig(
+                    activeRouteId = activeNavigation?.route?.id,
+                    nearestPointIndex = activeNavigation?.nearestPointIndex ?: 0,
+                    isOffRoute = activeNavigation?.isOffRoute == true,
+                    currentStepIndex = activeNavigation?.currentStepIndex ?: 0,
+                    previewKey = previewKeyStr,
+                    previewSelectedIndex = previewSelectedIdx
+                )
+                if (lastNavRouteSigHolder[0] != navSig) {
+                    lastNavRouteSigHolder[0] = navSig
+                    anyLayerChanged = true
+                    navRouteLayer.items.clear()
+
+                    val navPrimaryBlue = android.graphics.Color.parseColor("#1D4ED8")
+                    val navCasingWhite = android.graphics.Color.WHITE
+                    val navTraveledGray = android.graphics.Color.argb(175, 148, 163, 184)
+                    val navOffRouteAmber = android.graphics.Color.parseColor("#D97706")
+                    val navAltSlate = android.graphics.Color.argb(180, 100, 116, 139)
+
+                    if (activeNavigation != null) {
+                        val route = activeNavigation.route
+                        val pts = route.points
+                        if (pts.size >= 2) {
+                            val splitIdx = activeNavigation.nearestPointIndex.coerceIn(0, pts.lastIndex)
+                            if (splitIdx >= 1) {
+                                val passedPts = pts.subList(0, (splitIdx + 1).coerceAtMost(pts.size))
+                                    .map { GeoPoint(it.latitude, it.longitude) }
+                                if (passedPts.size >= 2) {
+                                    navRouteLayer.add(Polyline(map).apply {
+                                        infoWindow = null
+                                        outlinePaint.color = navTraveledGray
+                                        outlinePaint.strokeWidth = 9f
+                                        outlinePaint.strokeCap = Paint.Cap.ROUND
+                                        outlinePaint.strokeJoin = Paint.Join.ROUND
+                                        setPoints(passedPts)
+                                    })
+                                }
+                            }
+
+                            val remPts = pts.subList(splitIdx, pts.size)
+                                .map { GeoPoint(it.latitude, it.longitude) }
+                            if (remPts.size >= 2) {
+                                navRouteLayer.add(Polyline(map).apply {
+                                    infoWindow = null
+                                    outlinePaint.color = navCasingWhite
+                                    outlinePaint.strokeWidth = 17f
+                                    outlinePaint.strokeCap = Paint.Cap.ROUND
+                                    outlinePaint.strokeJoin = Paint.Join.ROUND
+                                    setPoints(remPts)
+                                })
+                                navRouteLayer.add(Polyline(map).apply {
+                                    infoWindow = null
+                                    outlinePaint.color = if (activeNavigation.isOffRoute) navOffRouteAmber else navPrimaryBlue
+                                    outlinePaint.strokeWidth = 11f
+                                    outlinePaint.strokeCap = Paint.Cap.ROUND
+                                    outlinePaint.strokeJoin = Paint.Join.ROUND
+                                    setPoints(remPts)
+                                })
+                            }
+
+                            // Upcoming maneuver turn indicators (capped to next 6 turns for map clarity)
+                            route.steps.drop((activeNavigation.currentStepIndex + 1).coerceAtMost(route.steps.size))
+                                .filter { it.maneuverType != NavManeuverType.START && it.maneuverType != NavManeuverType.ARRIVE }
+                                .take(6)
+                                .forEach { step ->
+                                    val turnPt = pts.getOrNull(step.beginPointIndex.coerceIn(0, pts.lastIndex))
+                                    if (turnPt != null) {
+                                        navRouteLayer.add(Marker(map).apply {
+                                            position = GeoPoint(turnPt.latitude, turnPt.longitude)
+                                            infoWindow = null
+                                            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                            icon = navTurnDotDrawable
+                                            setOnMarkerClickListener { _, _ -> true }
+                                        })
+                                    }
+                                }
+
+                            val endPt = pts.last()
+                            navRouteLayer.add(Marker(map).apply {
+                                position = GeoPoint(endPt.latitude, endPt.longitude)
+                                title = route.destinationName
+                                infoWindow = null
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = navDestPinDrawable
+                                setOnMarkerClickListener { _, _ -> true }
+                            })
+                        }
+                    } else if (navPreviewState is NavPreviewState.Ready) {
+                        val routes = navPreviewState.routes
+                        routes.forEachIndexed { idx, altRoute ->
+                            if (idx != previewSelectedIdx && altRoute.points.size >= 2) {
+                                val altPts = altRoute.points.map { GeoPoint(it.latitude, it.longitude) }
+                                navRouteLayer.add(Polyline(map).apply {
+                                    infoWindow = null
+                                    outlinePaint.color = navAltSlate
+                                    outlinePaint.strokeWidth = 9.5f
+                                    outlinePaint.strokeCap = Paint.Cap.ROUND
+                                    outlinePaint.strokeJoin = Paint.Join.ROUND
+                                    setPoints(altPts)
+                                })
+                            }
+                        }
+                        val selected = navPreviewState.selectedRoute
+                        if (selected != null && selected.points.size >= 2) {
+                            val selPts = selected.points.map { GeoPoint(it.latitude, it.longitude) }
+                            navRouteLayer.add(Polyline(map).apply {
+                                infoWindow = null
+                                outlinePaint.color = navCasingWhite
+                                outlinePaint.strokeWidth = 17f
+                                outlinePaint.strokeCap = Paint.Cap.ROUND
+                                outlinePaint.strokeJoin = Paint.Join.ROUND
+                                setPoints(selPts)
+                            })
+                            navRouteLayer.add(Polyline(map).apply {
+                                infoWindow = null
+                                outlinePaint.color = navPrimaryBlue
+                                outlinePaint.strokeWidth = 11f
+                                outlinePaint.strokeCap = Paint.Cap.ROUND
+                                outlinePaint.strokeJoin = Paint.Join.ROUND
+                                setPoints(selPts)
+                            })
+                            navRouteLayer.add(Marker(map).apply {
+                                position = selPts.first()
+                                infoWindow = null
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = routeStartDrawable
+                                setOnMarkerClickListener { _, _ -> true }
+                            })
+                            navRouteLayer.add(Marker(map).apply {
+                                position = selPts.last()
+                                title = selected.destinationName
+                                infoWindow = null
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = navDestPinDrawable
+                                setOnMarkerClickListener { _, _ -> true }
+                            })
+                        }
+                    } else if (navPreviewState is NavPreviewState.Error && navPreviewState.cachedFallbackRoute != null) {
+                        val cachedRoute = navPreviewState.cachedFallbackRoute
+                        if (cachedRoute.points.size >= 2) {
+                            val pts = cachedRoute.points.map { GeoPoint(it.latitude, it.longitude) }
+                            navRouteLayer.add(Polyline(map).apply {
+                                infoWindow = null
+                                outlinePaint.color = android.graphics.Color.parseColor("#0D9488")
+                                outlinePaint.strokeWidth = 10f
+                                outlinePaint.strokeCap = Paint.Cap.ROUND
+                                outlinePaint.strokeJoin = Paint.Join.ROUND
+                                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(22f, 12f), 0f)
+                                setPoints(pts)
+                            })
+                            navRouteLayer.add(Marker(map).apply {
+                                position = pts.last()
+                                title = cachedRoute.destinationName
+                                infoWindow = null
+                                setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                                icon = navDestPinDrawable
+                                setOnMarkerClickListener { _, _ -> true }
+                            })
                         }
                     }
                 }
@@ -1808,9 +2057,21 @@ fun MapViewComposable(
                 }
 
                 // 5b. Differential User Self Chevron & Target Bearing Guide Vector Layer
+                val snappedNavPt = activeNavigation?.takeIf { it.isSnappedToRoad }
+                val snapProjectionPt = if (activeNavigation?.isOffRoute == true) {
+                    activeNavigation.route.points.getOrNull(
+                        activeNavigation.nearestPointIndex.coerceIn(0, (activeNavigation.route.points.lastIndex).coerceAtLeast(0))
+                    )
+                } else null
                 val userTargetSig = UserTargetLayerSig(
                     currentLocation = currentLocation,
                     resolvedBearing = resolvedUserBearing,
+                    snappedNavLat = snappedNavPt?.snappedLatitude,
+                    snappedNavLon = snappedNavPt?.snappedLongitude,
+                    snappedNavBearing = snappedNavPt?.snappedBearingDegrees,
+                    isOffRoute = activeNavigation?.isOffRoute == true,
+                    snappedToProjLat = snapProjectionPt?.latitude,
+                    snappedToProjLon = snapProjectionPt?.longitude,
                     showAccuracyRing = settings.showAccuracyRing,
                     speedUnit = settings.speedUnit,
                     focusedTarget = focusedTarget,
@@ -1824,9 +2085,12 @@ fun MapViewComposable(
                     anyLayerChanged = true
                     userTargetLayer.items.clear()
 
-                    // Target bearing guide ray (self -> active guide target / focused target / search result / dropped pin)
-                    if (currentLocation != null && !isMapPickMode) {
-                        val selfGeo = GeoPoint(currentLocation.latitude, currentLocation.longitude)
+                    val selfDrawLat = snappedNavPt?.snappedLatitude ?: currentLocation?.latitude
+                    val selfDrawLon = snappedNavPt?.snappedLongitude ?: currentLocation?.longitude
+
+                    // Target bearing guide ray (suppressed during normal on-route road nav; shows off-route return ray when off-route)
+                    if (currentLocation != null && selfDrawLat != null && selfDrawLon != null && !isMapPickMode) {
+                        val selfGeo = GeoPoint(selfDrawLat, selfDrawLon)
                         val validFocus = focusedTarget?.takeIf {
                             isValidCoordinate(it.latitude, it.longitude) && (it.latitude != 0.0 || it.longitude != 0.0)
                         }
@@ -1837,6 +2101,14 @@ fun MapViewComposable(
                         val guideTargetGeo: GeoPoint?
                         val guideRayColor: Int
                         when {
+                            activeNavigation != null && activeNavigation.isOffRoute && snapProjectionPt != null -> {
+                                guideTargetGeo = GeoPoint(snapProjectionPt.latitude, snapProjectionPt.longitude)
+                                guideRayColor = android.graphics.Color.argb(235, 217, 119, 6)
+                            }
+                            activeNavigation != null -> {
+                                guideTargetGeo = null
+                                guideRayColor = 0
+                            }
                             activeGuideTarget != null &&
                                 isValidCoordinate(activeGuideTarget.latitude, activeGuideTarget.longitude) -> {
                                 guideTargetGeo = GeoPoint(activeGuideTarget.latitude, activeGuideTarget.longitude)
@@ -1871,7 +2143,7 @@ fun MapViewComposable(
                         }
                     }
 
-                    if (currentLocation != null) {
+                    if (currentLocation != null && selfDrawLat != null && selfDrawLon != null) {
                         if (settings.showAccuracyRing) {
                             val accuracyPoints = computeCircleGeoPoints(
                                 GeoPoint(currentLocation.latitude, currentLocation.longitude),
@@ -1887,12 +2159,13 @@ fun MapViewComposable(
                         }
 
                         val isCellularFix = currentLocation.provider == "cellular"
+                        val chevronRotation = snappedNavPt?.snappedBearingDegrees ?: resolvedUserBearing
                         userTargetLayer.add(Marker(map).apply {
-                            position = GeoPoint(currentLocation.latitude, currentLocation.longitude)
+                            position = GeoPoint(selfDrawLat, selfDrawLon)
                             // Flat marker locked to geographic bearing relative to map North;
-                            // OSMDroid subtracts mBearing in draw(), so -resolvedUserBearing rotates CW on map canvas.
+                            // OSMDroid subtracts mBearing in draw(), so -chevronRotation rotates CW on map canvas.
                             isFlat = true
-                            rotation = -resolvedUserBearing
+                            rotation = -chevronRotation
                             title = if (isCellularFix) "This Device (Cellular Fix)" else "This Device (GNSS)"
                             val convertedSpeed = currentLocation.speed * settings.speedUnit.multiplier
                             snippet = "Speed: ${String.format(Locale.US, "%.1f", convertedSpeed)} ${settings.speedUnit.label} (${currentLocation.gaitLabel}) • Acc ±${currentLocation.accuracy.toInt()}m"
@@ -1966,8 +2239,9 @@ fun MapViewComposable(
             ?: matchedSearchWaypoint?.altitude
             ?: 0.0
         val hasInspectCoords = inspectLat != null && inspectLon != null && (inspectLat != 0.0 || inspectLon != 0.0)
+        val suppressInspectCardForNav = activeNavigation != null || navPreviewState !is NavPreviewState.Idle
 
-        if (inspectCardTitle != null && inspectCardBadge != null) {
+        if (!suppressInspectCardForNav && inspectCardTitle != null && inspectCardBadge != null) {
             val showRecenterAction = selectedMarkerInfo == null && activeFocus != null && onRecenterSelf != null
             val hasActionRow = hasInspectCoords || showRecenterAction
             Surface(
@@ -2118,6 +2392,47 @@ fun MapViewComposable(
                             if (hasInspectCoords) {
                                 val targetLat = inspectLat!!
                                 val targetLon = inspectLon!!
+                                if (onRequestDirections != null && inspectCardBadge != "GNSS" && inspectCardBadge != "CELL") {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = colorScheme.primary,
+                                        modifier = Modifier
+                                            .heightIn(min = 48.dp)
+                                            .clip(CircleShape)
+                                            .clickable {
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                val destLabel = if (inspectCardTitle == "Dropped Pin") {
+                                                    String.format(Locale.US, "%.4f, %.4f", targetLat, targetLon)
+                                                } else {
+                                                    inspectCardTitle
+                                                }
+                                                onRequestDirections(destLabel, targetLat, targetLon)
+                                            }
+                                            .testTag("inspect_directions_btn")
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 13.dp, vertical = 8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Directions,
+                                                contentDescription = "Get Turn-by-Turn Directions",
+                                                tint = colorScheme.onPrimary,
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text(
+                                                text = "Directions",
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                color = colorScheme.onPrimary
+                                            )
+                                        }
+                                    }
+                                }
+
                                 val isGuidingThis = activeGuideTarget != null &&
                                     abs(activeGuideTarget.latitude - targetLat) < 1e-6 &&
                                     abs(activeGuideTarget.longitude - targetLon) < 1e-6
@@ -2194,13 +2509,13 @@ fun MapViewComposable(
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Directions,
-                                            contentDescription = "Navigate in External Maps App",
+                                            contentDescription = "Open in External Maps App",
                                             tint = colorScheme.secondary,
                                             modifier = Modifier.size(14.dp)
                                         )
                                         Spacer(modifier = Modifier.width(5.dp))
                                         Text(
-                                            text = "Navigate",
+                                            text = "Ext Maps",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.SemiBold,
                                             maxLines = 1,
@@ -2498,25 +2813,29 @@ fun MapViewComposable(
         // Calibrated Live Map Scale Bar (stacks cleanly above recording pill / inspect card)
         val scaleBarBottomPadding = (if (isRecording) 70.dp else 16.dp) +
             bottomOverlayPadding +
-            if (inspectCardTitle != null && inspectCardBadge != null && inspectCardHeightPx > 0) {
+            fabExtraBottomPadding +
+            if (!suppressInspectCardForNav && inspectCardTitle != null && inspectCardBadge != null && inspectCardHeightPx > 0) {
                 with(density) { inspectCardHeightPx.toDp() } + 8.dp
             } else {
                 0.dp
             }
-        MapScaleBarPill(
-            mapView = mapViewRef,
-            zoomLevel = liveZoomLevel,
-            centerLatitude = liveCenterLat,
-            speedUnit = settings.speedUnit,
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 14.dp, bottom = scaleBarBottomPadding)
-                .testTag("map_scale_bar")
-        )
+        if (navPreviewState is NavPreviewState.Idle) {
+            MapScaleBarPill(
+                mapView = mapViewRef,
+                zoomLevel = liveZoomLevel,
+                centerLatitude = liveCenterLat,
+                speedUnit = settings.speedUnit,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 14.dp, bottom = scaleBarBottomPadding)
+                    .testTag("map_scale_bar")
+            )
+        }
 
         // Overlay Map Controls (Level 2 Elevation - Viewport Controls anchored to Bottom-Right, Strictly 12dp corners)
         val isActivelyFollowing = settings.followUserLocation &&
             !isFollowPaused &&
+            navPreviewState is NavPreviewState.Idle &&
             focusedTarget == null &&
             selectedSearchPin == null &&
             inspectedTrailName == null
@@ -2525,7 +2844,7 @@ fun MapViewComposable(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(bottom = 16.dp + bottomOverlayPadding, end = 16.dp),
+                .padding(bottom = 16.dp + bottomOverlayPadding + fabExtraBottomPadding, end = 16.dp),
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {

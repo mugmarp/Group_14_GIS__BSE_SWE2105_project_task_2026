@@ -142,14 +142,19 @@ import com.geotrace.model.MapTileType
 import com.geotrace.model.SearchPlaceResult
 import com.geotrace.model.SearchResultSource
 import com.geotrace.model.TrackingMode
+import com.geotrace.navigation.NavPreviewState
+import com.geotrace.navigation.NavProfile
 import com.geotrace.service.ElevationAnalyzer
 import com.geotrace.service.SolarCalculator
 import com.geotrace.service.formatCompassCardinal
 import com.geotrace.service.normalizeHeadingDegrees
 import com.geotrace.service.shortestAngleDeltaDegrees
+import com.geotrace.ui.components.BottomNavTripBar
 import com.geotrace.ui.components.MapViewComposable
 import com.geotrace.ui.components.OfflineMapsDialog
 import com.geotrace.ui.components.PlaceSearchDialog
+import com.geotrace.ui.components.RoutePreviewCard
+import com.geotrace.ui.components.TopTurnManeuverBanner
 import com.geotrace.ui.components.adaptiveContentWidth
 import com.geotrace.ui.theme.InterFontFamily
 import com.geotrace.ui.theme.JetBrainsMonoFontFamily
@@ -213,6 +218,9 @@ fun MapScreen(
     val routeProgress by viewModel.routeProgress.collectAsState()
     val isBacktrackingActiveTrail by viewModel.isBacktrackingActiveTrail.collectAsState()
     val activeGuideTarget by viewModel.activeGuideTarget.collectAsState()
+    val navPreviewState by viewModel.navPreviewState.collectAsState()
+    val activeNavigation by viewModel.activeNavigation.collectAsState()
+    val voiceGuidanceMode by viewModel.voiceGuidanceMode.collectAsState()
 
     val currentUser by (groupViewModel?.currentUser ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
     val activeGroup by (groupViewModel?.activeGroup ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsState()
@@ -402,17 +410,22 @@ fun MapScreen(
     }
 
 
-    // Intercept Back press while picking a Safe Zone center so user returns cleanly to GeofenceScreen
+    // Intercept Back press while picking a Safe Zone center or previewing turn-by-turn directions
     androidx.activity.compose.BackHandler(enabled = isPickingGeofenceCenter) {
         groupViewModel?.clearMapFocusTarget()
         viewModel.cancelMapPick()
         onReturnToGeofence?.invoke()
     }
+    androidx.activity.compose.BackHandler(enabled = !isPickingGeofenceCenter && navPreviewState !is NavPreviewState.Idle) {
+        viewModel.dismissDirectionsPreview()
+    }
 
-    // Keep screen awake only while actively recording (release when paused)
+    // Keep screen awake while actively recording (unpaused) or actively navigating turn-by-turn
     val activity = context as? Activity
-    DisposableEffect(settings.keepScreenOn, activeSession?.id, activeSession?.isPaused) {
-        if (settings.keepScreenOn && activeSession != null && activeSession?.isPaused != true) {
+    DisposableEffect(settings.keepScreenOn, activeSession?.id, activeSession?.isPaused, activeNavigation != null) {
+        val shouldKeepAwake = activeNavigation != null ||
+            (settings.keepScreenOn && activeSession != null && activeSession?.isPaused != true)
+        if (shouldKeepAwake) {
             activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
         onDispose {
@@ -622,6 +635,20 @@ fun MapScreen(
             onDeleteSavedPlace = { id ->
                 viewModel.deleteSavedPlace(id)
                 Toast.makeText(context, "Saved place removed", Toast.LENGTH_SHORT).show()
+            },
+            navPreviewState = navPreviewState,
+            activeNavigation = activeNavigation,
+            onRequestDirections = { destName, lat, lon ->
+                viewModel.requestDirectionsPreview(
+                    destinationName = destName,
+                    destinationLat = lat,
+                    destinationLon = lon
+                )
+            },
+            fabExtraBottomPadding = when {
+                navPreviewState !is NavPreviewState.Idle -> 218.dp
+                activeNavigation != null -> 86.dp
+                else -> 0.dp
             },
             onCompassStateChanged = { az, lowAcc ->
                 liveCompassAzimuth = az
@@ -1070,7 +1097,19 @@ fun MapScreen(
                     }
             }
 
-            // Quick Floating Badges Row (Edge-to-edge scroll with clean 14dp leading/trailing gutter; zero clipping)
+            // Turn-by-Turn Maneuver Banner (shown immediately below telemetry HUD when navigating)
+            val curNavState = activeNavigation
+            if (!isPickingGeofenceCenter && curNavState != null) {
+                Spacer(modifier = Modifier.height(6.dp))
+                TopTurnManeuverBanner(
+                    navState = curNavState,
+                    onStopNavigation = { viewModel.stopActiveNavigation() },
+                    modifier = Modifier.padding(horizontal = 14.dp)
+                )
+            }
+
+            // Quick Floating Badges Row (hidden during turn-by-turn nav or route preview for clear map space)
+            if (curNavState == null && navPreviewState is NavPreviewState.Idle) {
             val badgesScrollState = rememberScrollState()
             Row(
                 modifier = Modifier
@@ -1685,11 +1724,12 @@ fun MapScreen(
 
                 Spacer(modifier = Modifier.width(6.dp))
             }
+            }
 
             // Line-of-Sight True-North Target Compass Finder Banner
             val guideTarget = activeGuideTarget
             val curLocForGuide = currentLocation
-            if (!isPickingGeofenceCenter && guideTarget != null && curLocForGuide != null) {
+            if (!isPickingGeofenceCenter && curNavState == null && guideTarget != null && curLocForGuide != null) {
                 val targetDistMeters = remember(
                     curLocForGuide.latitude,
                     curLocForGuide.longitude,
@@ -1832,7 +1872,7 @@ fun MapScreen(
                     else -> emptyList()
                 }
             }
-            if (!isPickingGeofenceCenter && activeNavPoints.isNotEmpty()) {
+            if (!isPickingGeofenceCenter && curNavState == null && activeNavPoints.isNotEmpty()) {
                 val routeTitle = activeNavRoute?.name ?: "Backtrack: ${activeSession?.name ?: "Active Trail"}"
                 val progressMatch = routeProgress
                 val offTrailMeters = progressMatch?.crossTrackDistanceMeters ?: 0.0
@@ -2112,7 +2152,12 @@ fun MapScreen(
             }
         }
 
-        // Slim Single-Row Recording Pill (shown ONLY while actively recording; leaves 78dp right clearance for Zoom FABs)
+        // Slim Single-Row Recording Pill (shown ONLY while actively recording; lifts above BottomNavTripBar/RoutePreviewCard)
+        val recordingBottomOffset = when {
+            navPreviewState !is NavPreviewState.Idle -> 14.dp + bottomOverlayPadding + 220.dp
+            activeNavigation != null -> 14.dp + bottomOverlayPadding + 84.dp
+            else -> 14.dp + bottomOverlayPadding
+        }
         if (!isPickingGeofenceCenter && activeSession != null) {
             val session = activeSession!!
             val isPaused = session.isPaused
@@ -2120,7 +2165,7 @@ fun MapScreen(
             Surface(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(start = 14.dp, end = 78.dp, bottom = 14.dp + bottomOverlayPadding)
+                    .padding(start = 14.dp, end = 78.dp, bottom = recordingBottomOffset)
                     .testTag("floating_recording_pill"),
                 shape = RoundedCornerShape(24.dp),
                 color = colorScheme.surface,
@@ -2186,6 +2231,76 @@ fun MapScreen(
                     }
                 }
             }
+        }
+
+        // Bottom Turn-by-Turn Navigation Trip Bar
+        val bottomNavState = activeNavigation
+        if (!isPickingGeofenceCenter && bottomNavState != null) {
+            BottomNavTripBar(
+                navState = bottomNavState,
+                voiceMode = voiceGuidanceMode,
+                isNetworkOnline = isNetworkOnline,
+                onCycleVoiceMode = { viewModel.cycleVoiceGuidanceMode() },
+                onTriggerReroute = { viewModel.triggerManualReroute() },
+                onCacheCorridor = { route ->
+                    viewModel.cacheRouteCorridor(route)
+                    Toast.makeText(context, "Caching route corridor offline...", Toast.LENGTH_SHORT).show()
+                },
+                onStopNavigation = { viewModel.stopActiveNavigation() },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 14.dp, end = 14.dp, bottom = 14.dp + bottomOverlayPadding)
+            )
+        }
+
+        // Bottom Route Preview Card (when requesting directions before Start)
+        if (!isPickingGeofenceCenter && navPreviewState !is NavPreviewState.Idle) {
+            RoutePreviewCard(
+                previewState = navPreviewState,
+                offlineProgress = offlineProgress,
+                isNetworkOnline = isNetworkOnline,
+                onSelectProfile = { profile ->
+                    val (dName, dLat, dLon) = when (val st = navPreviewState) {
+                        is NavPreviewState.Loading -> Triple(st.destinationName, st.destinationLat, st.destinationLon)
+                        is NavPreviewState.Ready -> Triple(st.destinationName, st.destinationLat, st.destinationLon)
+                        is NavPreviewState.Error -> Triple(st.destinationName, st.destinationLat, st.destinationLon)
+                        NavPreviewState.Idle -> return@RoutePreviewCard
+                    }
+                    viewModel.requestDirectionsPreview(
+                        destinationName = dName,
+                        destinationLat = dLat,
+                        destinationLon = dLon,
+                        profile = profile
+                    )
+                },
+                onSelectRoute = { idx -> viewModel.selectPreviewRoute(idx) },
+                onStartNavigation = { route ->
+                    if (!viewModel.startActiveNavigation(route)) {
+                        Toast.makeText(context, "Could not start navigation.", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onCacheCorridor = { route ->
+                    viewModel.cacheRouteCorridor(route)
+                    Toast.makeText(context, "Downloading route corridor offline...", Toast.LENGTH_SHORT).show()
+                },
+                onRetry = {
+                    val (dName, dLat, dLon, prof) = when (val st = navPreviewState) {
+                        is NavPreviewState.Error -> listOf(st.destinationName, st.destinationLat, st.destinationLon, st.profile)
+                        else -> return@RoutePreviewCard
+                    }
+                    @Suppress("UNCHECKED_CAST")
+                    viewModel.requestDirectionsPreview(
+                        destinationName = dName as String,
+                        destinationLat = dLat as Double,
+                        destinationLon = dLon as Double,
+                        profile = prof as NavProfile
+                    )
+                },
+                onDismiss = { viewModel.dismissDirectionsPreview() },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 14.dp, end = 14.dp, bottom = 14.dp + bottomOverlayPadding)
+            )
         }
     }
 

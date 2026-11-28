@@ -28,6 +28,14 @@ import com.geotrace.model.TrackingMode
 import com.geotrace.model.TrackingSession
 import com.geotrace.model.TrailWaypoint
 import com.geotrace.model.TripGroup
+import com.geotrace.navigation.ActiveNavigationState
+import com.geotrace.navigation.NavPreviewState
+import com.geotrace.navigation.NavProfile
+import com.geotrace.navigation.NavRoute
+import com.geotrace.navigation.NavigationEngine
+import com.geotrace.navigation.VoiceGuidanceMode
+import com.geotrace.navigation.formatNavDistance
+import com.geotrace.navigation.formatNavDuration
 import com.geotrace.service.ElevationAnalyzer
 import com.geotrace.service.ElevationSummary
 import com.geotrace.service.LocationForegroundService
@@ -53,6 +61,9 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private val app = application as LocationTrackerApp
     private val repository = app.repository
     private val cellManager = app.cellManager
+    private val routingProvider = app.routingProvider
+    private val voiceGuidance = app.voiceGuidanceManager
+    private val navEngine = NavigationEngine()
 
     val currentLocation: StateFlow<LocationPoint?> = repository.currentLocation
     val lastKnownCachedLocation: StateFlow<LocationPoint?> = repository.lastKnownCachedLocation
@@ -87,6 +98,31 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     private val _routeProgress = MutableStateFlow<com.geotrace.service.RouteProgressMatch?>(null)
     val routeProgress: StateFlow<com.geotrace.service.RouteProgressMatch?> = _routeProgress.asStateFlow()
+
+    private val _navPreviewState = MutableStateFlow<NavPreviewState>(NavPreviewState.Idle)
+    val navPreviewState: StateFlow<NavPreviewState> = _navPreviewState.asStateFlow()
+
+    private val _activeNavRouteFlow = MutableStateFlow<NavRoute?>(null)
+
+    private val _activeNavigation = MutableStateFlow<ActiveNavigationState?>(null)
+    val activeNavigation: StateFlow<ActiveNavigationState?> = _activeNavigation.asStateFlow()
+
+    private val _voiceGuidanceMode = MutableStateFlow(VoiceGuidanceMode.VOICE_ON)
+    val voiceGuidanceMode: StateFlow<VoiceGuidanceMode> = _voiceGuidanceMode.asStateFlow()
+
+    private var routePreviewJob: Job? = null
+    private var rerouteJob: Job? = null
+
+    @Volatile
+    private var isReroutingActive: Boolean = false
+    @Volatile
+    private var isOfflineRerouteBlockedFlag: Boolean = false
+    @Volatile
+    private var rerouteStatusNoteText: String? = null
+    @Volatile
+    private var lastNavNotifSyncMs: Long = 0L
+    @Volatile
+    private var lastNavNotifStepIdx: Int = -1
 
     @Volatile
     private var lastRouteNavKey: String? = null
@@ -252,6 +288,21 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     init {
         viewModelScope.launch {
             repository.awaitInitialRestore()
+            val restoredNav = repository.getActiveNavRoute()
+            if (restoredNav != null) {
+                navEngine.setRoute(restoredNav, resetRerouteCooldown = true)
+                _activeNavRouteFlow.value = restoredNav
+                voiceGuidance.resetForRoute(restoredNav.id)
+                val seedLoc = currentLocation.value ?: lastKnownCachedLocation.value
+                if (seedLoc != null) {
+                    navEngine.onLocationUpdate(seedLoc, _voiceGuidanceMode.value)?.let { out ->
+                        _activeNavigation.value = out.state
+                    }
+                }
+                if (LocationForegroundService.hasLocationPermission(app)) {
+                    LocationForegroundService.startNavigationMode(app)
+                }
+            }
             if (activeSession.value == null && isUiForeground) {
                 startStandbyLocationUpdates()
             }
@@ -268,6 +319,8 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         observeNetworkConnectivity()
         observeGeofencingSync()
         observeRouteNavigation()
+        observeActiveNavigation()
+        observeServiceNavStopSignal()
     }
 
     private fun observeNetworkConnectivity() {
@@ -1183,8 +1236,409 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         )
     }
 
+    private fun observeServiceNavStopSignal() {
+        var lastHandledSignal = repository.navStopRequestedSignal.value
+        viewModelScope.launch {
+            repository.navStopRequestedSignal.collect { signalTs ->
+                if (signalTs > lastHandledSignal) {
+                    lastHandledSignal = signalTs
+                    if (_activeNavRouteFlow.value != null) {
+                        stopActiveNavigation(calledFromService = true)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun observeActiveNavigation() {
+        viewModelScope.launch {
+            combine(
+                currentLocation,
+                _activeNavRouteFlow,
+                _voiceGuidanceMode
+            ) { loc, route, voiceMode ->
+                Triple(loc, route, voiceMode)
+            }.collect { (loc, route, voiceMode) ->
+                if (route == null) {
+                    _activeNavigation.value = null
+                    return@collect
+                }
+                if (loc == null) {
+                    val existing = _activeNavigation.value
+                    if (existing != null && existing.route.id == route.id) {
+                        _activeNavigation.value = existing.copy(voiceMode = voiceMode)
+                    }
+                    return@collect
+                }
+
+                val tick = navEngine.onLocationUpdate(
+                    location = loc,
+                    voiceMode = voiceMode,
+                    isRerouting = isReroutingActive,
+                    isOfflineRerouteBlocked = isOfflineRerouteBlockedFlag,
+                    rerouteStatusNote = rerouteStatusNoteText
+                ) ?: return@collect
+
+                var activeState = tick.state
+                if (!activeState.isOffRoute && isOfflineRerouteBlockedFlag) {
+                    isOfflineRerouteBlockedFlag = false
+                    rerouteStatusNoteText = null
+                    activeState = activeState.copy(
+                        isOfflineRerouteBlocked = false,
+                        rerouteStatusNote = null
+                    )
+                }
+                _activeNavigation.value = activeState
+
+                voiceGuidance.evaluateAndSpeak(activeState, loc.speed)
+
+                val nowMs = System.currentTimeMillis()
+                val stepChanged = activeState.currentStepIndex != lastNavNotifStepIdx
+                if (stepChanged || nowMs - lastNavNotifSyncMs >= 2_500L || activeState.hasArrived || activeState.isOffRoute) {
+                    lastNavNotifStepIdx = activeState.currentStepIndex
+                    lastNavNotifSyncMs = nowMs
+                    val notifSummary = when {
+                        activeState.hasArrived -> "Arrived at ${route.destinationName}"
+                        activeState.isRerouting -> "Off route • Recalculating..."
+                        activeState.isOffRoute -> "Off route (${activeState.crossTrackDistanceMeters.toInt()}m) • ${formatNavDistance(activeState.remainingDistanceMeters)} left"
+                        else -> {
+                            val stepInstr = (activeState.nextStep ?: activeState.currentStep)?.instruction ?: route.destinationName
+                            "${formatNavDistance(activeState.distanceToNextTurnMeters)} • $stepInstr (${formatNavDistance(activeState.remainingDistanceMeters)} • ${formatNavDuration(activeState.remainingDurationSeconds)})"
+                        }
+                    }
+                    repository.updateActiveNavNotificationText(notifSummary)
+                    if (stepChanged || activeState.hasArrived) {
+                        LocationForegroundService.refreshNavigationNotification(app)
+                    }
+                }
+
+                if (tick.shouldRequestReroute) {
+                    navEngine.markRerouteTriggered()
+                    val online = placeSearchManager.isNetworkConnected()
+                    _isNetworkOnline.value = online
+                    if (online) {
+                        launchAutoReroute(loc, route)
+                    } else {
+                        isOfflineRerouteBlockedFlag = true
+                        rerouteStatusNoteText = "Offline — return to highlighted route"
+                        _activeNavigation.value = activeState.copy(
+                            isOfflineRerouteBlocked = true,
+                            rerouteStatusNote = rerouteStatusNoteText
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun launchAutoReroute(origin: LocationPoint, oldRoute: NavRoute) {
+        rerouteJob?.cancel()
+        isReroutingActive = true
+        isOfflineRerouteBlockedFlag = false
+        rerouteStatusNoteText = "Recalculating route..."
+        _activeNavigation.value = _activeNavigation.value?.copy(
+            isRerouting = true,
+            isOfflineRerouteBlocked = false,
+            rerouteStatusNote = rerouteStatusNoteText
+        )
+        rerouteJob = viewModelScope.launch {
+            val res = routingProvider.computeRoutes(
+                originLat = origin.latitude,
+                originLon = origin.longitude,
+                destinationName = oldRoute.destinationName,
+                destinationLat = oldRoute.destinationLat,
+                destinationLon = oldRoute.destinationLon,
+                profile = oldRoute.profile,
+                includeAlternatives = false
+            )
+            if (_activeNavRouteFlow.value == null) return@launch
+            res.onSuccess { routes ->
+                val updated = routes.firstOrNull()
+                if (updated != null) {
+                    isReroutingActive = false
+                    isOfflineRerouteBlockedFlag = false
+                    rerouteStatusNoteText = null
+                    navEngine.setRoute(updated, resetRerouteCooldown = false)
+                    voiceGuidance.resetForRoute(updated.id)
+                    _activeNavRouteFlow.value = updated
+                    repository.saveCachedNavRoute(updated, isActive = true)
+                    voiceGuidance.speakAlert("Route updated.", _voiceGuidanceMode.value)
+                } else {
+                    isReroutingActive = false
+                    rerouteStatusNoteText = "No alternate road route found"
+                    _activeNavigation.value = _activeNavigation.value?.copy(
+                        isRerouting = false,
+                        rerouteStatusNote = rerouteStatusNoteText
+                    )
+                }
+            }.onFailure { err ->
+                isReroutingActive = false
+                val offlineNow = !placeSearchManager.isNetworkConnected()
+                _isNetworkOnline.value = !offlineNow
+                isOfflineRerouteBlockedFlag = offlineNow
+                rerouteStatusNoteText = if (offlineNow) {
+                    "Offline — return to highlighted route"
+                } else {
+                    err.message?.take(60) ?: "Reroute failed; retrying soon"
+                }
+                _activeNavigation.value = _activeNavigation.value?.copy(
+                    isRerouting = false,
+                    isOfflineRerouteBlocked = isOfflineRerouteBlockedFlag,
+                    rerouteStatusNote = rerouteStatusNoteText
+                )
+            }
+        }
+    }
+
+    fun requestDirectionsPreview(
+        destinationName: String,
+        destinationLat: Double,
+        destinationLon: Double,
+        profile: NavProfile = NavProfile.DRIVING
+    ) {
+        if (!destinationLat.isFinite() || !destinationLon.isFinite()) return
+        val origin = currentLocation.value ?: lastKnownCachedLocation.value
+        if (origin == null) {
+            _navPreviewState.value = NavPreviewState.Error(
+                destinationName = destinationName,
+                destinationLat = destinationLat,
+                destinationLon = destinationLon,
+                profile = profile,
+                message = "Waiting for a GPS or cached position before calculating directions.",
+                cachedFallbackRoute = null
+            )
+            return
+        }
+
+        routePreviewJob?.cancel()
+        _isMapFollowPaused.value = true
+        _navPreviewState.value = NavPreviewState.Loading(
+            destinationName = destinationName,
+            destinationLat = destinationLat,
+            destinationLon = destinationLon,
+            profile = profile
+        )
+
+        routePreviewJob = viewModelScope.launch {
+            val onlineNow = placeSearchManager.isNetworkConnected()
+            _isNetworkOnline.value = onlineNow
+            val cachedFallback = repository.findCachedNavRouteNear(destinationLat, destinationLon, profile)
+
+            if (!onlineNow) {
+                _navPreviewState.value = NavPreviewState.Error(
+                    destinationName = destinationName,
+                    destinationLat = destinationLat,
+                    destinationLon = destinationLon,
+                    profile = profile,
+                    message = if (cachedFallback != null) {
+                        "Device is offline. A cached route to this destination is available."
+                    } else {
+                        "Device is offline and no cached route matches this destination."
+                    },
+                    cachedFallbackRoute = cachedFallback
+                )
+                return@launch
+            }
+
+            val result = routingProvider.computeRoutes(
+                originLat = origin.latitude,
+                originLon = origin.longitude,
+                destinationName = destinationName,
+                destinationLat = destinationLat,
+                destinationLon = destinationLon,
+                profile = profile,
+                includeAlternatives = true
+            )
+            result.onSuccess { routes ->
+                if (routes.isNotEmpty()) {
+                    repository.saveCachedNavRoute(routes.first(), isActive = false)
+                    _navPreviewState.value = NavPreviewState.Ready(
+                        destinationName = destinationName,
+                        destinationLat = destinationLat,
+                        destinationLon = destinationLon,
+                        profile = profile,
+                        routes = routes,
+                        selectedIndex = 0
+                    )
+                } else {
+                    _navPreviewState.value = NavPreviewState.Error(
+                        destinationName = destinationName,
+                        destinationLat = destinationLat,
+                        destinationLon = destinationLon,
+                        profile = profile,
+                        message = "No road route could be calculated for ${profile.label}.",
+                        cachedFallbackRoute = cachedFallback
+                    )
+                }
+            }.onFailure { err ->
+                _navPreviewState.value = NavPreviewState.Error(
+                    destinationName = destinationName,
+                    destinationLat = destinationLat,
+                    destinationLon = destinationLon,
+                    profile = profile,
+                    message = err.message ?: "Unable to fetch directions.",
+                    cachedFallbackRoute = cachedFallback
+                )
+            }
+        }
+    }
+
+    fun selectPreviewRoute(index: Int) {
+        val current = _navPreviewState.value as? NavPreviewState.Ready ?: return
+        if (current.routes.isEmpty()) return
+        _navPreviewState.value = current.copy(selectedIndex = index.coerceIn(0, current.routes.lastIndex))
+    }
+
+    fun dismissDirectionsPreview() {
+        routePreviewJob?.cancel()
+        _navPreviewState.value = NavPreviewState.Idle
+    }
+
+    fun startActiveNavigation(routeOverride: NavRoute? = null): Boolean {
+        val chosenRoute = routeOverride
+            ?: (_navPreviewState.value as? NavPreviewState.Ready)?.selectedRoute
+            ?: (_navPreviewState.value as? NavPreviewState.Error)?.cachedFallbackRoute
+            ?: return false
+
+        routePreviewJob?.cancel()
+        rerouteJob?.cancel()
+        _navPreviewState.value = NavPreviewState.Idle
+        _importedRoute.value = null
+        _isBacktrackingActiveTrail.value = false
+        if (_activeGuideTarget.value?.badge == "ROUTE" || _activeGuideTarget.value?.badge == "BACKTRACK") {
+            _activeGuideTarget.value = null
+        }
+        _inspectedTrail.value = null
+        _selectedSearchPin.value = null
+        toggleFollowUser(true)
+
+        isReroutingActive = false
+        isOfflineRerouteBlockedFlag = false
+        rerouteStatusNoteText = null
+        lastNavNotifStepIdx = -1
+        lastNavNotifSyncMs = 0L
+
+        navEngine.setRoute(chosenRoute, resetRerouteCooldown = true)
+        voiceGuidance.ensureInitialized()
+        voiceGuidance.resetForRoute(chosenRoute.id)
+        _activeNavRouteFlow.value = chosenRoute
+
+        val seedLoc = currentLocation.value ?: lastKnownCachedLocation.value
+        if (seedLoc != null) {
+            navEngine.onLocationUpdate(seedLoc, _voiceGuidanceMode.value)?.let { tick ->
+                _activeNavigation.value = tick.state
+                voiceGuidance.evaluateAndSpeak(tick.state, seedLoc.speed)
+            }
+        } else {
+            val firstStep = chosenRoute.steps.firstOrNull()
+            val secondStep = chosenRoute.steps.getOrNull(1)
+            val fallbackPoint = chosenRoute.points.firstOrNull()
+            _activeNavigation.value = ActiveNavigationState(
+                route = chosenRoute,
+                currentStepIndex = 0,
+                currentStep = firstStep,
+                nextStep = secondStep,
+                distanceToNextTurnMeters = firstStep?.distanceMeters ?: chosenRoute.totalDistanceMeters,
+                remainingDistanceMeters = chosenRoute.totalDistanceMeters,
+                remainingDurationSeconds = chosenRoute.totalDurationSeconds,
+                etaEpochMs = System.currentTimeMillis() + (chosenRoute.totalDurationSeconds * 1000.0).toLong(),
+                nearestPointIndex = 0,
+                crossTrackDistanceMeters = 0.0,
+                snappedLatitude = fallbackPoint?.latitude ?: chosenRoute.originLat,
+                snappedLongitude = fallbackPoint?.longitude ?: chosenRoute.originLon,
+                snappedBearingDegrees = 0f,
+                isSnappedToRoad = true,
+                isOffRoute = false,
+                voiceMode = _voiceGuidanceMode.value
+            )
+        }
+
+        val firstInstr = chosenRoute.steps.firstOrNull()?.instruction ?: "Proceed to ${chosenRoute.destinationName}"
+        repository.updateActiveNavNotificationText(
+            "$firstInstr • ${chosenRoute.formattedDistance} (${chosenRoute.formattedDuration})"
+        )
+        viewModelScope.launch {
+            repository.saveCachedNavRoute(chosenRoute, isActive = true)
+        }
+        LocationForegroundService.startNavigationMode(app)
+        return true
+    }
+
+    fun stopActiveNavigation(calledFromService: Boolean = false) {
+        rerouteJob?.cancel()
+        isReroutingActive = false
+        isOfflineRerouteBlockedFlag = false
+        rerouteStatusNoteText = null
+        lastNavNotifStepIdx = -1
+        lastNavNotifSyncMs = 0L
+
+        navEngine.clear()
+        voiceGuidance.stopSpeaking()
+        _activeNavRouteFlow.value = null
+        _activeNavigation.value = null
+        repository.updateActiveNavNotificationText(null)
+        viewModelScope.launch {
+            repository.clearActiveNavRouteFlag()
+        }
+        if (!calledFromService) {
+            LocationForegroundService.stopNavigationMode(app)
+        }
+        if (activeSession.value == null && isUiForeground) {
+            startStandbyLocationUpdates()
+        }
+    }
+
+    fun cycleVoiceGuidanceMode() {
+        val next = when (_voiceGuidanceMode.value) {
+            VoiceGuidanceMode.VOICE_ON -> VoiceGuidanceMode.ALERTS_ONLY
+            VoiceGuidanceMode.ALERTS_ONLY -> VoiceGuidanceMode.MUTED
+            VoiceGuidanceMode.MUTED -> VoiceGuidanceMode.VOICE_ON
+        }
+        _voiceGuidanceMode.value = next
+        if (next == VoiceGuidanceMode.MUTED) {
+            voiceGuidance.stopSpeaking()
+        } else {
+            val prompt = if (next == VoiceGuidanceMode.VOICE_ON) "Voice guidance on." else "Voice alerts only."
+            voiceGuidance.speakAlert(prompt, next)
+        }
+    }
+
+    fun triggerManualReroute() {
+        val route = _activeNavRouteFlow.value ?: return
+        val loc = currentLocation.value ?: lastKnownCachedLocation.value ?: return
+        val online = placeSearchManager.isNetworkConnected()
+        _isNetworkOnline.value = online
+        if (!online) {
+            isOfflineRerouteBlockedFlag = true
+            rerouteStatusNoteText = "Offline — return to highlighted route"
+            _activeNavigation.value = _activeNavigation.value?.copy(
+                isOfflineRerouteBlocked = true,
+                rerouteStatusNote = rerouteStatusNoteText
+            )
+            return
+        }
+        navEngine.markRerouteTriggered()
+        launchAutoReroute(loc, route)
+    }
+
+    fun cacheRouteCorridor(route: NavRoute) {
+        if (route.points.size < 2) return
+        val safeName = "Route: ${route.destinationName.take(26)}"
+        app.startCorridorOfflineDownload(
+            name = safeName,
+            points = route.points,
+            halfWidthKm = 1.0,
+            tileType = settings.value.mapTileType,
+            minZoom = 12,
+            maxZoom = 16
+        )
+    }
+
     override fun onCleared() {
         super.onCleared()
+        routePreviewJob?.cancel()
+        rerouteJob?.cancel()
+        voiceGuidance.stopSpeaking()
         stopStandbyLocationUpdates()
         standbyCellJob?.cancel()
         networkCallback?.let { cb ->

@@ -133,19 +133,18 @@ class NavigationEngine {
         val steps = route.steps
         var stepIdx = lastMatchedStepIndex.coerceIn(0, (steps.lastIndex).coerceAtLeast(0))
         if (steps.isNotEmpty()) {
-            // Find the step covering chosenMatch.segIndex (monotonic forward unless user jumped far back via global match)
+            // Segment segIndex runs from point[segIndex] to point[segIndex + 1], so a step owns [beginPointIndex, endPointIndex)
             val candidateIdx = steps.indexOfFirst { st ->
-                chosenMatch.segIndex in st.beginPointIndex..st.endPointIndex.coerceAtLeast(st.beginPointIndex)
+                chosenMatch.segIndex >= st.beginPointIndex && chosenMatch.segIndex < st.endPointIndex
+            }.let { found ->
+                if (found >= 0) found
+                else steps.indexOfLast { st -> chosenMatch.segIndex >= st.beginPointIndex }
             }
             if (candidateIdx >= 0) {
                 stepIdx = if (candidateIdx >= stepIdx || chosenMatch.distanceMeters <= 25.0) {
                     candidateIdx
                 } else {
                     stepIdx
-                }
-            } else {
-                while (stepIdx < steps.lastIndex && chosenMatch.segIndex >= steps[stepIdx].endPointIndex) {
-                    stepIdx++
                 }
             }
             lastMatchedStepIndex = stepIdx
@@ -188,7 +187,11 @@ class NavigationEngine {
         val reliableForOffRoute = location.provider != "cellular" &&
             (location.accuracy <= 0f || location.accuracy <= 40f)
         var shouldRequestReroute = false
-        if (!hasArrivedLatched && reliableForOffRoute) {
+        if (hasArrivedLatched) {
+            offRouteFixCount = 0
+            offRouteStartedMs = 0L
+            isOffRouteLatched = false
+        } else if (reliableForOffRoute) {
             if (chosenMatch.distanceMeters > OFF_ROUTE_ENTER_METERS) {
                 if (offRouteFixCount == 0) {
                     offRouteStartedMs = nowMs
