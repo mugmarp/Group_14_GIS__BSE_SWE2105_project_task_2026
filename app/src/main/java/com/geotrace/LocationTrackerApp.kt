@@ -219,4 +219,118 @@ class LocationTrackerApp : Application() {
             offlineRoutingPackManager.buildOrRefreshPackForRegion(region)
         }
     }
+
+    fun cancelOfflineRegionRoads(regionId: String) {
+        offlineRoutingPackManager.cancelIndexing(regionId)
+    }
+
+    fun startRoadOnlyRegionDownload(
+        name: String,
+        box: BoundingBox?,
+        corridorPoints: List<LocationPoint>?,
+        halfWidthKm: Double = 1.5,
+        tileType: MapTileType
+    ) {
+        val isCorridor = corridorPoints != null && corridorPoints.size >= 2
+        val rawBoxes = if (isCorridor) {
+            OfflineMapManager.computeCorridorBoxes(corridorPoints!!, halfWidthKm = halfWidthKm)
+        } else {
+            emptyList()
+        }
+        val overallUnion = if (isCorridor && rawBoxes.isNotEmpty()) {
+            OfflineMapManager.unionBoundingBox(rawBoxes)
+        } else {
+            null
+        }
+        val finalNorth = overallUnion?.north ?: box?.latNorth ?: return
+        val finalSouth = overallUnion?.south ?: box?.latSouth ?: return
+        val finalEast = overallUnion?.east ?: box?.lonEast ?: return
+        val finalWest = overallUnion?.west ?: box?.lonWest ?: return
+
+        val region = OfflineMapRegion(
+            id = java.util.UUID.randomUUID().toString(),
+            name = name.trim().ifBlank { if (isCorridor) "Offline Road Corridor" else "Offline Road Pack" },
+            northLat = finalNorth,
+            southLat = finalSouth,
+            eastLng = finalEast,
+            westLng = finalWest,
+            tileType = tileType,
+            minZoom = 12,
+            maxZoom = 14,
+            tileCount = 0,
+            estimatedSizeMb = 0f,
+            downloadedAtMs = System.currentTimeMillis(),
+            isCorridor = isCorridor,
+            corridorBoxes = rawBoxes.map {
+                com.geotrace.model.OfflineCorridorBox(it.north, it.south, it.east, it.west)
+            }
+        )
+        com.geotrace.service.OfflineDownloadService.start(this)
+        _poiIndexingRegionIds.update { it + region.id }
+        appScope.launch {
+            try {
+                repository.saveOfflineMapRegion(region)
+                offlineRoutingPackManager.buildOrRefreshPackForRegion(region)
+                val outcome = if (isCorridor) {
+                    placeSearchManager.fetchCorridorBoxesPoisForOfflineCacheWithStatus(region)
+                } else {
+                    placeSearchManager.fetchRegionPoisForOfflineCacheWithStatus(region)
+                }
+                if (outcome.pois.isNotEmpty()) {
+                    repository.saveOfflinePlaces(region.id, outcome.pois)
+                }
+            } finally {
+                _poiIndexingRegionIds.update { it - region.id }
+            }
+        }
+    }
+
+    fun cacheNavRouteCorridor(
+        route: com.geotrace.navigation.NavRoute,
+        preferredTileType: MapTileType
+    ): String {
+        if (route.points.size < 2) return "Route has too few points to cache."
+        val safeName = "Route: ${route.destinationName.take(26)}"
+
+        if (preferredTileType.supportsOfflineBulkDownload && !offlineMapManager.downloadProgress.value.isDownloading) {
+            val usedMb = offlineMapManager.cacheSizeMb.value
+            for (maxZ in listOf(16, 15, 14)) {
+                val (tiles, mb, _) = OfflineMapManager.estimateCorridorTilesAndMb(
+                    points = route.points,
+                    halfWidthKm = 1.0,
+                    tileType = preferredTileType,
+                    minZoom = 12,
+                    maxZoom = maxZ
+                )
+                if (tiles in 1..OfflineMapManager.MAX_TILES_PER_DOWNLOAD &&
+                    (usedMb + mb) <= OfflineMapManager.MAX_CACHE_BYTES_MB
+                ) {
+                    startCorridorOfflineDownload(
+                        name = safeName,
+                        points = route.points,
+                        halfWidthKm = 1.0,
+                        tileType = preferredTileType,
+                        minZoom = 12,
+                        maxZoom = maxZ,
+                        includeRoads = true
+                    )
+                    return "Downloading corridor tiles (Z12–$maxZ) & offline roads..."
+                }
+            }
+        }
+
+        // Decoupled fallback: >2,500-tile routes, OSM Streets, or busy tile queue still get full offline road graph
+        startRoadOnlyRegionDownload(
+            name = safeName,
+            box = null,
+            corridorPoints = route.points,
+            halfWidthKm = 1.5,
+            tileType = preferredTileType
+        )
+        return if (!preferredTileType.supportsOfflineBulkDownload) {
+            "Downloading offline road network (OSM Streets tiles auto-cache)..."
+        } else {
+            "Long route (>2,500 tiles): downloading full offline road network..."
+        }
+    }
 }

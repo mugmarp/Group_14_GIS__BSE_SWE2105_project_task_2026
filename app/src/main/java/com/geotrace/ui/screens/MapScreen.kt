@@ -144,6 +144,7 @@ import com.geotrace.model.SearchResultSource
 import com.geotrace.model.TrackingMode
 import com.geotrace.navigation.NavPreviewState
 import com.geotrace.navigation.NavProfile
+import com.geotrace.navigation.NavRoute
 import com.geotrace.service.ElevationAnalyzer
 import com.geotrace.service.SolarCalculator
 import com.geotrace.service.formatCompassCardinal
@@ -155,6 +156,7 @@ import com.geotrace.ui.components.OfflineMapsDialog
 import com.geotrace.ui.components.PlaceSearchDialog
 import com.geotrace.ui.components.RoutePreviewCard
 import com.geotrace.ui.components.TopTurnManeuverBanner
+import com.geotrace.ui.components.TurnByTurnStepsSheet
 import com.geotrace.ui.components.adaptiveContentWidth
 import com.geotrace.ui.theme.InterFontFamily
 import com.geotrace.ui.theme.JetBrainsMonoFontFamily
@@ -324,6 +326,7 @@ fun MapScreen(
     var sessionNameInput by rememberSaveable { mutableStateOf("") }
     var isHeaderExpanded by rememberSaveable { mutableStateOf(false) }
     var showParkedSpotDialog by rememberSaveable { mutableStateOf(false) }
+    var showNavStepsSheetRoute by remember { mutableStateOf<NavRoute?>(null) }
     var liveCompassAzimuth by remember { mutableStateOf<Float?>(null) }
     var isCompassLowAccuracy by remember { mutableStateOf(false) }
     var vectorCoordsCopied by remember { mutableStateOf(false) }
@@ -638,6 +641,7 @@ fun MapScreen(
             },
             navPreviewState = navPreviewState,
             activeNavigation = activeNavigation,
+            onSelectPreviewRoute = { idx -> viewModel.selectPreviewRoute(idx) },
             onRequestDirections = { destName, lat, lon ->
                 viewModel.requestDirectionsPreview(
                     destinationName = destName,
@@ -1104,6 +1108,7 @@ fun MapScreen(
                 TopTurnManeuverBanner(
                     navState = curNavState,
                     onStopNavigation = { viewModel.stopActiveNavigation() },
+                    onExpandSteps = { showNavStepsSheetRoute = curNavState.route },
                     modifier = Modifier.padding(horizontal = 14.dp)
                 )
             }
@@ -2243,8 +2248,8 @@ fun MapScreen(
                 onCycleVoiceMode = { viewModel.cycleVoiceGuidanceMode() },
                 onTriggerReroute = { viewModel.triggerManualReroute() },
                 onCacheCorridor = { route ->
-                    viewModel.cacheRouteCorridor(route)
-                    Toast.makeText(context, "Caching route corridor offline...", Toast.LENGTH_SHORT).show()
+                    val msg = viewModel.cacheRouteCorridor(route)
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 },
                 onStopNavigation = { viewModel.stopActiveNavigation() },
                 modifier = Modifier
@@ -2280,8 +2285,8 @@ fun MapScreen(
                     }
                 },
                 onCacheCorridor = { route ->
-                    viewModel.cacheRouteCorridor(route)
-                    Toast.makeText(context, "Downloading route corridor offline...", Toast.LENGTH_SHORT).show()
+                    val msg = viewModel.cacheRouteCorridor(route)
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                 },
                 onRetry = {
                     val (dName, dLat, dLon, prof) = when (val st = navPreviewState) {
@@ -2297,11 +2302,24 @@ fun MapScreen(
                     )
                 },
                 onDismiss = { viewModel.dismissDirectionsPreview() },
+                onViewSteps = { route -> showNavStepsSheetRoute = route },
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(start = 14.dp, end = 14.dp, bottom = 14.dp + bottomOverlayPadding)
             )
         }
+    }
+
+    val sheetRoute = showNavStepsSheetRoute
+    if (sheetRoute != null) {
+        val syncedNav = activeNavigation
+        val displayRoute = syncedNav?.route ?: sheetRoute
+        TurnByTurnStepsSheet(
+            route = displayRoute,
+            currentStepIndex = syncedNav?.currentStepIndex,
+            distanceToNextTurnMeters = syncedNav?.distanceToNextTurnMeters,
+            onDismiss = { showNavStepsSheetRoute = null }
+        )
     }
 
     // Drop Manual Waypoint (<wpt>) Dialog

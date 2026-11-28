@@ -1659,17 +1659,13 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun cacheRouteCorridor(route: NavRoute) {
-        if (route.points.size < 2) return
-        val safeName = "Route: ${route.destinationName.take(26)}"
-        app.startCorridorOfflineDownload(
-            name = safeName,
-            points = route.points,
-            halfWidthKm = 1.0,
-            tileType = settings.value.mapTileType,
-            minZoom = 12,
-            maxZoom = 16
-        )
+    fun cacheRouteCorridor(route: NavRoute): String {
+        if (route.points.size < 2) return "Route has too few points to cache."
+        val isActive = _activeNavRouteFlow.value?.id == route.id
+        viewModelScope.launch {
+            repository.saveCachedNavRoute(route, isActive = isActive)
+        }
+        return app.cacheNavRouteCorridor(route, settings.value.mapTileType)
     }
 
     override fun onCleared() {
@@ -2206,12 +2202,26 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         app.startCorridorOfflineDownload(name, points, halfWidthKm, tileType, minZoom, maxZoom, includeRoads)
     }
 
+    fun startRoadOnlyRegionDownload(
+        name: String,
+        box: org.osmdroid.util.BoundingBox?,
+        corridorPoints: List<LocationPoint>?,
+        halfWidthKm: Double = 1.5,
+        tileType: MapTileType
+    ) {
+        app.startRoadOnlyRegionDownload(name, box, corridorPoints, halfWidthKm, tileType)
+    }
+
     fun refreshOfflineRegionPois(region: OfflineMapRegion) {
         app.refreshOfflineRegionPois(region)
     }
 
     fun refreshOfflineRegionRoads(region: OfflineMapRegion) {
         app.refreshOfflineRegionRoads(region)
+    }
+
+    fun cancelOfflineRegionRoads(regionId: String) {
+        app.cancelOfflineRegionRoads(regionId)
     }
 
     fun clearOfflinePoiStatus() {
@@ -2232,9 +2242,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteOfflineMapRegion(id: String) {
         viewModelScope.launch {
+            offlineRoutingPackManager.cancelIndexing(id)
             val (deleted, remaining) = repository.deleteOfflineMapRegion(id)
             offlineRoutingPackManager.deletePack(id)
-            if (deleted != null) {
+            if (deleted != null && deleted.tileCount > 0) {
                 offlineMapManager.deleteTilesForRegion(deleted, remaining)
             }
         }

@@ -14,10 +14,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,12 +28,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.AltRoute
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
 import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
+import androidx.compose.material.icons.automirrored.filled.FormatListBulleted
 import androidx.compose.material.icons.automirrored.filled.MergeType
 import androidx.compose.material.icons.automirrored.filled.VolumeOff
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.DirectionsCar
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.NotificationsActive
@@ -50,16 +56,21 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -122,6 +133,7 @@ fun RoutePreviewCard(
     onCacheCorridor: (NavRoute) -> Unit,
     onRetry: () -> Unit,
     onDismiss: () -> Unit,
+    onViewSteps: ((NavRoute) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     if (previewState is NavPreviewState.Idle) return
@@ -423,6 +435,19 @@ fun RoutePreviewCard(
                                     )
                                 }
                             }
+                            if (onViewSteps != null && selectedRoute.steps.isNotEmpty()) {
+                                FilledTonalIconButton(
+                                    onClick = { onViewSteps(selectedRoute) },
+                                    modifier = Modifier
+                                        .size(48.dp)
+                                        .testTag("nav_preview_steps_btn")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.FormatListBulleted,
+                                        contentDescription = "View Turn-by-Turn Steps"
+                                    )
+                                }
+                            }
                             Button(
                                 onClick = { onStartNavigation(selectedRoute) },
                                 shape = CircleShape,
@@ -457,6 +482,7 @@ fun RoutePreviewCard(
 fun TopTurnManeuverBanner(
     navState: ActiveNavigationState,
     onStopNavigation: () -> Unit,
+    onExpandSteps: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -492,7 +518,14 @@ fun TopTurnManeuverBanner(
             color = containerColor,
             shadowElevation = 6.dp,
             border = BorderStroke(1.5.dp, borderColor),
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(22.dp))
+                .then(
+                    if (!navState.hasArrived && onExpandSteps != null) {
+                        Modifier.clickable { onExpandSteps() }
+                    } else Modifier
+                )
         ) {
             Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
                 Row(
@@ -579,6 +612,33 @@ fun TopTurnManeuverBanner(
                                 .testTag("nav_arrived_done_btn")
                         ) {
                             Text("Done", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else if (onExpandSteps != null) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Surface(
+                            shape = CircleShape,
+                            color = colorScheme.surface.copy(alpha = 0.72f),
+                            modifier = Modifier
+                                .heightIn(min = 36.dp)
+                                .testTag("nav_banner_steps_pill")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "${navState.route.steps.size}",
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = contentColor
+                                )
+                                Icon(
+                                    imageVector = Icons.Default.ExpandMore,
+                                    contentDescription = "Show All Turn-by-Turn Steps",
+                                    tint = contentColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -747,6 +807,227 @@ fun BottomNavTripBar(
                     .testTag("nav_end_btn")
             ) {
                 Text("End", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TurnByTurnStepsSheet(
+    route: NavRoute,
+    currentStepIndex: Int? = null,
+    distanceToNextTurnMeters: Double? = null,
+    onDismiss: () -> Unit
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val nextManeuverIdx = currentStepIndex?.let { idx ->
+        (idx + 1).coerceAtMost((route.steps.size - 1).coerceAtLeast(0))
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = colorScheme.surface,
+        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+        modifier = Modifier.testTag("turn_by_turn_steps_sheet")
+    ) {
+        Column(
+            modifier = Modifier
+                .adaptiveContentWidth()
+                .fillMaxWidth()
+                .align(Alignment.CenterHorizontally)
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "TURN-BY-TURN STEPS",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.05.sp,
+                        color = colorScheme.primary
+                    )
+                    Text(
+                        text = route.destinationName.ifBlank { "Route Directions" },
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = "${route.formattedDuration} • ${route.formattedDistance} • ${route.profile.label} • ${route.source.label}",
+                        fontSize = 11.5.sp,
+                        color = colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("close_turn_steps_sheet_btn")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close Turn-by-Turn Steps",
+                        tint = colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.6f))
+
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 460.dp),
+                contentPadding = PaddingValues(vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(
+                    items = route.steps,
+                    key = { "${it.index}_${it.beginPointIndex}" }
+                ) { step ->
+                    val isCompleted = currentStepIndex != null && step.index < currentStepIndex
+                    val isCurrentLeg = currentStepIndex != null && step.index == currentStepIndex
+                    val isUpcomingTurn = nextManeuverIdx != null && step.index == nextManeuverIdx && !isCompleted
+
+                    val cardColor = when {
+                        isUpcomingTurn -> colorScheme.primaryContainer.copy(alpha = 0.65f).compositeOver(colorScheme.surface)
+                        isCurrentLeg -> colorScheme.secondaryContainer.copy(alpha = 0.45f).compositeOver(colorScheme.surface)
+                        else -> colorScheme.surfaceContainerLow
+                    }
+                    val borderColor = when {
+                        isUpcomingTurn -> colorScheme.primary
+                        isCurrentLeg -> colorScheme.secondary.copy(alpha = 0.65f)
+                        else -> colorScheme.outlineVariant.copy(alpha = 0.55f)
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(16.dp),
+                        color = cardColor,
+                        border = BorderStroke(if (isUpcomingTurn) 1.5.dp else 1.dp, borderColor),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("turn_step_item_${step.index}")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(
+                                        when {
+                                            isCompleted -> colorScheme.outlineVariant.copy(alpha = 0.3f)
+                                            isUpcomingTurn -> colorScheme.primary.copy(alpha = 0.16f)
+                                            else -> colorScheme.surface
+                                        }
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = if (isCompleted) Icons.Default.CheckCircle else maneuverIcon(step.maneuverType),
+                                    contentDescription = step.instruction,
+                                    tint = when {
+                                        isCompleted -> colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                                        isUpcomingTurn -> colorScheme.primary
+                                        else -> colorScheme.onSurface
+                                    },
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    if (isUpcomingTurn) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = colorScheme.primary
+                                        ) {
+                                            Text(
+                                                text = if (distanceToNextTurnMeters != null) {
+                                                    "IN ${formatNavDistance(distanceToNextTurnMeters).uppercase(Locale.US)}"
+                                                } else "NEXT",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = colorScheme.onPrimary,
+                                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    } else if (isCurrentLeg) {
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = colorScheme.secondary
+                                        ) {
+                                            Text(
+                                                text = "NOW",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = colorScheme.onSecondary,
+                                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = step.instruction.ifBlank { "Continue on route" },
+                                        fontSize = 13.sp,
+                                        fontWeight = if (isUpcomingTurn || isCurrentLeg) FontWeight.Bold else FontWeight.SemiBold,
+                                        color = if (isCompleted) colorScheme.onSurfaceVariant.copy(alpha = 0.7f) else colorScheme.onSurface,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                }
+
+                                val subDetails = buildList {
+                                    if (step.streetName.isNotBlank() && !step.instruction.contains(step.streetName, ignoreCase = true)) {
+                                        add(step.streetName)
+                                    }
+                                    if (step.roundaboutExit != null) {
+                                        add("Exit ${step.roundaboutExit}")
+                                    }
+                                    if (step.distanceMeters > 0.0) {
+                                        add(formatNavDistance(step.distanceMeters))
+                                    }
+                                    if (step.durationSeconds > 0.0) {
+                                        add(formatNavDuration(step.durationSeconds))
+                                    }
+                                }.joinToString(" • ")
+
+                                if (subDetails.isNotBlank()) {
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = subDetails,
+                                        fontSize = 11.sp,
+                                        color = colorScheme.onSurfaceVariant.copy(alpha = if (isCompleted) 0.65f else 0.9f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

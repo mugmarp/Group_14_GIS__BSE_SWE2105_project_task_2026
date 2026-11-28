@@ -9,7 +9,9 @@ import com.geotrace.model.OfflineMapRegion
 import com.geotrace.service.OfflineMapManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +30,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.min
@@ -42,17 +45,80 @@ class OfflineRoutingPackManager(
         private const val PACK_DIR_NAME = "offline_routing"
         private const val USER_AGENT = "GeoTrace-GIS-FieldApp/${BuildConfig.VERSION_NAME} (Android)"
         private const val TILE_SPAN_DEG = 0.11
-        private const val MAX_REGION_HALF_SPAN_DEG = 0.18 // ~40km x 40km road pack cap per region
+        const val MAX_REGION_HALF_SPAN_DEG = 0.18 // ~40km x 40km road pack cap per region
         private const val PACK_MATCH_BUFFER_DEG = 0.025  // ~2.7km snap margin outside pack border
 
         private val HIGHWAY_REGEX =
             "^(motorway|motorway_link|trunk|trunk_link|primary|primary_link|secondary|secondary_link|tertiary|tertiary_link|unclassified|residential|living_street|service|track|path|cycleway|footway|pedestrian|steps)$"
+
+        /**
+         * Splits corridor boxes into tight Overpass query windows, preventing long diagonal strips
+         * from merging into oversized rectangular bounding boxes.
+         */
+        internal fun buildCorridorQueryWindows(
+            corridorBoxes: List<OfflineMapManager.CorridorTileBox>
+        ): List<OfflineMapManager.CorridorTileBox> {
+            if (corridorBoxes.isEmpty()) return emptyList()
+            val padded = corridorBoxes.map {
+                OfflineMapManager.CorridorTileBox(
+                    north = (it.north + 0.004).coerceAtMost(85.0),
+                    south = (it.south - 0.004).coerceAtLeast(-85.0),
+                    east = OfflineMapManager.normalizeLongitude(it.east + 0.004),
+                    west = OfflineMapManager.normalizeLongitude(it.west - 0.004)
+                )
+            }
+            val windows = ArrayList<OfflineMapManager.CorridorTileBox>(padded.size)
+            var currentGroup = ArrayList<OfflineMapManager.CorridorTileBox>(4)
+            var currentAreaSum = 0.0
+
+            fun boxSpanLon(b: OfflineMapManager.CorridorTileBox): Double =
+                if (b.west <= b.east) (b.east - b.west) else (180.0 - b.west) + (b.east + 180.0)
+
+            fun boxArea(b: OfflineMapManager.CorridorTileBox): Double =
+                (b.north - b.south).coerceAtLeast(1e-4) * boxSpanLon(b).coerceAtLeast(1e-4)
+
+            for (box in padded) {
+                if (currentGroup.isEmpty()) {
+                    currentGroup.add(box)
+                    currentAreaSum = boxArea(box)
+                    continue
+                }
+                val candidateGroup = currentGroup + box
+                val union = OfflineMapManager.unionBoundingBox(candidateGroup)
+                val latSpan = if (union != null) union.north - union.south else Double.MAX_VALUE
+                val lonSpan = if (union != null) boxSpanLon(union) else Double.MAX_VALUE
+                val unionArea = if (union != null) boxArea(union) else Double.MAX_VALUE
+                val nextAreaSum = currentAreaSum + boxArea(box)
+
+                val crossesAnti = union == null || union.west > union.east || box.west > box.east || currentGroup.any { it.west > it.east }
+                val fitsTightWindow = !crossesAnti &&
+                    currentGroup.size < 4 &&
+                    latSpan <= TILE_SPAN_DEG &&
+                    lonSpan <= TILE_SPAN_DEG &&
+                    unionArea <= nextAreaSum * 2.15
+
+                if (fitsTightWindow) {
+                    currentGroup.add(box)
+                    currentAreaSum = nextAreaSum
+                } else {
+                    OfflineMapManager.unionBoundingBox(currentGroup)?.let { windows.add(it) }
+                    currentGroup = arrayListOf(box)
+                    currentAreaSum = boxArea(box)
+                }
+            }
+            if (currentGroup.isNotEmpty()) {
+                OfflineMapManager.unionBoundingBox(currentGroup)?.let { windows.add(it) }
+            }
+            return windows
+        }
     }
 
     private val appContext = context.applicationContext
     private val packDir: File = File(appContext.filesDir, PACK_DIR_NAME).apply { mkdirs() }
     private val ioMutex = Mutex()
     private val graphCacheMutex = Mutex()
+    private val activeJobs = ConcurrentHashMap<String, Job>()
+    private val activeConnections = ConcurrentHashMap<String, HttpURLConnection>()
 
     @Volatile
     private var cachedGraphKey: String? = null
@@ -78,8 +144,20 @@ class OfflineRoutingPackManager(
         _totalPacksSizeMb.value = computeTotalSizeMbSync()
     }
 
+    fun cancelIndexing(regionId: String) {
+        activeJobs.remove(regionId)?.cancel()
+        activeConnections.remove(regionId)?.let { conn ->
+            try {
+                conn.disconnect()
+            } catch (_: Exception) {}
+        }
+        _indexingRegionIds.update { it - regionId }
+        _statusMessage.value = "Road pack indexing cancelled."
+    }
+
     suspend fun buildOrRefreshPackForRegion(region: OfflineMapRegion): Boolean = withContext(Dispatchers.IO) {
         if (region.id in _indexingRegionIds.value) return@withContext false
+        coroutineContext[Job]?.let { activeJobs[region.id] = it }
         _indexingRegionIds.update { it + region.id }
         try {
             _statusMessage.value = "Indexing offline roads for '${region.name}'..."
@@ -92,8 +170,10 @@ class OfflineRoutingPackManager(
             val subGraphs = mutableListOf<OsmRoadGraphData>()
             var anySuccess = false
             for (win in queryWindows) {
+                coroutineContext.ensureActive()
                 val antimeridianParts = OfflineMapManager.splitBoxAtAntimeridian(win)
                 for (box in antimeridianParts) {
+                    coroutineContext.ensureActive()
                     val bboxStr = String.format(
                         Locale.US,
                         "%.5f,%.5f,%.5f,%.5f",
@@ -111,7 +191,8 @@ class OfflineRoutingPackManager(
                         >;
                         out skel qt;
                     """.trimIndent()
-                    val raw = postOverpassQuery(query)
+                    val raw = postOverpassQuery(query, regionId = region.id)
+                    coroutineContext.ensureActive()
                     if (raw != null) {
                         anySuccess = true
                         val parsed = OsmRoadGraphCodec.parseOverpassHighwayJson(raw)
@@ -134,6 +215,7 @@ class OfflineRoutingPackManager(
             }
 
             ioMutex.withLock {
+                coroutineContext.ensureActive()
                 packDir.mkdirs()
                 val outFile = File(packDir, "${region.id}.gtroad")
                 val tmpFile = File(packDir, "${region.id}.gtroad.tmp")
@@ -168,12 +250,15 @@ class OfflineRoutingPackManager(
             _statusMessage.value = "Offline road pack ready for '${region.name}' (${merged.edges.size} road segments)"
             true
         } catch (e: CancellationException) {
+            _statusMessage.value = "Road pack download cancelled for '${region.name}'."
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Failed to build road pack for ${region.name}: ${e.message}", e)
             _statusMessage.value = "Road pack build failed for '${region.name}': ${e.message?.take(60)}"
             false
         } finally {
+            activeJobs.remove(region.id)
+            activeConnections.remove(region.id)
             _indexingRegionIds.update { it - region.id }
         }
     }
@@ -300,14 +385,13 @@ class OfflineRoutingPackManager(
         if (region.isCorridor && region.corridorBoxes.isNotEmpty()) {
             val rawBoxes = region.corridorBoxes.map {
                 OfflineMapManager.CorridorTileBox(
-                    north = (it.north + 0.004).coerceAtMost(85.0),
-                    south = (it.south - 0.004).coerceAtLeast(-85.0),
-                    east = it.east + 0.004,
-                    west = it.west - 0.004
+                    north = it.north,
+                    south = it.south,
+                    east = it.east,
+                    west = it.west
                 )
             }
-            val stride = ((rawBoxes.size + 5) / 6).coerceAtLeast(1)
-            val windows = rawBoxes.chunked(stride).mapNotNull { OfflineMapManager.unionBoundingBox(it) }
+            val windows = buildCorridorQueryWindows(rawBoxes)
             val overall = BoundingBox(region.northLat, region.eastLng, region.southLat, region.westLng)
             return windows to overall
         }
@@ -339,7 +423,7 @@ class OfflineRoutingPackManager(
         return windows to BoundingBox(clampedNorth, clampedEast, clampedSouth, clampedWest)
     }
 
-    private suspend fun postOverpassQuery(overpassQuery: String): String? {
+    private suspend fun postOverpassQuery(overpassQuery: String, regionId: String): String? {
         val endpoints = listOf(
             "https://overpass-api.de/api/interpreter",
             "https://overpass.kumi.systems/api/interpreter",
@@ -362,6 +446,7 @@ class OfflineRoutingPackManager(
                     setRequestProperty("User-Agent", USER_AGENT)
                     setRequestProperty("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
                 }
+                activeConnections[regionId] = conn
                 OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
                     writer.write("data=" + URLEncoder.encode(overpassQuery, "UTF-8"))
                     writer.flush()
@@ -379,6 +464,7 @@ class OfflineRoutingPackManager(
                 if (e is CancellationException) throw e
                 Log.w(TAG, "Overpass road mirror $endpoint failed: ${e.message}")
             } finally {
+                activeConnections.remove(regionId, conn)
                 conn?.disconnect()
             }
         }

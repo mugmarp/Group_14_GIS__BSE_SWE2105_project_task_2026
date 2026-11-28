@@ -45,6 +45,7 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.AltRoute
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BookmarkAdd
@@ -59,6 +60,7 @@ import androidx.compose.material.icons.filled.GpsNotFixed
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocalParking
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.SatelliteAlt
 import androidx.compose.material.icons.filled.Share
@@ -402,6 +404,7 @@ fun MapViewComposable(
     onDeleteSavedPlace: ((String) -> Unit)? = null,
     navPreviewState: NavPreviewState = NavPreviewState.Idle,
     activeNavigation: ActiveNavigationState? = null,
+    onSelectPreviewRoute: ((Int) -> Unit)? = null,
     onRequestDirections: ((String, Double, Double) -> Unit)? = null,
     fabExtraBottomPadding: Dp = 0.dp,
     onCompassStateChanged: ((Float?, Boolean) -> Unit)? = null,
@@ -417,6 +420,7 @@ fun MapViewComposable(
     val currentIsMapPickMode by rememberUpdatedState(isMapPickMode)
     val currentOnFollowPausedByUser by rememberUpdatedState(onFollowPausedByUser)
     val currentOnSaveMapCamera by rememberUpdatedState(onSaveMapCamera)
+    val currentOnSelectPreviewRoute by rememberUpdatedState(onSelectPreviewRoute)
     val currentLocationState by rememberUpdatedState(currentLocation)
     val currentCoordinateFormat by rememberUpdatedState(settings.coordinateFormat)
     val currentAutoRotateHeadingUp by rememberUpdatedState(settings.autoRotateHeadingUp)
@@ -448,6 +452,8 @@ fun MapViewComposable(
     var liveZoomLevel by remember { mutableStateOf(initialMapZoom ?: 16.5) }
     var liveCenterLat by remember { mutableStateOf(initialMapCenter?.latitude ?: currentLocation?.latitude ?: fallbackCachedCenter?.latitude ?: 0.0) }
     var isHeadingUpPausedByUser by remember { mutableStateOf(false) }
+    var isNavOverviewMode by remember { mutableStateOf(false) }
+    var lastNavRouteCameraId by remember { mutableStateOf<String?>(null) }
     val orientationAnimatorHolder = remember { arrayOfNulls<ValueAnimator>(1) }
     var inspectCardHeightPx by remember { mutableIntStateOf(0) }
     var showLayerMenu by remember { mutableStateOf(false) }
@@ -545,6 +551,7 @@ fun MapViewComposable(
         settings.autoRotateHeadingUp,
         settings.followUserLocation,
         isFollowPaused,
+        isNavOverviewMode,
         isHeadingUpPausedByUser,
         isUserInteractingWithMap,
         focusedTarget,
@@ -555,6 +562,7 @@ fun MapViewComposable(
         val shouldAutoRotate = settings.autoRotateHeadingUp &&
             settings.followUserLocation &&
             !isFollowPaused &&
+            !isNavOverviewMode &&
             !isHeadingUpPausedByUser &&
             !isUserInteractingWithMap &&
             focusedTarget == null &&
@@ -715,6 +723,33 @@ fun MapViewComposable(
         }
     }
 
+    // Auto-zoom to street level once when active navigation starts on a route
+    LaunchedEffect(activeNavigation?.route?.id, mapViewRef) {
+        val nav = activeNavigation
+        if (nav == null) {
+            lastNavRouteCameraId = null
+            isNavOverviewMode = false
+            return@LaunchedEffect
+        }
+        val map = mapViewRef ?: return@LaunchedEffect
+        if (nav.route.id == lastNavRouteCameraId) return@LaunchedEffect
+        lastNavRouteCameraId = nav.route.id
+        isNavOverviewMode = false
+        isHeadingUpPausedByUser = false
+        hasCenteredOnFirstFix = true
+        isShowingNeutralOrigin = false
+        val targetPt = when {
+            nav.isSnappedToRoad -> GeoPoint(nav.snappedLatitude, nav.snappedLongitude)
+            currentLocation != null -> GeoPoint(currentLocation.latitude, currentLocation.longitude)
+            else -> nav.route.points.firstOrNull()?.let { GeoPoint(it.latitude, it.longitude) }
+        } ?: return@LaunchedEffect
+        map.controller.animateTo(targetPt, 17.5, 800L)
+        if (settings.autoRotateHeadingUp) {
+            animateMapOrientationTo(-resolvedUserBearing, 300L)
+        }
+        currentOnSaveMapCamera?.invoke(targetPt, 17.5, map.mapOrientation)
+    }
+
     // Auto-center map ONLY on first genuine fix, or when followUserLocation is enabled AND user hasn't manually panned/zoomed away.
     // Never pass targetZoom on follow ticks (prevents fighting pinch-out / zoom-out gestures).
     LaunchedEffect(
@@ -725,6 +760,7 @@ fun MapViewComposable(
         navPreviewState,
         settings.followUserLocation,
         isFollowPaused,
+        isNavOverviewMode,
         focusedTarget,
         selectedSearchPin,
         inspectedTrailName
@@ -744,7 +780,7 @@ fun MapViewComposable(
                 hasCenteredOnFirstFix = true
                 isShowingNeutralOrigin = false
                 currentOnSaveMapCamera?.invoke(targetPt, if (activeNavigation != null) 17.5 else 16.5, map?.mapOrientation ?: liveMapOrientation)
-            } else if (settings.followUserLocation && !isFollowPaused && !isUserInteractingWithMap) {
+            } else if (settings.followUserLocation && !isFollowPaused && !isNavOverviewMode && !isUserInteractingWithMap) {
                 if (map != null && !map.isAnimating) {
                     isShowingNeutralOrigin = false
                     map.controller.animateTo(
@@ -758,13 +794,22 @@ fun MapViewComposable(
     var localHandledNavPreviewId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(navPreviewState, mapViewRef) {
         val map = mapViewRef ?: return@LaunchedEffect
-        val previewRoute = when (navPreviewState) {
-            is NavPreviewState.Ready -> navPreviewState.selectedRoute
-            is NavPreviewState.Error -> navPreviewState.cachedFallbackRoute
+        val previewSessionKey = when (navPreviewState) {
+            is NavPreviewState.Ready -> navPreviewState.routes.joinToString("|") { it.id }
+            is NavPreviewState.Error -> navPreviewState.cachedFallbackRoute?.id
             else -> null
-        } ?: return@LaunchedEffect
-        if (previewRoute.id == localHandledNavPreviewId) return@LaunchedEffect
-        val geoPts = previewRoute.points.map { GeoPoint(it.latitude, it.longitude) }
+        }
+        if (previewSessionKey == null) {
+            localHandledNavPreviewId = null
+            return@LaunchedEffect
+        }
+        if (previewSessionKey == localHandledNavPreviewId) return@LaunchedEffect
+        val allPreviewPts = when (navPreviewState) {
+            is NavPreviewState.Ready -> navPreviewState.routes.flatMap { it.points }
+            is NavPreviewState.Error -> navPreviewState.cachedFallbackRoute?.points.orEmpty()
+            else -> emptyList()
+        }
+        val geoPts = allPreviewPts.map { GeoPoint(it.latitude, it.longitude) }
         if (geoPts.size >= 2) {
             val box = BoundingBox.fromGeoPointsSafe(geoPts)
             map.post {
@@ -776,7 +821,7 @@ fun MapViewComposable(
             }
             hasCenteredOnFirstFix = true
             isShowingNeutralOrigin = false
-            localHandledNavPreviewId = previewRoute.id
+            localHandledNavPreviewId = previewSessionKey
         }
     }
 
@@ -1426,11 +1471,27 @@ fun MapViewComposable(
                                 val altPts = altRoute.points.map { GeoPoint(it.latitude, it.longitude) }
                                 navRouteLayer.add(Polyline(map).apply {
                                     infoWindow = null
+                                    outlinePaint.color = android.graphics.Color.argb(175, 255, 255, 255)
+                                    outlinePaint.strokeWidth = 14f
+                                    outlinePaint.strokeCap = Paint.Cap.ROUND
+                                    outlinePaint.strokeJoin = Paint.Join.ROUND
+                                    setPoints(altPts)
+                                    setOnClickListener { _, _, _ ->
+                                        currentOnSelectPreviewRoute?.invoke(idx)
+                                        true
+                                    }
+                                })
+                                navRouteLayer.add(Polyline(map).apply {
+                                    infoWindow = null
                                     outlinePaint.color = navAltSlate
                                     outlinePaint.strokeWidth = 9.5f
                                     outlinePaint.strokeCap = Paint.Cap.ROUND
                                     outlinePaint.strokeJoin = Paint.Join.ROUND
                                     setPoints(altPts)
+                                    setOnClickListener { _, _, _ ->
+                                        currentOnSelectPreviewRoute?.invoke(idx)
+                                        true
+                                    }
                                 })
                             }
                         }
@@ -2835,6 +2896,7 @@ fun MapViewComposable(
         // Overlay Map Controls (Level 2 Elevation - Viewport Controls anchored to Bottom-Right, Strictly 12dp corners)
         val isActivelyFollowing = settings.followUserLocation &&
             !isFollowPaused &&
+            !isNavOverviewMode &&
             navPreviewState is NavPreviewState.Idle &&
             focusedTarget == null &&
             selectedSearchPin == null &&
@@ -2848,6 +2910,100 @@ fun MapViewComposable(
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (activeNavigation != null) {
+                val curNav = activeNavigation
+                if (onToggleAutoRotateHeadingUp != null) {
+                    FloatingActionButton(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            val nextEnabled = !settings.autoRotateHeadingUp
+                            onToggleAutoRotateHeadingUp(nextEnabled)
+                            if (nextEnabled) {
+                                isHeadingUpPausedByUser = false
+                                isNavOverviewMode = false
+                                animateMapOrientationTo(-resolvedUserBearing, 300L)
+                            } else {
+                                animateMapOrientationTo(0f, 300L)
+                            }
+                        },
+                        modifier = Modifier
+                            .size(48.dp)
+                            .then(
+                                if (settings.autoRotateHeadingUp) {
+                                    Modifier.border(1.5.dp, colorScheme.primary, RoundedCornerShape(15.dp))
+                                } else Modifier
+                            )
+                            .testTag("nav_heading_mode_btn"),
+                        shape = RoundedCornerShape(15.dp),
+                        containerColor = if (settings.autoRotateHeadingUp) colorScheme.primaryContainer else colorScheme.surface,
+                        contentColor = if (settings.autoRotateHeadingUp) colorScheme.onPrimaryContainer else colorScheme.onSurface,
+                        elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (settings.autoRotateHeadingUp) Icons.Default.Navigation else Icons.Default.Explore,
+                            contentDescription = if (settings.autoRotateHeadingUp) "Heading-Up Mode (Tap for North-Up)" else "North-Up Mode (Tap for Heading-Up)",
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+
+                FloatingActionButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        val enterOverview = !isNavOverviewMode
+                        isNavOverviewMode = enterOverview
+                        if (enterOverview) {
+                            animateMapOrientationTo(0f, 260L)
+                            val pts = curNav.route.points
+                            val split = curNav.nearestPointIndex.coerceIn(0, (pts.size - 1).coerceAtLeast(0))
+                            val remGeoPts = pts.subList(split, pts.size)
+                                .map { GeoPoint(it.latitude, it.longitude) }
+                                .ifEmpty { pts.map { GeoPoint(it.latitude, it.longitude) } }
+                            if (remGeoPts.size >= 2) {
+                                val box = BoundingBox.fromGeoPointsSafe(remGeoPts)
+                                mapViewRef?.post {
+                                    try {
+                                        mapViewRef?.zoomToBoundingBox(box, true, 120)
+                                    } catch (_: Exception) {}
+                                }
+                            }
+                        } else {
+                            isHeadingUpPausedByUser = false
+                            onRecenterSelf?.invoke()
+                            val targetPt = when {
+                                curNav.isSnappedToRoad -> GeoPoint(curNav.snappedLatitude, curNav.snappedLongitude)
+                                currentLocation != null -> GeoPoint(currentLocation.latitude, currentLocation.longitude)
+                                else -> curNav.route.points.firstOrNull()?.let { GeoPoint(it.latitude, it.longitude) }
+                            }
+                            if (targetPt != null) {
+                                mapViewRef?.controller?.animateTo(targetPt, 17.5, 650L)
+                            }
+                            if (settings.autoRotateHeadingUp) {
+                                animateMapOrientationTo(-resolvedUserBearing, 300L)
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .then(
+                            if (isNavOverviewMode) {
+                                Modifier.border(1.5.dp, colorScheme.primary, RoundedCornerShape(15.dp))
+                            } else Modifier
+                        )
+                        .testTag("nav_overview_toggle_btn"),
+                    shape = RoundedCornerShape(15.dp),
+                    containerColor = if (isNavOverviewMode) colorScheme.primaryContainer else colorScheme.surface,
+                    contentColor = if (isNavOverviewMode) colorScheme.onPrimaryContainer else colorScheme.onSurface,
+                    elevation = androidx.compose.material3.FloatingActionButtonDefaults.elevation(defaultElevation = 3.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isNavOverviewMode) Icons.Default.MyLocation else Icons.AutoMirrored.Filled.AltRoute,
+                        contentDescription = if (isNavOverviewMode) "Resume Turn-by-Turn View" else "Show Route Overview",
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+
             // Compass Reset FAB (rotates live with map orientation; visible whenever rotated or Heading-Up enabled)
             AnimatedVisibility(
                 visible = isMapRotated || settings.autoRotateHeadingUp,
@@ -2907,12 +3063,22 @@ fun MapViewComposable(
                     selectedMarkerInfo = null
                     droppedInspectPin = null
                     isHeadingUpPausedByUser = false
+                    isNavOverviewMode = false
                     onRecenterSelf?.invoke()
-                    if (currentLocation != null) {
+                    val followPt = activeNavigation?.takeIf { it.isSnappedToRoad }?.let {
+                        GeoPoint(it.snappedLatitude, it.snappedLongitude)
+                    } ?: currentLocation?.let { GeoPoint(it.latitude, it.longitude) }
+                    if (followPt != null) {
                         val curZoom = mapViewRef?.zoomLevelDouble ?: 16.5
-                        val targetZoom = if (curZoom < 10.0) 15.5 else curZoom
+                        val targetZoom = if (activeNavigation != null && curZoom < 15.5) {
+                            17.5
+                        } else if (curZoom < 10.0) {
+                            15.5
+                        } else {
+                            curZoom
+                        }
                         mapViewRef?.controller?.animateTo(
-                            GeoPoint(currentLocation.latitude, currentLocation.longitude),
+                            followPt,
                             targetZoom,
                             800L
                         )

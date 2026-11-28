@@ -38,6 +38,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -77,6 +78,7 @@ import com.geotrace.model.LocationPoint
 import com.geotrace.model.MapFocusTarget
 import com.geotrace.model.MapTileType
 import com.geotrace.model.OfflineMapRegion
+import com.geotrace.navigation.OfflineRoutingPackManager
 import com.geotrace.service.OfflineMapManager
 import com.geotrace.ui.theme.JetBrainsMonoFontFamily
 import com.geotrace.ui.theme.LocalCustomColors
@@ -85,6 +87,7 @@ import org.osmdroid.util.BoundingBox
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 
 private enum class OfflineAreaMode(val label: String) {
     VIEWPORT("Map View"),
@@ -221,6 +224,20 @@ fun OfflineMapsDialog(
     val estTiles = estimate?.first ?: 0
     val estMb = estimate?.second ?: 0f
     val exceedsCap = estTiles > OfflineMapManager.MAX_TILES_PER_DOWNLOAD
+    val maxRoadSpanDeg = OfflineRoutingPackManager.MAX_REGION_HALF_SPAN_DEG * 2.0
+    val isRoadAreaClipped = remember(areaMode, targetBox, includeOfflineRoads) {
+        if (includeOfflineRoads && areaMode != OfflineAreaMode.ROUTE_CORRIDOR && targetBox != null) {
+            val latSpan = abs(targetBox.latNorth - targetBox.latSouth)
+            val lonSpan = if (targetBox.lonWest <= targetBox.lonEast) {
+                targetBox.lonEast - targetBox.lonWest
+            } else {
+                (180.0 - targetBox.lonWest) + (targetBox.lonEast + 180.0)
+            }
+            latSpan > maxRoadSpanDeg || lonSpan > maxRoadSpanDeg
+        } else {
+            false
+        }
+    }
 
     val suggestedName = remember(areaMode, selectedType, activeCorridorLabel) {
         val areaLabel = when (areaMode) {
@@ -642,6 +659,36 @@ fun OfflineMapsDialog(
                                     .testTag("toggle_include_offline_roads")
                             )
 
+                            if (isRoadAreaClipped) {
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = colorScheme.secondaryContainer.copy(alpha = 0.5f),
+                                    border = BorderStroke(1.dp, colorScheme.secondary.copy(alpha = 0.45f)),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("offline_road_clipped_warning")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Warning,
+                                            contentDescription = null,
+                                            tint = colorScheme.secondary,
+                                            modifier = Modifier.size(15.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(
+                                            text = "Road pack covers center ~40×40 km (0.36° × 0.36°). Use Route Strip for longer trips.",
+                                            fontSize = 10.sp,
+                                            color = colorScheme.onSecondaryContainer,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+
                             OutlinedTextField(
                                 value = regionName,
                                 onValueChange = { regionName = it.take(40) },
@@ -715,6 +762,7 @@ fun OfflineMapsDialog(
                                 },
                                 onRefreshPois = { viewModel.refreshOfflineRegionPois(region) },
                                 onRefreshRoads = { viewModel.refreshOfflineRegionRoads(region) },
+                                onCancelRoads = { viewModel.cancelOfflineRegionRoads(region.id) },
                                 onDelete = { viewModel.deleteOfflineMapRegion(region.id) }
                             )
                         }
@@ -807,6 +855,52 @@ fun OfflineMapsDialog(
                     )
                 }
 
+                if (exceedsCap && includeOfflineRoads && canDownload && !progress.isDownloading) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    FilledTonalButton(
+                        onClick = {
+                            val finalName = regionName.trim().ifBlank {
+                                "${suggestedName.substringBefore(" (")} (Roads)"
+                            }
+                            if (areaMode == OfflineAreaMode.ROUTE_CORRIDOR) {
+                                if (activeCorridorPoints.size < 2) return@FilledTonalButton
+                                viewModel.startRoadOnlyRegionDownload(
+                                    name = finalName,
+                                    box = null,
+                                    corridorPoints = activeCorridorPoints,
+                                    halfWidthKm = corridorHalfWidthKm,
+                                    tileType = selectedType
+                                )
+                            } else {
+                                val box = targetBox ?: return@FilledTonalButton
+                                viewModel.startRoadOnlyRegionDownload(
+                                    name = finalName,
+                                    box = box,
+                                    corridorPoints = null,
+                                    halfWidthKm = 1.5,
+                                    tileType = selectedType
+                                )
+                            }
+                            regionName = ""
+                        },
+                        shape = CircleShape,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .testTag("start_road_only_download_btn")
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.AltRoute, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Download Offline Roads Only (Bypass 2,500 Tile Limit)",
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(10.dp))
                 HorizontalDivider(color = colorScheme.outlineVariant.copy(alpha = 0.5f))
                 Spacer(modifier = Modifier.height(8.dp))
@@ -891,11 +985,26 @@ private fun OfflineRegionCard(
     onViewOnMap: () -> Unit,
     onRefreshPois: () -> Unit,
     onRefreshRoads: () -> Unit,
+    onCancelRoads: () -> Unit,
     onDelete: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
     val dateStr = remember(region.downloadedAtMs) {
         SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(region.downloadedAtMs))
+    }
+    val maxRoadSpanDeg = OfflineRoutingPackManager.MAX_REGION_HALF_SPAN_DEG * 2.0
+    val isNonCorridorClipped = remember(region) {
+        if (region.isCorridor) {
+            false
+        } else {
+            val latSpan = abs(region.northLat - region.southLat)
+            val lonSpan = if (region.westLng <= region.eastLng) {
+                region.eastLng - region.westLng
+            } else {
+                (180.0 - region.westLng) + (region.eastLng + 180.0)
+            }
+            latSpan > maxRoadSpanDeg || lonSpan > maxRoadSpanDeg
+        }
     }
 
     Surface(
@@ -941,9 +1050,27 @@ private fun OfflineRegionCard(
                                 )
                             }
                         }
+                        if (region.tileCount == 0) {
+                            Surface(
+                                shape = CircleShape,
+                                color = colorScheme.secondaryContainer
+                            ) {
+                                Text(
+                                    text = "ROADS",
+                                    fontSize = 8.5.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
                     }
                     Text(
-                        text = "${region.tileType.label} • Z${region.minZoom}–${region.maxZoom} • ~${String.format(Locale.US, "%.1f", region.estimatedSizeMb)} MB • $poiCount POIs • $dateStr",
+                        text = if (region.tileCount == 0) {
+                            "Road Pack Only • $poiCount POIs • $dateStr"
+                        } else {
+                            "${region.tileType.label} • Z${region.minZoom}–${region.maxZoom} • ~${String.format(Locale.US, "%.1f", region.estimatedSizeMb)} MB • $poiCount POIs • $dateStr"
+                        },
                         fontSize = 10.sp,
                         color = colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -959,7 +1086,11 @@ private fun OfflineRegionCard(
                                 } else {
                                     String.format(Locale.US, "%.0f KB", kb)
                                 }
-                                "Roads Ready: ${roadPack.edgeCount} segments ($sizeStr)"
+                                if (isNonCorridorClipped) {
+                                    "Roads Ready (center ~40×40 km): ${roadPack.edgeCount} segments ($sizeStr)"
+                                } else {
+                                    "Roads Ready: ${roadPack.edgeCount} segments ($sizeStr)"
+                                }
                             }
                             else -> "Roads Not Cached — tap route icon to download offline roads"
                         },
@@ -983,16 +1114,26 @@ private fun OfflineRegionCard(
                     Icon(Icons.Default.MyLocation, contentDescription = "View Region on Map", tint = colorScheme.primary, modifier = Modifier.size(18.dp))
                 }
                 IconButton(
-                    onClick = onRefreshRoads,
-                    enabled = !isDownloading && !isIndexingRoads,
-                    modifier = Modifier.size(48.dp).testTag("refresh_region_roads_${region.id}")
+                    onClick = { if (isIndexingRoads) onCancelRoads() else onRefreshRoads() },
+                    enabled = if (isIndexingRoads) true else !isDownloading,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag(if (isIndexingRoads) "cancel_region_roads_${region.id}" else "refresh_region_roads_${region.id}")
                 ) {
                     if (isIndexingRoads) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = colorScheme.tertiary
-                        )
+                        Box(contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(22.dp),
+                                strokeWidth = 2.dp,
+                                color = colorScheme.tertiary
+                            )
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Cancel Road Indexing",
+                                tint = colorScheme.error,
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
                     } else {
                         Icon(
                             Icons.AutoMirrored.Filled.AltRoute,

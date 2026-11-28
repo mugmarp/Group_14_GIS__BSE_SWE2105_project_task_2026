@@ -240,4 +240,26 @@ class OsmRoadGraphAndRouterTest {
         assertEquals(2, merged.vertices.size)
         assertEquals("Distinct loop and chord edges on same way must both survive merge", 2, merged.edges.size)
     }
+
+    @Test
+    fun buildCorridorQueryWindows_splitsLongDiagonalCorridorIntoTightWindows() {
+        val boxes = (0 until 20).map { i ->
+            val lat = 10.0 + i * 0.015
+            val lon = 20.0 + i * 0.015
+            com.geotrace.service.OfflineMapManager.CorridorTileBox(
+                north = lat + 0.008,
+                south = lat - 0.008,
+                east = lon + 0.008,
+                west = lon - 0.008
+            )
+        }
+        val windows = OfflineRoutingPackManager.buildCorridorQueryWindows(boxes)
+        assertTrue("Long diagonal corridor should be split into >= 5 tight windows, got ${windows.size}", windows.size >= 5)
+        for (win in windows) {
+            val latSpan = win.north - win.south
+            val lonSpan = win.east - win.west
+            assertTrue("Expected tight window latSpan <= 0.12, got $latSpan", latSpan <= 0.12)
+            assertTrue("Expected tight window lonSpan <= 0.12, got $lonSpan", lonSpan <= 0.12)
+        }
+    }
 }
