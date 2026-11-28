@@ -12,9 +12,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CachedCellTowerEntity::class,
         CachedObservedCellEntity::class,
         CachedLocationFixEntity::class,
-        CachedNavRouteEntity::class
+        CachedNavRouteEntity::class,
+        OfflineRoutingPackEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class OfflineCacheDatabase : RoomDatabase() {
@@ -22,6 +23,7 @@ abstract class OfflineCacheDatabase : RoomDatabase() {
     abstract fun observedCellDao(): ObservedCellDao
     abstract fun locationFixCacheDao(): LocationFixCacheDao
     abstract fun navRouteCacheDao(): NavRouteCacheDao
+    abstract fun routingPackDao(): OfflineRoutingPackDao
 
     companion object {
         private const val DB_NAME = "geotrace_offline_cache.db"
@@ -52,6 +54,32 @@ abstract class OfflineCacheDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `offline_routing_packs` (
+                        `region_id` TEXT NOT NULL,
+                        `region_name` TEXT NOT NULL,
+                        `north_lat` REAL NOT NULL,
+                        `south_lat` REAL NOT NULL,
+                        `east_lon` REAL NOT NULL,
+                        `west_lon` REAL NOT NULL,
+                        `vertex_count` INTEGER NOT NULL,
+                        `edge_count` INTEGER NOT NULL,
+                        `file_size_bytes` INTEGER NOT NULL,
+                        `file_path` TEXT NOT NULL,
+                        `updated_at_ms` INTEGER NOT NULL,
+                        PRIMARY KEY(`region_id`)
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_offline_routing_packs_updated_at_ms` ON `offline_routing_packs` (`updated_at_ms`)"
+                )
+            }
+        }
+
         @Volatile
         private var INSTANCE: OfflineCacheDatabase? = null
 
@@ -62,7 +90,7 @@ abstract class OfflineCacheDatabase : RoomDatabase() {
                     OfflineCacheDatabase::class.java,
                     DB_NAME
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
                     .also { INSTANCE = it }

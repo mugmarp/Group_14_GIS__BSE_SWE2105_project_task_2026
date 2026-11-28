@@ -691,3 +691,71 @@ class HybridPhase1RoutingProvider(
         )
     }
 }
+
+class HybridPhase2RoutingProvider(
+    context: Context,
+    private val offlinePackManager: OfflineRoutingPackManager,
+    private val orsKeyProvider: () -> String = { BuildConfig.ORS_API_KEY }
+) : RoutingProvider {
+
+    private val appContext = context.applicationContext
+    private val onlineProvider = HybridPhase1RoutingProvider(appContext, orsKeyProvider)
+
+    override suspend fun computeRoutes(
+        originLat: Double,
+        originLon: Double,
+        destinationName: String,
+        destinationLat: Double,
+        destinationLon: Double,
+        profile: NavProfile,
+        includeAlternatives: Boolean
+    ): Result<List<NavRoute>> {
+        val online = isNetworkAvailable()
+        if (!online) {
+            return offlinePackManager.computeOfflineRoutes(
+                originLat = originLat,
+                originLon = originLon,
+                destinationName = destinationName,
+                destinationLat = destinationLat,
+                destinationLon = destinationLon,
+                profile = profile,
+                includeAlternatives = includeAlternatives
+            )
+        }
+
+        val onlineResult = onlineProvider.computeRoutes(
+            originLat = originLat,
+            originLon = originLon,
+            destinationName = destinationName,
+            destinationLat = destinationLat,
+            destinationLon = destinationLon,
+            profile = profile,
+            includeAlternatives = includeAlternatives
+        )
+        if (onlineResult.isSuccess) return onlineResult
+
+        // Fallback to local .gtroad graph if online routing servers fail or time out
+        val offlineResult = offlinePackManager.computeOfflineRoutes(
+            originLat = originLat,
+            originLon = originLon,
+            destinationName = destinationName,
+            destinationLat = destinationLat,
+            destinationLon = destinationLon,
+            profile = profile,
+            includeAlternatives = includeAlternatives
+        )
+        return if (offlineResult.isSuccess) offlineResult else onlineResult
+    }
+
+    private fun isNetworkAvailable(): Boolean {
+        return try {
+            val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager
+                ?: return false
+            val net = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(net) ?: return false
+            caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (_: Exception) {
+            false
+        }
+    }
+}

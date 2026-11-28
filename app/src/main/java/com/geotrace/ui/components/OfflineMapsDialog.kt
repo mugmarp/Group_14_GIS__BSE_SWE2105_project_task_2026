@@ -24,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.AltRoute
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Delete
@@ -112,6 +113,13 @@ fun OfflineMapsDialog(
     val savedRegions by viewModel.offlineMapRegions.collectAsState()
     val offlinePlacesCountByRegion by viewModel.offlinePlacesCountByRegion.collectAsState()
     val poiIndexingRegionIds by viewModel.poiIndexingRegionIds.collectAsState()
+    val offlineRoutingPacks by viewModel.offlineRoutingPacks.collectAsState()
+    val routingIndexingRegionIds by viewModel.routingIndexingRegionIds.collectAsState()
+    val offlineRoutingSizeMb by viewModel.offlineRoutingSizeMb.collectAsState()
+    val offlineRoutingStatus by viewModel.offlineRoutingStatus.collectAsState()
+    val routingPackByRegion = remember(offlineRoutingPacks) {
+        offlineRoutingPacks.associateBy { it.regionId }
+    }
     val progress by viewModel.offlineDownloadProgress.collectAsState()
     val cacheSizeMb by viewModel.offlineCacheSizeMb.collectAsState()
     val offlinePoiStatus by viewModel.offlinePoiStatus.collectAsState()
@@ -154,6 +162,7 @@ fun OfflineMapsDialog(
     }
     var detailTier by rememberSaveable { mutableStateOf(OfflineDetailTier.STANDARD) }
     var corridorHalfWidthKm by rememberSaveable { mutableStateOf(1.5) }
+    var includeOfflineRoads by rememberSaveable { mutableStateOf(true) }
     var regionName by rememberSaveable { mutableStateOf("") }
     var showClearCacheConfirm by rememberSaveable { mutableStateOf(false) }
 
@@ -439,6 +448,37 @@ fun OfflineMapsDialog(
                         }
                     }
 
+                    if (offlineRoutingStatus != null) {
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = colorScheme.tertiaryContainer.copy(alpha = 0.6f),
+                            border = BorderStroke(1.dp, colorScheme.tertiary.copy(alpha = 0.45f)),
+                            modifier = Modifier.fillMaxWidth().testTag("offline_routing_status_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(start = 10.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                    Icon(Icons.AutoMirrored.Filled.AltRoute, contentDescription = null, tint = colorScheme.tertiary, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = offlineRoutingStatus!!,
+                                        fontSize = 11.sp,
+                                        color = colorScheme.onTertiaryContainer
+                                    )
+                                }
+                                TextButton(
+                                    onClick = { viewModel.clearOfflineRoutingStatus() },
+                                    modifier = Modifier.heightIn(min = 48.dp)
+                                ) {
+                                    Text("OK", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+
                     // New Region Configurator
                     val offlineChipColors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = colorScheme.primary,
@@ -570,6 +610,38 @@ fun OfflineMapsDialog(
                                 }
                             }
 
+                            FilterChip(
+                                selected = includeOfflineRoads,
+                                enabled = !progress.isDownloading,
+                                onClick = { includeOfflineRoads = !includeOfflineRoads },
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.AltRoute,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                },
+                                label = {
+                                    Text(
+                                        text = if (includeOfflineRoads) {
+                                            "Include Offline Turn-by-Turn Road Network (ON)"
+                                        } else {
+                                            "Include Offline Turn-by-Turn Road Network (OFF)"
+                                        },
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                },
+                                shape = CircleShape,
+                                colors = offlineChipColors,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp)
+                                    .testTag("toggle_include_offline_roads")
+                            )
+
                             OutlinedTextField(
                                 value = regionName,
                                 onValueChange = { regionName = it.take(40) },
@@ -614,11 +686,14 @@ fun OfflineMapsDialog(
                         }
                     } else {
                         savedRegions.forEach { region ->
+                            val pack = routingPackByRegion[region.id]
                             OfflineRegionCard(
                                 region = region,
                                 poiCount = offlinePlacesCountByRegion[region.id] ?: 0,
+                                roadPack = pack,
                                 isDownloading = progress.isDownloading,
                                 isIndexingPois = region.id in poiIndexingRegionIds,
+                                isIndexingRoads = region.id in routingIndexingRegionIds,
                                 onViewOnMap = {
                                     viewModel.updateMapTileType(region.tileType)
                                     onJumpToRegion(
@@ -639,6 +714,7 @@ fun OfflineMapsDialog(
                                     onDismiss()
                                 },
                                 onRefreshPois = { viewModel.refreshOfflineRegionPois(region) },
+                                onRefreshRoads = { viewModel.refreshOfflineRegionRoads(region) },
                                 onDelete = { viewModel.deleteOfflineMapRegion(region.id) }
                             )
                         }
@@ -701,7 +777,8 @@ fun OfflineMapsDialog(
                                 halfWidthKm = corridorHalfWidthKm,
                                 tileType = selectedType,
                                 minZoom = detailTier.minZoom,
-                                maxZoom = detailTier.maxZoom
+                                maxZoom = detailTier.maxZoom,
+                                includeRoads = includeOfflineRoads
                             )
                         } else {
                             val box = targetBox ?: return@Button
@@ -710,7 +787,8 @@ fun OfflineMapsDialog(
                                 box = box,
                                 tileType = selectedType,
                                 minZoom = detailTier.minZoom,
-                                maxZoom = detailTier.maxZoom
+                                maxZoom = detailTier.maxZoom,
+                                includeRoads = includeOfflineRoads
                             )
                         }
                     },
@@ -741,20 +819,20 @@ fun OfflineMapsDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Tile Cache Used: ${String.format(Locale.US, "%.1f", cacheSizeMb)} MB / ${OfflineMapManager.MAX_CACHE_BYTES_MB} MB",
+                            text = "Tiles: ${String.format(Locale.US, "%.1f", cacheSizeMb)} MB • Roads: ${String.format(Locale.US, "%.2f", offlineRoutingSizeMb)} MB",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurface
                         )
                         Text(
-                            text = "Stored in private app storage (no permissions needed)",
+                            text = "Limit ${OfflineMapManager.MAX_CACHE_BYTES_MB} MB • Private app storage",
                             fontSize = 10.sp,
                             color = colorScheme.onSurfaceVariant
                         )
                     }
                     TextButton(
                         onClick = { showClearCacheConfirm = true },
-                        enabled = !progress.isDownloading && (cacheSizeMb > 0.05f || savedRegions.isNotEmpty()),
+                        enabled = !progress.isDownloading && (cacheSizeMb > 0.05f || offlineRoutingSizeMb > 0.01f || savedRegions.isNotEmpty()),
                         modifier = Modifier.heightIn(min = 48.dp).testTag("clear_tile_cache_btn")
                     ) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = null, modifier = Modifier.size(16.dp), tint = colorScheme.error)
@@ -771,10 +849,10 @@ fun OfflineMapsDialog(
         AlertDialog(
             onDismissRequest = { showClearCacheConfirm = false },
             shape = RoundedCornerShape(28.dp),
-            title = { Text("Clear Offline Tile Cache?", fontWeight = FontWeight.Bold) },
+            title = { Text("Clear Offline Cache?", fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    "Deletes all cached street, satellite, and topographic map tiles (${String.format(Locale.US, "%.1f", cacheSizeMb)} MB) from device storage and clears the downloaded regions list.",
+                    "Deletes all cached map tiles (${String.format(Locale.US, "%.1f", cacheSizeMb)} MB), offline routing road packs (${String.format(Locale.US, "%.2f", offlineRoutingSizeMb)} MB), and clears downloaded regions.",
                     fontSize = 13.sp
                 )
             },
@@ -806,10 +884,13 @@ fun OfflineMapsDialog(
 private fun OfflineRegionCard(
     region: OfflineMapRegion,
     poiCount: Int,
+    roadPack: com.geotrace.data.cache.OfflineRoutingPackEntity?,
     isDownloading: Boolean,
     isIndexingPois: Boolean,
+    isIndexingRoads: Boolean,
     onViewOnMap: () -> Unit,
     onRefreshPois: () -> Unit,
+    onRefreshRoads: () -> Unit,
     onDelete: () -> Unit
 ) {
     val colorScheme = MaterialTheme.colorScheme
@@ -823,80 +904,125 @@ private fun OfflineRegionCard(
         border = BorderStroke(1.dp, colorScheme.outlineVariant.copy(alpha = 0.7f)),
         modifier = Modifier.fillMaxWidth().testTag("offline_region_${region.id}")
     ) {
-        Row(
-            modifier = Modifier.padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                if (region.isCorridor) Icons.Default.Route else Icons.Default.OfflinePin,
-                contentDescription = if (region.isCorridor) "Saved Offline Corridor" else "Saved Offline Region",
-                tint = colorScheme.tertiary,
-                modifier = Modifier.size(22.dp)
-            )
-            Spacer(modifier = Modifier.width(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(
-                        text = region.name,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    if (region.isCorridor) {
-                        Surface(
-                            shape = CircleShape,
-                            color = colorScheme.tertiaryContainer
-                        ) {
-                            Text(
-                                text = "STRIP",
-                                fontSize = 8.5.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = colorScheme.onTertiaryContainer,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
+        Column(modifier = Modifier.padding(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (region.isCorridor) Icons.Default.Route else Icons.Default.OfflinePin,
+                    contentDescription = if (region.isCorridor) "Saved Offline Corridor" else "Saved Offline Region",
+                    tint = colorScheme.tertiary,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = region.name,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (region.isCorridor) {
+                            Surface(
+                                shape = CircleShape,
+                                color = colorScheme.tertiaryContainer
+                            ) {
+                                Text(
+                                    text = "STRIP",
+                                    fontSize = 8.5.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
                         }
                     }
-                }
-                Text(
-                    text = "${region.tileType.label} • Z${region.minZoom}–${region.maxZoom} • ~${String.format(Locale.US, "%.1f", region.estimatedSizeMb)} MB • $poiCount POIs • $dateStr",
-                    fontSize = 10.sp,
-                    color = colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            IconButton(
-                onClick = onViewOnMap,
-                modifier = Modifier.size(48.dp).testTag("jump_offline_region_${region.id}")
-            ) {
-                Icon(Icons.Default.MyLocation, contentDescription = "View Region on Map", tint = colorScheme.primary, modifier = Modifier.size(18.dp))
-            }
-            IconButton(
-                onClick = onRefreshPois,
-                enabled = !isDownloading && !isIndexingPois,
-                modifier = Modifier.size(48.dp).testTag("refresh_region_pois_${region.id}")
-            ) {
-                if (isIndexingPois) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(16.dp),
-                        strokeWidth = 2.dp,
-                        color = colorScheme.secondary
+                    Text(
+                        text = "${region.tileType.label} • Z${region.minZoom}–${region.maxZoom} • ~${String.format(Locale.US, "%.1f", region.estimatedSizeMb)} MB • $poiCount POIs • $dateStr",
+                        fontSize = 10.sp,
+                        color = colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                } else {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh Offline POIs", tint = colorScheme.secondary, modifier = Modifier.size(18.dp))
+                    Text(
+                        text = when {
+                            isIndexingRoads -> "Building offline road graph..."
+                            roadPack != null -> {
+                                val kb = (roadPack.fileSizeBytes / 1024f)
+                                val sizeStr = if (kb >= 1024f) {
+                                    String.format(Locale.US, "%.2f MB", kb / 1024f)
+                                } else {
+                                    String.format(Locale.US, "%.0f KB", kb)
+                                }
+                                "Roads Ready: ${roadPack.edgeCount} segments ($sizeStr)"
+                            }
+                            else -> "Roads Not Cached — tap route icon to download offline roads"
+                        },
+                        fontSize = 10.sp,
+                        fontWeight = if (roadPack != null) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (roadPack != null) colorScheme.tertiary else colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
-            IconButton(
-                onClick = onDelete,
-                modifier = Modifier.size(48.dp).testTag("delete_offline_region_${region.id}")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.Delete, contentDescription = "Remove Region Entry", tint = colorScheme.error, modifier = Modifier.size(18.dp))
+                IconButton(
+                    onClick = onViewOnMap,
+                    modifier = Modifier.size(48.dp).testTag("jump_offline_region_${region.id}")
+                ) {
+                    Icon(Icons.Default.MyLocation, contentDescription = "View Region on Map", tint = colorScheme.primary, modifier = Modifier.size(18.dp))
+                }
+                IconButton(
+                    onClick = onRefreshRoads,
+                    enabled = !isDownloading && !isIndexingRoads,
+                    modifier = Modifier.size(48.dp).testTag("refresh_region_roads_${region.id}")
+                ) {
+                    if (isIndexingRoads) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = colorScheme.tertiary
+                        )
+                    } else {
+                        Icon(
+                            Icons.AutoMirrored.Filled.AltRoute,
+                            contentDescription = if (roadPack != null) "Refresh Offline Road Pack" else "Download Offline Road Pack",
+                            tint = colorScheme.tertiary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = onRefreshPois,
+                    enabled = !isDownloading && !isIndexingPois,
+                    modifier = Modifier.size(48.dp).testTag("refresh_region_pois_${region.id}")
+                ) {
+                    if (isIndexingPois) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = colorScheme.secondary
+                        )
+                    } else {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh Offline POIs", tint = colorScheme.secondary, modifier = Modifier.size(18.dp))
+                    }
+                }
+                IconButton(
+                    onClick = onDelete,
+                    modifier = Modifier.size(48.dp).testTag("delete_offline_region_${region.id}")
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = "Remove Region Entry", tint = colorScheme.error, modifier = Modifier.size(18.dp))
+                }
             }
         }
     }

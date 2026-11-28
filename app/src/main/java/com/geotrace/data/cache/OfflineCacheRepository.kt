@@ -24,14 +24,16 @@ class OfflineCacheRepository(
     private val cellDao: CellTowerCacheDao,
     private val observedCellDao: ObservedCellDao,
     private val locationFixDao: LocationFixCacheDao,
-    private val navRouteDao: NavRouteCacheDao? = null
+    private val navRouteDao: NavRouteCacheDao? = null,
+    private val routingPackDao: OfflineRoutingPackDao? = null
 ) : OpenCellIdClient.CellTowerCacheStore {
 
     constructor(database: OfflineCacheDatabase) : this(
         database.cellTowerCacheDao(),
         database.observedCellDao(),
         database.locationFixCacheDao(),
-        database.navRouteCacheDao()
+        database.navRouteCacheDao(),
+        database.routingPackDao()
     )
 
     companion object {
@@ -313,6 +315,31 @@ class OfflineCacheRepository(
         return dao.observeRecentRoutes(MAX_CACHED_NAV_ROUTES).map { rows ->
             rows.mapNotNull { deserializeNavRoute(it.routeJson) }
         }
+    }
+
+    fun observeOfflineRoutingPacks(): Flow<List<OfflineRoutingPackEntity>> {
+        val dao = routingPackDao ?: return flowOf(emptyList())
+        return dao.observeAllPacks()
+    }
+
+    suspend fun getOfflineRoutingPacksSnapshot(): List<OfflineRoutingPackEntity> {
+        return routingPackDao?.getAllPacks() ?: emptyList()
+    }
+
+    suspend fun getOfflineRoutingPackForRegion(regionId: String): OfflineRoutingPackEntity? {
+        return routingPackDao?.getPackForRegion(regionId)
+    }
+
+    suspend fun saveOfflineRoutingPack(pack: OfflineRoutingPackEntity) = cacheMutex.withLock {
+        routingPackDao?.upsertPack(pack)
+    }
+
+    suspend fun deleteOfflineRoutingPack(regionId: String) = cacheMutex.withLock {
+        routingPackDao?.deletePack(regionId)
+    }
+
+    suspend fun clearAllOfflineRoutingPacks() = cacheMutex.withLock {
+        routingPackDao?.clearAll()
     }
 
     suspend fun clearAllOfflineCaches() = cacheMutex.withLock {

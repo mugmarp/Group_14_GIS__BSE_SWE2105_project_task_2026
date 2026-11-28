@@ -18,6 +18,7 @@ enum class NavProfile(
 enum class NavRouteSource(val label: String) {
     ONLINE_ORS("OpenRouteService"),
     ONLINE_VALHALLA("Valhalla OSM"),
+    OFFLINE_OSM_GRAPH("Offline Road Graph"),
     CACHED_OFFLINE("Offline Route Cache")
 }
 

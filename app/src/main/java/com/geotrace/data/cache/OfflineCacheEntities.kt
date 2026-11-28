@@ -81,3 +81,20 @@ data class CachedNavRouteEntity(
     @ColumnInfo(name = "updated_at_ms") val updatedAtMs: Long
 )
 
+@Entity(
+    tableName = "offline_routing_packs",
+    indices = [Index(value = ["updated_at_ms"])]
+)
+data class OfflineRoutingPackEntity(
+    @PrimaryKey @ColumnInfo(name = "region_id") val regionId: String,
+    @ColumnInfo(name = "region_name") val regionName: String,
+    @ColumnInfo(name = "north_lat") val northLat: Double,
+    @ColumnInfo(name = "south_lat") val southLat: Double,
+    @ColumnInfo(name = "east_lon") val eastLon: Double,
+    @ColumnInfo(name = "west_lon") val westLon: Double,
+    @ColumnInfo(name = "vertex_count") val vertexCount: Int,
+    @ColumnInfo(name = "edge_count") val edgeCount: Int,
+    @ColumnInfo(name = "file_size_bytes") val fileSizeBytes: Long,
+    @ColumnInfo(name = "file_path") val filePath: String,
+    @ColumnInfo(name = "updated_at_ms") val updatedAtMs: Long
+)

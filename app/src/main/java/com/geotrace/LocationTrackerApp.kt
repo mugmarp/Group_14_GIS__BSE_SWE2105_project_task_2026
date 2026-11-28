@@ -42,6 +42,9 @@ class LocationTrackerApp : Application() {
     lateinit var routingProvider: com.geotrace.navigation.RoutingProvider
         private set
 
+    lateinit var offlineRoutingPackManager: com.geotrace.navigation.OfflineRoutingPackManager
+        private set
+
     lateinit var voiceGuidanceManager: com.geotrace.navigation.VoiceGuidanceManager
         private set
 
@@ -81,7 +84,8 @@ class LocationTrackerApp : Application() {
         groupRepository = com.geotrace.data.GroupRepository(this)
         offlineMapManager = OfflineMapManager(this)
         placeSearchManager = PlaceSearchManager(this)
-        routingProvider = com.geotrace.navigation.HybridPhase1RoutingProvider(this)
+        offlineRoutingPackManager = com.geotrace.navigation.OfflineRoutingPackManager(this, offlineCacheRepository)
+        routingProvider = com.geotrace.navigation.HybridPhase2RoutingProvider(this, offlineRoutingPackManager)
         voiceGuidanceManager = com.geotrace.navigation.VoiceGuidanceManager(this)
 
         // Read real hardware cell towers if present
@@ -98,9 +102,11 @@ class LocationTrackerApp : Application() {
         box: BoundingBox,
         tileType: MapTileType,
         minZoom: Int,
-        maxZoom: Int
+        maxZoom: Int,
+        includeRoads: Boolean = true
     ) {
         _offlinePoiStatus.value = null
+        offlineRoutingPackManager.clearStatusMessage()
         offlineMapManager.startRegionDownload(
             name = name,
             box = box,
@@ -121,6 +127,9 @@ class LocationTrackerApp : Application() {
                         } else {
                             _offlinePoiStatus.value = "Tiles saved for '${region.name}' (no mapped OSM POIs in bounds)"
                         }
+                        if (includeRoads) {
+                            offlineRoutingPackManager.buildOrRefreshPackForRegion(region)
+                        }
                     } finally {
                         _poiIndexingRegionIds.update { it - region.id }
                     }
@@ -135,9 +144,11 @@ class LocationTrackerApp : Application() {
         halfWidthKm: Double = 1.5,
         tileType: MapTileType,
         minZoom: Int,
-        maxZoom: Int
+        maxZoom: Int,
+        includeRoads: Boolean = true
     ) {
         _offlinePoiStatus.value = null
+        offlineRoutingPackManager.clearStatusMessage()
         offlineMapManager.startCorridorDownload(
             name = name,
             points = points,
@@ -163,6 +174,9 @@ class LocationTrackerApp : Application() {
                             _offlinePoiStatus.value = "Corridor tiles saved for '${region.name}'; Overpass POI index unavailable"
                         } else {
                             _offlinePoiStatus.value = "Corridor tiles saved for '${region.name}' (no mapped POIs in strip)"
+                        }
+                        if (includeRoads) {
+                            offlineRoutingPackManager.buildOrRefreshPackForRegion(region)
                         }
                     } finally {
                         _poiIndexingRegionIds.update { it - region.id }
@@ -195,6 +209,14 @@ class LocationTrackerApp : Application() {
             } finally {
                 _poiIndexingRegionIds.update { it - region.id }
             }
+        }
+    }
+
+    fun refreshOfflineRegionRoads(region: OfflineMapRegion) {
+        if (region.id in offlineRoutingPackManager.indexingRegionIds.value) return
+        com.geotrace.service.OfflineDownloadService.start(this)
+        appScope.launch {
+            offlineRoutingPackManager.buildOrRefreshPackForRegion(region)
         }
     }
 }

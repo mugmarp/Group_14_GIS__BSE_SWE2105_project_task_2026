@@ -65,12 +65,15 @@ class OfflineDownloadService : Service() {
         val app = application as? LocationTrackerApp
         val progress = app?.offlineMapManager?.downloadProgress?.value
         val indexingIds = app?.poiIndexingRegionIds?.value ?: emptySet()
+        val roadIndexingIds = app?.offlineRoutingPackManager?.indexingRegionIds?.value ?: emptySet()
         val initialNotification = if (progress?.isDownloading == true) {
             buildProgressNotification(
                 regionName = progress.regionName.ifBlank { "Offline map" },
                 completed = progress.completedTiles,
                 total = progress.totalTiles
             )
+        } else if (roadIndexingIds.isNotEmpty()) {
+            buildRoadIndexingNotification(roadIndexingIds.size)
         } else if (indexingIds.isNotEmpty()) {
             buildPoiIndexingNotification(indexingIds.size)
         } else {
@@ -99,27 +102,29 @@ class OfflineDownloadService : Service() {
         if (observerJob == null) {
             observerJob = serviceScope.launch {
                 var sawActiveWork = app.offlineMapManager.downloadProgress.value.isDownloading ||
-                    app.poiIndexingRegionIds.value.isNotEmpty()
+                    app.poiIndexingRegionIds.value.isNotEmpty() ||
+                    app.offlineRoutingPackManager.indexingRegionIds.value.isNotEmpty()
                 kotlinx.coroutines.flow.combine(
                     app.offlineMapManager.downloadProgress,
-                    app.poiIndexingRegionIds
-                ) { state, poiIds ->
-                    state to poiIds
-                }.collect { (state, poiIds) ->
-                    val activeNow = state.isDownloading || poiIds.isNotEmpty()
+                    app.poiIndexingRegionIds,
+                    app.offlineRoutingPackManager.indexingRegionIds
+                ) { state, poiIds, roadIds ->
+                    Triple(state, poiIds, roadIds)
+                }.collect { (state, poiIds, roadIds) ->
+                    val activeNow = state.isDownloading || poiIds.isNotEmpty() || roadIds.isNotEmpty()
                     if (activeNow) {
                         sawActiveWork = true
                         graceStopJob?.cancel()
                         graceStopJob = null
                         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-                        val notification = if (state.isDownloading) {
-                            buildProgressNotification(
+                        val notification = when {
+                            state.isDownloading -> buildProgressNotification(
                                 regionName = state.regionName.ifBlank { "Offline map" },
                                 completed = state.completedTiles,
                                 total = state.totalTiles
                             )
-                        } else {
-                            buildPoiIndexingNotification(poiIds.size)
+                            roadIds.isNotEmpty() -> buildRoadIndexingNotification(roadIds.size)
+                            else -> buildPoiIndexingNotification(poiIds.size)
                         }
                         nm?.notify(FOREGROUND_NOTIFICATION_ID, notification)
                     } else if (sawActiveWork) {
@@ -130,7 +135,8 @@ class OfflineDownloadService : Service() {
                         graceStopJob = serviceScope.launch {
                             kotlinx.coroutines.delay(500L)
                             val stillIdle = !app.offlineMapManager.downloadProgress.value.isDownloading &&
-                                app.poiIndexingRegionIds.value.isEmpty()
+                                app.poiIndexingRegionIds.value.isEmpty() &&
+                                app.offlineRoutingPackManager.indexingRegionIds.value.isEmpty()
                             if (stillIdle) {
                                 stopSelfSafely()
                             }
@@ -195,6 +201,22 @@ class OfflineDownloadService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("Indexing offline POIs…")
+            .setContentText(text)
+            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .setProgress(0, 0, true)
+            .build()
+    }
+
+    private fun buildRoadIndexingNotification(activeCount: Int): Notification {
+        val text = if (activeCount > 1) {
+            "Building offline road routing graphs for $activeCount regions"
+        } else {
+            "Compiling offline OSM road network for turn-by-turn routing"
+        }
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentTitle("Building offline road pack…")
             .setContentText(text)
             .setOnlyAlertOnce(true)
             .setOngoing(true)

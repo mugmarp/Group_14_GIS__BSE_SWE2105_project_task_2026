@@ -132,3 +132,23 @@ interface NavRouteCacheDao {
     suspend fun clearAll()
 }
 
+@Dao
+interface OfflineRoutingPackDao {
+    @Query("SELECT * FROM offline_routing_packs ORDER BY updated_at_ms DESC")
+    fun observeAllPacks(): Flow<List<OfflineRoutingPackEntity>>
+
+    @Query("SELECT * FROM offline_routing_packs ORDER BY updated_at_ms DESC")
+    suspend fun getAllPacks(): List<OfflineRoutingPackEntity>
+
+    @Query("SELECT * FROM offline_routing_packs WHERE region_id = :regionId LIMIT 1")
+    suspend fun getPackForRegion(regionId: String): OfflineRoutingPackEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPack(entity: OfflineRoutingPackEntity)
+
+    @Query("DELETE FROM offline_routing_packs WHERE region_id = :regionId")
+    suspend fun deletePack(regionId: String)
+
+    @Query("DELETE FROM offline_routing_packs")
+    suspend fun clearAll()
+}

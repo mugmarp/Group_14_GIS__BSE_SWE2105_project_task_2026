@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.OfflinePin
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RoundaboutRight
 import androidx.compose.material.icons.filled.Straight
@@ -77,6 +78,7 @@ import com.geotrace.navigation.NavManeuverType
 import com.geotrace.navigation.NavPreviewState
 import com.geotrace.navigation.NavProfile
 import com.geotrace.navigation.NavRoute
+import com.geotrace.navigation.NavRouteSource
 import com.geotrace.navigation.VoiceGuidanceMode
 import com.geotrace.navigation.formatNavDistance
 import com.geotrace.navigation.formatNavDuration
@@ -346,11 +348,25 @@ fun RoutePreviewCard(
                                             fontWeight = FontWeight.Medium,
                                             color = colorScheme.onSurfaceVariant
                                         )
-                                        Text(
-                                            text = route.source.label,
-                                            fontSize = 9.5.sp,
-                                            color = colorScheme.onSurfaceVariant
-                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            if (route.source == NavRouteSource.OFFLINE_OSM_GRAPH) {
+                                                Icon(
+                                                    imageVector = Icons.Default.OfflinePin,
+                                                    contentDescription = null,
+                                                    tint = colorScheme.tertiary,
+                                                    modifier = Modifier.size(11.dp)
+                                                )
+                                            }
+                                            Text(
+                                                text = route.source.label,
+                                                fontSize = 9.5.sp,
+                                                fontWeight = if (route.source == NavRouteSource.OFFLINE_OSM_GRAPH) FontWeight.Bold else FontWeight.Normal,
+                                                color = if (route.source == NavRouteSource.OFFLINE_OSM_GRAPH) colorScheme.tertiary else colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -688,7 +704,7 @@ fun BottomNavTripBar(
                 )
             }
 
-            if (navState.isOffRoute && isNetworkOnline) {
+            if (navState.isOffRoute && (isNetworkOnline || !navState.isOfflineRerouteBlocked)) {
                 IconButton(
                     onClick = onTriggerReroute,
                     modifier = Modifier

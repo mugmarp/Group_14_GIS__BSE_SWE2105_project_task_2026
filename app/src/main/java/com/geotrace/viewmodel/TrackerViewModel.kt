@@ -62,6 +62,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     private val repository = app.repository
     private val cellManager = app.cellManager
     private val routingProvider = app.routingProvider
+    private val offlineRoutingPackManager = app.offlineRoutingPackManager
     private val voiceGuidance = app.voiceGuidanceManager
     private val navEngine = NavigationEngine()
 
@@ -223,6 +224,15 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     val offlinePlacesCount: StateFlow<Int> = repository.offlinePlacesCount
     val offlinePoiStatus: StateFlow<String?> = app.offlinePoiStatus
     val poiIndexingRegionIds: StateFlow<Set<String>> = app.poiIndexingRegionIds
+    val offlineRoutingPacks: StateFlow<List<com.geotrace.data.cache.OfflineRoutingPackEntity>> =
+        offlineRoutingPackManager.packsFlow.stateIn(
+            scope = viewModelScope,
+            started = kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5000),
+            initialValue = emptyList()
+        )
+    val routingIndexingRegionIds: StateFlow<Set<String>> = offlineRoutingPackManager.indexingRegionIds
+    val offlineRoutingStatus: StateFlow<String?> = offlineRoutingPackManager.statusMessage
+    val offlineRoutingSizeMb: StateFlow<Float> = offlineRoutingPackManager.totalPacksSizeMb
 
     private val _localMapFocusTarget = MutableStateFlow<MapFocusTarget?>(null)
     val localMapFocusTarget: StateFlow<MapFocusTarget?> = _localMapFocusTarget.asStateFlow()
@@ -1316,7 +1326,17 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     navEngine.markRerouteTriggered()
                     val online = placeSearchManager.isNetworkConnected()
                     _isNetworkOnline.value = online
-                    if (online) {
+                    val hasOfflineRoads = if (online) {
+                        true
+                    } else {
+                        offlineRoutingPackManager.hasPackCovering(
+                            loc.latitude,
+                            loc.longitude,
+                            route.destinationLat,
+                            route.destinationLon
+                        )
+                    }
+                    if (online || hasOfflineRoads) {
                         launchAutoReroute(loc, route)
                     } else {
                         isOfflineRerouteBlockedFlag = true
@@ -1424,22 +1444,6 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
             _isNetworkOnline.value = onlineNow
             val cachedFallback = repository.findCachedNavRouteNear(destinationLat, destinationLon, profile)
 
-            if (!onlineNow) {
-                _navPreviewState.value = NavPreviewState.Error(
-                    destinationName = destinationName,
-                    destinationLat = destinationLat,
-                    destinationLon = destinationLon,
-                    profile = profile,
-                    message = if (cachedFallback != null) {
-                        "Device is offline. A cached route to this destination is available."
-                    } else {
-                        "Device is offline and no cached route matches this destination."
-                    },
-                    cachedFallbackRoute = cachedFallback
-                )
-                return@launch
-            }
-
             val result = routingProvider.computeRoutes(
                 originLat = origin.latitude,
                 originLon = origin.longitude,
@@ -1471,12 +1475,21 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
             }.onFailure { err ->
+                val offlineMsg = if (!onlineNow) {
+                    if (cachedFallback != null) {
+                        "Offline: a cached route to this destination is available."
+                    } else {
+                        err.message ?: "Offline and no local road pack covers this route."
+                    }
+                } else {
+                    err.message ?: "Unable to fetch directions."
+                }
                 _navPreviewState.value = NavPreviewState.Error(
                     destinationName = destinationName,
                     destinationLat = destinationLat,
                     destinationLon = destinationLon,
                     profile = profile,
-                    message = err.message ?: "Unable to fetch directions.",
+                    message = offlineMsg,
                     cachedFallbackRoute = cachedFallback
                 )
             }
@@ -1608,17 +1621,29 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         val loc = currentLocation.value ?: lastKnownCachedLocation.value ?: return
         val online = placeSearchManager.isNetworkConnected()
         _isNetworkOnline.value = online
-        if (!online) {
-            isOfflineRerouteBlockedFlag = true
-            rerouteStatusNoteText = "Offline — return to highlighted route"
-            _activeNavigation.value = _activeNavigation.value?.copy(
-                isOfflineRerouteBlocked = true,
-                rerouteStatusNote = rerouteStatusNoteText
-            )
-            return
+        viewModelScope.launch {
+            val hasOfflineRoads = if (online) {
+                true
+            } else {
+                offlineRoutingPackManager.hasPackCovering(
+                    loc.latitude,
+                    loc.longitude,
+                    route.destinationLat,
+                    route.destinationLon
+                )
+            }
+            if (!online && !hasOfflineRoads) {
+                isOfflineRerouteBlockedFlag = true
+                rerouteStatusNoteText = "Offline — return to highlighted route"
+                _activeNavigation.value = _activeNavigation.value?.copy(
+                    isOfflineRerouteBlocked = true,
+                    rerouteStatusNote = rerouteStatusNoteText
+                )
+                return@launch
+            }
+            navEngine.markRerouteTriggered()
+            launchAutoReroute(loc, route)
         }
-        navEngine.markRerouteTriggered()
-        launchAutoReroute(loc, route)
     }
 
     fun cacheRouteCorridor(route: NavRoute) {
@@ -2150,9 +2175,10 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         box: org.osmdroid.util.BoundingBox,
         tileType: MapTileType,
         minZoom: Int,
-        maxZoom: Int
+        maxZoom: Int,
+        includeRoads: Boolean = true
     ) {
-        app.startOfflineRegionDownload(name, box, tileType, minZoom, maxZoom)
+        app.startOfflineRegionDownload(name, box, tileType, minZoom, maxZoom, includeRoads)
     }
 
     fun startCorridorOfflineDownload(
@@ -2161,17 +2187,26 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
         halfWidthKm: Double = 1.5,
         tileType: MapTileType,
         minZoom: Int,
-        maxZoom: Int
+        maxZoom: Int,
+        includeRoads: Boolean = true
     ) {
-        app.startCorridorOfflineDownload(name, points, halfWidthKm, tileType, minZoom, maxZoom)
+        app.startCorridorOfflineDownload(name, points, halfWidthKm, tileType, minZoom, maxZoom, includeRoads)
     }
 
     fun refreshOfflineRegionPois(region: OfflineMapRegion) {
         app.refreshOfflineRegionPois(region)
     }
 
+    fun refreshOfflineRegionRoads(region: OfflineMapRegion) {
+        app.refreshOfflineRegionRoads(region)
+    }
+
     fun clearOfflinePoiStatus() {
         app.clearOfflinePoiStatus()
+    }
+
+    fun clearOfflineRoutingStatus() {
+        offlineRoutingPackManager.clearStatusMessage()
     }
 
     fun cancelOfflineRegionDownload() {
@@ -2185,6 +2220,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun deleteOfflineMapRegion(id: String) {
         viewModelScope.launch {
             val (deleted, remaining) = repository.deleteOfflineMapRegion(id)
+            offlineRoutingPackManager.deletePack(id)
             if (deleted != null) {
                 offlineMapManager.deleteTilesForRegion(deleted, remaining)
             }
@@ -2199,6 +2235,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun clearAllTileCache() {
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             offlineMapManager.clearAllTileCache()
+            offlineRoutingPackManager.clearAllPacks()
             repository.clearAllOfflineMapRegions()
         }
     }
@@ -2206,6 +2243,7 @@ class TrackerViewModel(application: Application) : AndroidViewModel(application)
     fun refreshTileCacheSize() {
         viewModelScope.launch {
             offlineMapManager.refreshCacheSizeAsync()
+            offlineRoutingPackManager.refreshTotalSizeAsync()
         }
     }
 
